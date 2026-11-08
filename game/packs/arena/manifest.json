@@ -10,6 +10,8 @@
   "recommended_level": [2, 4],
   "estimated_hours": "0.5",
   "node_budget": 8,
+  "entitlement": { "requires": ["entitlement.arena"] },
+  "monetization": { "strategies": ["dlc"] },
   "loadout": { "enabled": true, "item_slots": 2, "skill_slots": 2, "respec": false },
   "subgame": {
     "rules_override": { "arena_mode": true },

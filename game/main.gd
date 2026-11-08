@@ -6,7 +6,8 @@
 # 遭遇进行中不存档——☰「保存并回主屏」= 恢复遭遇进入前快照（09 §7，战斗重打）；
 # 故事态（遭遇外）☰ = 存档后回主屏（节点进度在图快照 meta.graph 内）。
 # 战斗数值由 packs 资源表驱动（tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast。
-# 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --mode=space|time` 预选形态。
+# 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --m3-shots` 子游戏截图；
+# `-- --m4-shots` 锁定态/购买弹层截图；`-- --mode=space|time` 预选形态。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -30,6 +31,8 @@ const SCREEN_SCENES := {
 var stream: EventStream
 var board: Board
 var rng: Rng
+var entitlements: Entitlements      # 权利模型运行时（06 §2：商店/活动/成就三类点亮方）
+var ops_config: Dictionary = {}     # 运营侧配置（06 §3.2：点亮在运营，不进内容包管线）
 var graph: StoryGraph
 var pack: Dictionary = {}
 var router := ShellRouter.new()
@@ -73,6 +76,10 @@ func _ready() -> void:
 	stream = EventStream.new()
 	board = Board.new(stream)
 	rng = Rng.new(BATTLE_SEED)
+	# 权利运行时 + 运营配置（06 §3.2：活动开关开 → 入口自动解锁，内容包零改动）
+	entitlements = Entitlements.new(board, stream)
+	ops_config = Entitlements.load_ops_config()
+	entitlements.apply_activities(ops_config)
 	graph = StoryGraph.new(board, rng, pack)
 	stream.subscribe(_on_event)
 	_show_home()
@@ -80,6 +87,8 @@ func _ready() -> void:
 		_run_shots_m2n()
 	if args.has("--m3-shots"):
 		_run_shots_m3()
+	if args.has("--m4-shots"):
+		_run_shots_m4()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -88,6 +97,8 @@ func _discover_subgames() -> void:
 	if dir == null:
 		return
 	for sub: String in dir.get_directories():
+		if sub.begins_with("_"):
+			continue # _ops 等运营目录非内容包（06 §3.2：运营配置不进内容包管线）
 		if sub == str(pack.get("pack_id", "")):
 			continue
 		var res := PackLoader.load_pack("res://packs/%s" % sub)
@@ -149,7 +160,8 @@ func _show_entry() -> void:
 	entry.mode_chosen.connect(_on_mode_chosen)
 	entry.start_requested.connect(_on_campaign_start.bind(entry))
 	entry.back_requested.connect(_show_home)
-	# 子游戏卡（04 §6 特殊战役书卡）：manifest 数据驱动（名称/建议等级/模式/战绩键）
+	# 子游戏卡（04 §6 特殊战役书卡）：manifest 数据驱动（名称/建议等级/模式/战绩键）；
+	# 权利门槛未点亮 → 锁定态卡（06 §3.1：可见但锁定 + 叙事化文案 +「获取」）
 	var cards: Array = []
 	for pid: String in _subgames:
 		var p: Dictionary = _subgames[pid]
@@ -158,9 +170,13 @@ func _show_entry() -> void:
 		cards.append({"pack_id": pid, "name": str(manifest.get("name", pid)),
 			"level_min": int((manifest.get("recommended_level", [1]) as Array)[0]),
 			"mode": str((manifest.get("presentation", {}) as Dictionary).get("mode", "choice")),
-			"stats": runner.stats()})
+			"stats": runner.stats(),
+			"locked": not entitlements.can_access(manifest),
+			"lock_text": TextsZh.LOCK_ARENA})
 	entry.bind_subgames(cards)
 	entry.subgame_start.connect(_on_subgame_start)
+	entry.acquire_requested.connect(_on_acquire_requested)
+	entry.shop_popup.purchase_confirmed.connect(_on_purchase_confirmed)
 	if _cli_mode != &"":
 		entry.pick_mode(_cli_mode)
 	elif not played.is_empty():
@@ -265,6 +281,11 @@ func _on_hub_action(action: String, arg: String) -> void:
 ## 切片终点（出 SL-0/SL-1 范围或结局节点）：结算快照落盘（07 §4.2 主快照点）+ ⑨结算屏。
 func _end_slice() -> void:
 	_in_encounter = false
+	# 通关旗标 → 成就点亮路径（06 §2.1：点亮手段多样；规则表在运营配置，06 §3.2）
+	if not bool(board.read("campaign01.cleared")):
+		board.write("campaign01.cleared", true,
+			{"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"})
+	entitlements.check_achievements(ops_config)
 	var gained := _grant_growth() # 11 §6：结算界面 = 成长加点时机（04 §⑨）
 	_save("settle")
 	_encounter_tail = _campaign_tail # 汇总区间 = 整个切片（逐项念给玩家听，04 §⑨）
@@ -544,8 +565,36 @@ func _show_history() -> void:
 #   → 每场胜利写金币/胜场（SubgameRunner）→ 战后边（追击/收兵）→ ⑨ 结算（写板硬要求）→ 回主屏。
 # 全部数据驱动自子游戏包（节点图/遭遇/奖励声明），core 零改动；本块是 §10.2"子游戏不动框架"的运行时落点。
 
+# ---------------------------------------------------------------- 权利与商店（06 §2/§3/§6）
+
+## 锁定卡「获取」→ 购买半屏弹层（06 §6：不离开当前界面情境；04 §3.3）。
+func _on_acquire_requested(pack_id: String) -> void:
+	if not _subgames.has(pack_id):
+		return
+	var entry := current_screen as ScreenEntry
+	if entry == null:
+		return
+	var manifest: Dictionary = _subgames[pack_id]["manifest"]
+	var price := Entitlements.price_of(ops_config, pack_id)
+	entry.shop_popup.open(pack_id, str(manifest.get("name", pack_id)),
+		str(price.get("price_text", "")))
+
+## 购买确认 → 商店点亮方写板（单号溯源，06 §2.3）→ 入口当场刷新解锁（06 §3.1：购买即解锁无需重启）。
+func _on_purchase_confirmed(pack_id: String) -> void:
+	var receipt_id := "rcpt_%d" % stream.tail() # mock 单号（真实支付接入是运营立项留白，06 §7）
+	if not entitlements.shop_purchase(pack_id, receipt_id):
+		return
+	var pack_name := str((_subgames.get(pack_id, {}) as Dictionary).get("manifest", {}).get("name", pack_id))
+	stream.emit(EventTypes.LOG,
+		{"msg": "守门人收下印记——《%s》的门开了。（购买即解锁，无需重启）" % pack_name, "toast": true}, &"core")
+	_show_entry()
+
 func _on_subgame_start(pack_id: String, mode: StringName) -> void:
 	if not _subgames.has(pack_id) or _sub_active:
+		return
+	if not entitlements.can_access((_subgames[pack_id] as Dictionary)["manifest"]):
+		# 硬门槛（tech/02 §2.2）：叙事化提示，无"未购买"生硬弹窗（06 §3.1）
+		stream.emit(EventTypes.LOG, {"msg": TextsZh.LOCK_ARENA, "toast": true}, &"core")
 		return
 	_sub = SubgameRunner.new(_subgames[pack_id], board, stream, rng)
 	_sub_mode = mode
@@ -825,6 +874,7 @@ func _run_shots_m3() -> void:
 		get_tree().quit()
 		return
 	var pid := str((_subgames.keys() as Array)[0])
+	entitlements.shop_purchase(pid, "rcpt_m3_shots") # M3 截图前提：权利已点亮（M4 起 arena 有门槛）
 	_on_subgame_start(pid, ShellRouter.MODE_TIME)
 	await get_tree().create_timer(0.4).timeout
 	_on_sub_story_edge(0) # A-0 → 踏入擂台
@@ -835,4 +885,18 @@ func _run_shots_m3() -> void:
 		await get_tree().create_timer(2.0).timeout # 探索演出 1s + 战斗铺开
 	await _shot("/tmp/m3_battle.png") # 连战第一场（无休整，HP 持久 11 §7.1）
 	print("[shots] M3 两张完成：/tmp/m3_entry.png /tmp/m3_battle.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）
+
+## ② 入口锁定态卡（06 §3.1：可见但锁定 + 叙事化包装）+ 购买半屏弹层（04 §3.3）：`-- --m4-shots`。
+func _run_shots_m4() -> void:
+	await get_tree().create_timer(1.2).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/m4_lock.png") # 锁定态战役书卡（战绩照常呈现 + 守门人文案 +「获取」）
+	_on_acquire_requested("arena")
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/m4_shop.png") # 购买半屏弹层（06 §6：不离开当前界面情境）
+	print("[shots] M4 两张完成：/tmp/m4_lock.png /tmp/m4_shop.png")
 	get_tree().quit()

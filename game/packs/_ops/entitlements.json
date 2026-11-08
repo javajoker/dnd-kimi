@@ -1,0 +1,11 @@
+{
+  "_comment": "框架层权利变量注册表（06 文档 §2.3：全部合法权利变量登记于此，数据文件非代码常量）。新增权利 = 运营侧登记一行；校验器 V9 以此表核对内容包 manifest entitlement.requires 引用的权利变量已注册。本目录（_ops）非内容包，不进内容包管线。",
+  "version": 1,
+  "entitlements": [
+    {
+      "id": "entitlement.arena",
+      "name": "竞技场连战入场权利",
+      "registered_at": "2026-11-09"
+    }
+  ]
+}

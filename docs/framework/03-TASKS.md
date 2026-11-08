@@ -161,3 +161,4 @@
 | v1.6 | 2026-11-08 | **技术实现立项（Godot）**：E-1/E-4 裁决 = Godot 4.7.2 + GDScript；新增 P1.5 技术实现段（TP0~TP4）；研发三件套就位（.kimi-code/skills/godot-dev、godot-acceptance、.kimi-code/agents/godot-developer）；game/ 工程骨架 + 无头测试通道打通 |
 | v1.7 | 2026-11-08 | **P1.5 全部达成 + M2 内容接入**：TP0~TP4 全勾（逻辑核/仿真校验/双壳一致/界面闭环存档）；战斗数值入 packs（characters/skills/enemies，引导层数据驱动）；真实节点流程上线（故事图驱动 UI）；11 新增 §7.1 HP 跨遭遇持久化、07 §2 补货币与 HP 簿记键；补给药水上架；531 断言全绿 |
 | v1.8 | 2026-11-09 | **M3 达成：首个子游戏「竞技场连战」验证"子游戏不动框架"**——core/ 零改动接入（git diff 空，固化为断言）：packs/arena 数据包 + 数据驱动入口卡 + 连战流程（EncounterSM 复用、中途败北结算、奖励写板）；arena packlint 0 FAIL；tech/02 §2.5 补子游戏声明块（rules_override 对象形态/扩展字段/奖励归属）；593 断言全绿 |
+| v1.9 | 2026-11-09 | **M4 运营轨启动**：权利运行时（购买/活动/成就三类点亮方 + 退款"跑完当前不可开新局"）；arena 转 DLC 演示全链路（锁定态叙事化呈现→购买弹层→即时解锁→限免切换内容零改动指纹断言→通关成就自动点亮）；06 §2.3 补权利注册表载体（packs/_ops/entitlements.json 数据文件）、§3.2 补限免回收机制归属；付费禁区 grep 自查通过；638 断言全绿 |

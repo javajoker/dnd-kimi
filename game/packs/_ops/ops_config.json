@@ -1,0 +1,24 @@
+{
+  "_comment": "运营侧配置（06 文档 §3.2：门槛在包内、点亮在运营）——定价 / 活动开关 / 成就点亮规则。本目录（_ops）不是内容包，不进内容包管线、不接受 packlint V1~V13；调整本文件即完成策略调整，packs/ 下任何内容包零改动（白皮书 §10.4 运营轨）。",
+  "version": 1,
+  "shop": {
+    "arena": { "name": "竞技场连战", "price_text": "¥12" }
+  },
+  "activities": [
+    {
+      "id": "weekend_free_arena",
+      "pack_id": "arena",
+      "enabled": false,
+      "label": "周末限免：竞技场连战",
+      "ttl_hours": 48
+    }
+  ],
+  "achievements": [
+    {
+      "id": "ach_campaign01_cleared",
+      "pack_id": "arena",
+      "flag": "campaign01.cleared",
+      "label": "烬港通关者免费入场"
+    }
+  ]
+}

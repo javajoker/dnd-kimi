@@ -10,6 +10,7 @@ signal mode_chosen(mode: StringName)
 signal start_requested
 signal back_requested
 signal subgame_start(pack_id: String, mode: StringName) # 子游戏卡参战（04 §6）
+signal acquire_requested(pack_id: String) # 锁定卡「获取」→ 购买半屏弹层（06 §3.1/§6）
 
 var card_label: RichTextLabel
 var mode_time_button: Button
@@ -20,6 +21,7 @@ var played_label: Label
 var start_button: Button
 var back_button: Button
 var subgame_box: VBoxContainer
+var shop_popup: ShopPopup
 
 var selected_mode: StringName = &""
 
@@ -76,9 +78,14 @@ func _build() -> void:
 	subgame_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	subgame_box.add_theme_constant_override("separation", 6)
 	v.add_child(subgame_box)
+	# 购买半屏弹层（06 §6：不离开当前界面情境；04 §3.3）
+	shop_popup = ShopPopup.new()
+	add_child(shop_popup)
 
-## 绑定子游戏卡（04 §6 特殊战役书卡）：cards = [{pack_id, name, level_min, stats, mode}]，
-## 全部由 manifest 数据驱动；mode=choice 呈现竖/横两个参战入口（概念设计 §5：双模式可选）。
+## 绑定子游戏卡（04 §6 特殊战役书卡）：cards = [{pack_id, name, level_min, stats, mode,
+## locked, lock_text}]，全部由 manifest 数据驱动；mode=choice 呈现竖/横两个参战入口（概念设计 §5）。
+## locked=true 时呈现锁定态（06 §3.1）：卡面与战绩照常可见 + 叙事化锁定文案 +「获取」按钮，
+## 不隐藏、不弹"未购买"生硬弹窗；点亮后同卡直接呈现参战入口（购买即解锁无需重启）。
 func bind_subgames(cards: Array) -> void:
 	for child: Node in subgame_box.get_children():
 		child.queue_free()
@@ -90,6 +97,7 @@ func bind_subgames(cards: Array) -> void:
 	subgame_box.add_child(head)
 	for card: Variant in cards:
 		var c: Dictionary = card
+		var pid := str(c.get("pack_id", ""))
 		var name_label := Label.new()
 		name_label.text = "%s《%s》 %s" % [TextsZh.ENTRY_SUBGAME_TAG, str(c.get("name", c.get("pack_id", ""))),
 			TextsZh.SUBGAME_LEVEL % int(c.get("level_min", 1))]
@@ -101,11 +109,25 @@ func bind_subgames(cards: Array) -> void:
 		stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
 		subgame_box.add_child(stats_label)
+		if bool(c.get("locked", false)):
+			# 锁定态（06 §3.1：可见但锁定，叙事化包装）
+			var lock_label := Label.new()
+			lock_label.text = str(c.get("lock_text", TextsZh.LOCK_ARENA))
+			lock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lock_label.custom_minimum_size = Vector2(340, 0)
+			lock_label.add_theme_color_override("font_color", Color(0.75, 0.68, 0.5))
+			subgame_box.add_child(lock_label)
+			var acquire_button := Button.new()
+			acquire_button.text = TextsZh.LOCK_ACQUIRE
+			acquire_button.custom_minimum_size = Vector2(150, 40)
+			acquire_button.pressed.connect(func() -> void: acquire_requested.emit(pid))
+			subgame_box.add_child(acquire_button)
+			continue
 		var row := HBoxContainer.new()
 		row.alignment = BoxContainer.ALIGNMENT_CENTER
 		row.add_theme_constant_override("separation", 12)
 		subgame_box.add_child(row)
-		var pid := str(c.get("pack_id", ""))
 		var mode := str(c.get("mode", "choice"))
 		if mode != "space":
 			var bt := Button.new()

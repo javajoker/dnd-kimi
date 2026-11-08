@@ -137,6 +137,16 @@ const SUBGAME_ENTER_SPACE := "横屏参战"
 const SUBGAME_STATS := "累计胜场 %d · 最佳连战 %d"
 const SUBGAME_LEVEL := "建议等级 Lv.%d+"
 
+# ② 锁定态与购买（06 §3.1：可见但锁定、叙事化包装、无"未购买"生硬弹窗；06 §6 + 04 §3.3：半屏弹层购买）
+const LOCK_ARENA := "竞技场的守门人只认印记——你的抄本里还没有这一页。"
+const LOCK_ACQUIRE := "获取"
+const SHOP_TITLE := "守门人的印龛"
+const SHOP_CONFIRM := "确认获取"
+const SHOP_CANCEL := "再想想"
+## 购买弹层文案（叙事化包装：商品名 + 价格 + 一句叙事；购买即解锁无需重启，06 §3.1）。
+static func shop_line(pack_name: String, price_text: String) -> String:
+	return "《%s》——%s。守门人收下印记，擂台的门就会为你翻开。" % [pack_name, price_text]
+
 # 整备（09 §9.1）
 const LOADOUT_TITLE := "整备"
 const LOADOUT_SKILLS := "技能备选（%d 选 %d）"

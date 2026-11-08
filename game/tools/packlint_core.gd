@@ -16,6 +16,25 @@ const LIGHT_SKILLS := ["athletics", "intimidate", "stealth", "thievery",
 const DIFFICULTIES := ["easy", "medium", "hard"]
 const ITEM_ROLES := ["stat", "check_mod", "branch_key", "codex"] # tech/02 §7 四重身份
 const STRATEGIES := ["buyout_component", "dlc", "subscription", "cosmetic", "free"] # tech/02 §2.3
+## 框架层权利变量注册表路径（06 文档 §2.3：全部合法权利变量登记在运营侧注册表
+## packs/_ops/entitlements.json——数据文件，非代码常量；新增权利 = 运营侧登记一行）。
+const ENTITLEMENT_REGISTRY_PATH := "res://packs/_ops/entitlements.json"
+
+## 加载权利注册表。返回 {ok, error, entitlements: Array[id]}；文件缺失 / JSON 损坏 /
+## 结构非法均给明确错误——V9 据此前置 FAIL，不静默按空表放行（06 §2.3）。
+static func load_entitlement_registry(path: String = ENTITLEMENT_REGISTRY_PATH) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {"ok": false, "entitlements": [],
+			"error": "权利注册表缺失：%s（06 §2.3：注册表落 packs/_ops/entitlements.json）" % path}
+	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if raw == null or not raw is Dictionary or not (raw as Dictionary).get("entitlements") is Array:
+		return {"ok": false, "entitlements": [],
+			"error": "权利注册表 JSON 解析失败或缺 entitlements 数组：%s（06 §2.3）" % path}
+	var out: Array = []
+	for e: Variant in (raw as Dictionary)["entitlements"]:
+		if e is Dictionary and not str((e as Dictionary).get("id", "")).is_empty():
+			out.append(str((e as Dictionary)["id"]))
+	return {"ok": true, "error": "", "entitlements": out}
 const EFFECT_KEYS := ["write", "value", "clock", "alignment", "give_item", "remove_item", "xp", "lore"]
 const COND_KEYS := ["clock", "alignment", "bond_max", "all", "any"]
 const EFFECT_PREFIXES := ["rep.", "bond.", "clock."]
@@ -35,7 +54,11 @@ const SAVE_ON_SUCCESS := ["half", "none"]                         # 11 文档 §
 const ITEM_USE_TIMINGS := ["action", "bonus_action", "out_of_combat"] # tech/04 §4
 const ITEM_USE_EFFECT_KEYS := ["heal"]                            # tech/04 §4 v1 落位（扁平键）
 
-static func lint(pack: Dictionary) -> Array:
+## registry = load_entitlement_registry() 的返回形态；缺省空字典 = 从默认路径现读
+## （06 §2.3：注册表是运营侧数据文件）。测试可注入损坏/缺失形态做 V9 负例。
+static func lint(pack: Dictionary, registry: Dictionary = {}) -> Array:
+	if registry.is_empty():
+		registry = load_entitlement_registry()
 	var issues: Array = []
 	issues.append_array(_v1_no_dead_end(pack))
 	issues.append_array(_v2_no_unreachable(pack))
@@ -45,7 +68,7 @@ static func lint(pack: Dictionary) -> Array:
 	issues.append_array(_v6_node_budget(pack))
 	issues.append_array(_v7_namespace(pack))
 	issues.append_array(_v8_portrait_constraint(pack))
-	issues.append_array(_v9_entitlement(pack))
+	issues.append_array(_v9_entitlement(pack, registry))
 	issues.append({"v": "V10", "level": LEVEL_NA,
 		"msg": "界面闭环：九类界面入口/出口检查依赖 shell 界面实现（04 文档 §5），TP2/TP4 落地后方可数据化"})
 	issues.append_array(_v11_resource_refs(pack))
@@ -412,8 +435,13 @@ static func _v8_portrait_constraint(pack: Dictionary) -> Array:
 
 # ---------------------------------------------------------------- V9 权利与策略一致（tech/02 §2.2/§2.3、06 文档 §3.2）
 
-static func _v9_entitlement(pack: Dictionary) -> Array:
+static func _v9_entitlement(pack: Dictionary, registry: Dictionary) -> Array:
 	var issues: Array = []
+	# 注册表本身不可读 = 前置 FAIL 并给出明确错误（06 §2.3：文件缺失/损坏不静默放行）
+	if not bool(registry.get("ok", false)):
+		issues.append({"v": "V9", "level": LEVEL_FAIL, "msg": str(registry.get("error", "权利注册表不可用"))})
+		return issues
+	var registered: Array = registry["entitlements"]
 	var manifest: Dictionary = pack["manifest"]
 	var entitlement: Dictionary = manifest.get("entitlement", {})
 	var monetization: Dictionary = manifest.get("monetization", {})
@@ -428,6 +456,9 @@ static func _v9_entitlement(pack: Dictionary) -> Array:
 		if not rv.begins_with("entitlement.") or rv.length() <= "entitlement.".length():
 			issues.append({"v": "V9", "level": LEVEL_FAIL,
 				"msg": "entitlement.requires 条目 '%s' 非 global.entitlement.* 权利变量形态（06 文档 §2.3）" % rv})
+		elif not registered.has(rv):
+			issues.append({"v": "V9", "level": LEVEL_FAIL,
+				"msg": "entitlement.requires 条目 '%s' 未在权利注册表登记（%s，06 文档 §2.3）" % [rv, ENTITLEMENT_REGISTRY_PATH]})
 	if strategies.has("dlc") and requires.is_empty():
 		issues.append({"v": "V9", "level": LEVEL_FAIL,
 			"msg": "strategies 含 dlc 但 entitlement.requires 缺省（tech/02 §2.3 一致性硬规则）"})

@@ -34,6 +34,8 @@ func _init() -> void:
 	test_story_runtime()
 	test_story_vm()
 	test_subgame_arena()
+	test_entitlements()
+	test_ops_config()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
@@ -43,6 +45,7 @@ func _async_shell_tests() -> void:
 	await test_shell_diff()
 	await test_ui_screens()
 	await test_subgame_flow()
+	await test_entitlement_flow()
 	await test_main_flow()
 	if failures == 0:
 		print("== 全部通过 ==")
@@ -1807,6 +1810,122 @@ func test_subgame_arena() -> void:
 		"败北场次不写场次旗标（失败即分支）")
 	check(int(b2.read("arena.best", 0)) == 1, "败北收场：最佳纪录 = 已完成场次（1）")
 
+# ---------------------------------------------------------------- 权利模型运行时（06 §2/§3.2/§5；tech/02 §2.2/§2.3）
+
+func test_entitlements() -> void:
+	print("[entitlements]")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var ent := Entitlements.new(board, stream)
+	var arena_pack := _load_arena()
+	var manifest: Dictionary = arena_pack["manifest"]
+	# 缺省 = 随本体权利可进入；门槛未点亮 = 锁定（tech/02 §2.2）
+	check(ent.can_access({}), "manifest 无 entitlement 声明 = 随本体权利可进入（tech/02 §2.2 缺省）")
+	check(Entitlements.requires_of(manifest) == ["entitlement.arena"], "arena 门槛声明解析（manifest entitlement.requires）")
+	check(not ent.can_access(manifest), "权利未点亮 → 锁定（硬门槛，全真判断）")
+	check(ent.missing(manifest) == ["entitlement.arena"], "缺失权利清单（锁定态呈现依据）")
+	# 商店点亮：写入即生效 + 单号溯源 + system 写权限（06 §2.3/§3.1）
+	check(ent.shop_purchase("arena", "rcpt_test_001"), "shop_purchase 商店点亮（06 §2.3 写入方之一）")
+	check(ent.can_access(manifest), "购买即解锁：写入即生效无需重启（06 §3.1）")
+	var prov := board.provenance_of("global.entitlement.arena")
+	check(str(prov.get("pack_id", "")) == "system" and str(prov.get("receipt_id", "")) == "rcpt_test_001"
+		and str(prov.get("granted_by", "")) == "shop", "写入溯源：购买单号 + system 写权限（06 §2.3 / 07 §3）")
+	check(stream.query_by_type(EventTypes.ENTITLEMENT_CHANGE).size() == 1,
+		"权利变更经 entitlement.change 进事件流（07 §6）")
+	# 内容包直写权利变量被拒（07 §3：仅 system 可写）
+	check(not board.write("global.entitlement.arena", false,
+		{"event_id": 1, "node_id": "A-0", "pack_id": "arena"}), "内容包写权利变量被拒（07 §3 命名空间权限）")
+	check(ent.can_access(manifest), "越权写入未生效（权利仍点亮）")
+	# 退款（06 §5）：权利置假 → 不可开新局；进行中连战允许跑完（流程核不回读权利）
+	check(ent.refund("arena"), "refund 权利置假（06 §5）")
+	check(not ent.can_access(manifest), "退款后不可开新局（入口 can_access 把关，06 §5）")
+	var runner := SubgameRunner.new(arena_pack, board, stream, Rng.new(7))
+	runner.start()
+	check(runner.graph.current_id == "A-0", "退款不影响进行中的连战：允许跑完当前战役（06 §5）")
+	# 活动点亮：activity_id + ttl 溯源（06 §3.2 运营轨）
+	check(ent.activity_grant("arena", "weekend_free_arena", 48), "activity_grant 活动点亮（06 §2.3 写入方之二）")
+	check(ent.can_access(manifest), "活动点亮即时生效")
+	prov = board.provenance_of("global.entitlement.arena")
+	check(str(prov.get("activity_id", "")) == "weekend_free_arena" and int(prov.get("ttl_hours", 0)) == 48,
+		"活动溯源：activity_id + ttl 随写入（限免回收依据，06 §2.3）")
+	ent.refund("arena")
+	# 成就点亮：campaign01.cleared == true → entitlement.arena（多点亮路径演示，06 §2.1）
+	var ops := Entitlements.load_ops_config()
+	check(ent.check_achievements(ops).is_empty(), "成就旗标未立：规则不触发")
+	board.write("campaign01.cleared", true, {"event_id": 2, "node_id": "N1-8", "pack_id": "campaign01"})
+	var granted: Array = ent.check_achievements(ops)
+	check(granted.has("arena") and ent.can_access(manifest),
+		"成就点亮：campaign01.cleared → entitlement.arena（烬港通关者免费入场，06 §2.1）")
+	prov = board.provenance_of("global.entitlement.arena")
+	check(str(prov.get("achievement_id", "")) == "ach_campaign01_cleared", "成就溯源：achievement_id（06 §2.3）")
+	check(ent.check_achievements(ops).is_empty(), "成就点亮幂等（已点亮不重复发）")
+
+# ---------------------------------------------------------------- 运营配置与策略切换（06 §3.2；白皮书 §10.4 运营轨）
+
+func _dir_fingerprint(dir_path: String) -> String:
+	var parts: Array[String] = []
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return ""
+	var files := dir.get_files()
+	files.sort()
+	for f: String in files:
+		parts.append("%s:%s" % [f, FileAccess.get_md5(dir_path.path_join(f))])
+	return "|".join(parts)
+
+func test_ops_config() -> void:
+	print("[ops_config]")
+	var ops := Entitlements.load_ops_config()
+	check(not ops.is_empty() and ops.has("shop") and ops.has("activities") and ops.has("achievements"),
+		"运营配置加载：价格表/活动开关/成就规则（06 §3.2 运营侧数据，不进内容包）")
+	check(str(Entitlements.price_of(ops, "arena").get("price_text", "")) == "¥12", "商店价格表：arena ¥12")
+	# 权利注册表 = 运营侧数据文件（06 §2.3：packs/_ops/entitlements.json，非代码常量）
+	var registry := PacklintCore.load_entitlement_registry()
+	check(bool(registry["ok"]) and (registry["entitlements"] as Array).has("entitlement.arena"),
+		"权利注册表数据文件加载：entitlement.arena 已登记（06 §2.3）")
+	check(not bool(PacklintCore.load_entitlement_registry("res://packs/_ops/no_such.json")["ok"])
+		and str(PacklintCore.load_entitlement_registry("res://packs/_ops/no_such.json")["error"]).contains("缺失"),
+		"负例：注册表文件缺失 → 明确错误（06 §2.3）")
+	var bad_reg_path := "user://tmp_bad_entitlements.json"
+	var f := FileAccess.open(bad_reg_path, FileAccess.WRITE)
+	f.store_string("{ 损坏的 json")
+	f.close()
+	check(not bool(PacklintCore.load_entitlement_registry(bad_reg_path)["ok"])
+		and str(PacklintCore.load_entitlement_registry(bad_reg_path)["error"]).contains("解析失败"),
+		"负例：注册表 JSON 损坏 → 明确错误（06 §2.3）")
+	DirAccess.remove_absolute(bad_reg_path)
+	# V9：arena requires 已注册且与 strategies 一致（tech/02 §2.3 一致性）
+	var arena_pack := _load_arena()
+	var v9: Array = PacklintCore.lint(arena_pack).filter(func(i: Dictionary) -> bool: return i["v"] == "V9")
+	check(not v9.any(func(i: Dictionary) -> bool: return i["level"] == PacklintCore.LEVEL_FAIL)
+		and v9.any(func(i: Dictionary) -> bool: return i["level"] == PacklintCore.LEVEL_PASS),
+		"V9：arena requires 已注册且与 strategies 一致（tech/02 §2.3 / 06 §2.3）")
+	var bad: Dictionary = arena_pack.duplicate(true)
+	bad["manifest"]["entitlement"] = {"requires": ["entitlement.ghost"]}
+	check(PacklintCore.lint(bad).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V9" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：requires 引用未注册权利变量 V9 必报 FAIL（06 §2.3）")
+	var broken_registry := {"ok": false, "error": "权利注册表缺失：mock（06 §2.3）", "entitlements": []}
+	check(PacklintCore.lint(arena_pack, broken_registry).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V9" and i["level"] == PacklintCore.LEVEL_FAIL and str(i["msg"]).contains("注册表缺失")),
+		"负例：注册表不可用 → V9 前置 FAIL 且不静默放行（06 §2.3）")
+	# 策略切换内容零改动（固化为断言）：限免开/关两态下 packs/arena 逐文件指纹一致
+	var fp_before := _dir_fingerprint("res://packs/arena")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var ent := Entitlements.new(board, stream)
+	var manifest: Dictionary = arena_pack["manifest"]
+	check(not ent.can_access(manifest), "限免关：锁定（运营开关关态）")
+	var ops_on := ops.duplicate(true)
+	(ops_on["activities"] as Array)[0]["enabled"] = true
+	check(ent.apply_activities(ops_on).has("weekend_free_arena"), "限免开：apply_activities 点亮（活动写入方）")
+	check(ent.can_access(manifest), "限免开：入口自动解锁")
+	var fp_on := _dir_fingerprint("res://packs/arena")
+	ent.refund("arena")
+	var fp_off := _dir_fingerprint("res://packs/arena")
+	check(fp_before != "" and fp_before == fp_on and fp_on == fp_off,
+		"策略切换内容零改动：限免开/关两态 packs/arena 逐文件一致（白皮书 §10.4 运营轨不动内容图）")
+
 # ---------------------------------------------------------------- 子游戏 UI 流程（04 §6：入口卡 → 整备 → 连战 → ⑨ 结算 → 回主屏）
 
 func test_subgame_flow() -> void:
@@ -1816,6 +1935,7 @@ func test_subgame_flow() -> void:
 	await process_frame
 	await process_frame
 	check(m._subgames.has("arena"), "子游戏包发现：pack_type=subgame 即入列（数据驱动，不写死 arena）")
+	m.entitlements.shop_purchase("arena", "rcpt_subflow") # M4 起 arena 有权利门槛：先点亮再走连战流程
 	m._on_home_navigate(&"entry")
 	await process_frame
 	var entry := m.current_screen as ScreenEntry
@@ -1865,6 +1985,90 @@ func test_subgame_flow() -> void:
 	(m.current_screen as ScreenSettle).go_home.emit()
 	await process_frame
 	check(m.current_screen is ScreenHome and not m._sub_active, "结算 → 回主屏（离场闭环，不新增导航项）")
+	m.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 锁定态与购买流程（06 §3.1/§6；04 §3.3；tech/02 §2.2 硬门槛）
+
+func test_entitlement_flow() -> void:
+	print("[entitlement_flow]")
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	var arena_manifest: Dictionary = (m._subgames["arena"] as Dictionary)["manifest"]
+	check(not m.entitlements.can_access(arena_manifest), "默认运营配置：arena 未点亮（限免开关关态）")
+	m._on_home_navigate(&"entry")
+	await process_frame
+	var entry := m.current_screen as ScreenEntry
+	var lock_found := false
+	var stats_found := false
+	var acquire_btn: Button = null
+	var enter_buttons := 0
+	for child: Node in entry.subgame_box.get_children():
+		if child is Label:
+			var t := (child as Label).text
+			if t.contains("守门人"):
+				lock_found = true
+			if t.contains("累计胜场"):
+				stats_found = true
+		elif child is Button and (child as Button).text == TextsZh.LOCK_ACQUIRE:
+			acquire_btn = child
+		elif child is HBoxContainer:
+			for b: Node in child.get_children():
+				if b is Button:
+					enter_buttons += 1
+	check(stats_found, "锁定态：封面/战绩照常呈现——可见但锁定（06 §3.1，让内容成为销售页）")
+	check(lock_found and acquire_btn != null and enter_buttons == 0,
+		"锁定态：叙事化锁定文案 +「获取」按钮，无参战按钮、无'未购买'生硬弹窗（06 §3.1）")
+	# 硬门槛阻断：直接发参战信号被拒
+	entry.subgame_start.emit("arena", ShellRouter.MODE_TIME)
+	await process_frame
+	check(not m._sub_active, "锁定阻断进入：subgame_start 被硬门槛拒绝（tech/02 §2.2）")
+	# 购买流程：半屏弹层 → 确认 → shop_purchase → 即时解锁无需重启
+	acquire_btn.pressed.emit()
+	await process_frame
+	check(entry.shop_popup.visible and entry.shop_popup.goods_label.text.contains("¥12"),
+		"「获取」→ 购买半屏弹层，价格来自运营配置（04 §3.3 / 06 §3.2/§6）")
+	entry.shop_popup.confirm_button.pressed.emit()
+	await process_frame
+	check(m.entitlements.can_access(arena_manifest), "确认购买 → 即时点亮（06 §3.1：购买即解锁无需重启）")
+	var prov: Dictionary = m.board.provenance_of("global.entitlement.arena")
+	check(str(prov.get("granted_by", "")) == "shop" and str(prov.get("receipt_id", "")).begins_with("rcpt_"),
+		"购买溯源：单号随写入进状态板（06 §2.3）")
+	entry = m.current_screen as ScreenEntry
+	var enter2 := 0
+	for child: Node in entry.subgame_box.get_children():
+		if child is HBoxContainer:
+			for b: Node in child.get_children():
+				if b is Button:
+					enter2 += 1
+	check(enter2 == 2, "入口当场刷新：参战按钮出现（解锁即时生效）")
+	# 退款：权利置假 → 入口回锁定态、新局被拒（06 §5）
+	m.entitlements.refund("arena")
+	m._show_entry()
+	await process_frame
+	entry = m.current_screen as ScreenEntry
+	var relocked := false
+	for child: Node in entry.subgame_box.get_children():
+		if child is Button and (child as Button).text == TextsZh.LOCK_ACQUIRE:
+			relocked = true
+	check(relocked and not m.entitlements.can_access(arena_manifest), "退款：入口回锁定态，不可开新局（06 §5）")
+	# 活动限免：开关开 → apply_activities → 自动解锁（运营轨不动内容包）
+	var ops_on: Dictionary = m.ops_config.duplicate(true)
+	(ops_on["activities"] as Array)[0]["enabled"] = true
+	m.entitlements.apply_activities(ops_on)
+	m._show_entry()
+	await process_frame
+	entry = m.current_screen as ScreenEntry
+	var enter3 := 0
+	for child: Node in entry.subgame_box.get_children():
+		if child is HBoxContainer:
+			for b: Node in child.get_children():
+				if b is Button:
+					enter3 += 1
+	check(m.entitlements.can_access(arena_manifest) and enter3 == 2,
+		"活动限免开关开 → 入口自动解锁（06 §3.2：点亮在运营，内容包零改动）")
 	m.queue_free()
 	await process_frame
 
@@ -2313,6 +2517,9 @@ func test_main_flow() -> void:
 	check(m.stream.query_by_type(EventTypes.QUEST_TRIGGER).any(
 		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "archive_quest"),
 		"branch 选择 → choice 触发 L3 事件（档案馆委托，tech/02 §5）")
+	check(bool(m.board.read("campaign01.cleared"))
+		and bool(m.board.read("global.entitlement.arena")),
+		"通关自动成就点亮：campaign01.cleared → entitlement.arena（烬港通关者免费入场，06 §2.1）")
 	var summary := (m.current_screen as ScreenSettle).summary_text.text
 	check(summary.contains("经验 +350") and summary.contains("声望：scriptorium +1")
 		and summary.contains("旗标：campaign01.seen_fading") and not summary.contains("campaign01.gold"),
