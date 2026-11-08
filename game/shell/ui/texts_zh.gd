@@ -93,6 +93,16 @@ const STORY_FORECAST_EMPTY := "暂无逼近的时间边。"
 const STORY_QUEST_BADGE := "事件 %d"
 const STORY_SLICE_END := "幕一 · 切片终点"
 const SETTLE_SLICE := "切片完成"
+# 模式锁定（09 §3：强制是叙事手段；tech/02 §2.1 forced / forced_except）
+const STORY_MODE_UNLOCK := "回放到此为止——往后的路，可以用全局的视野走了。"
+# 结局屏（tech/02 §9；战役书 §9：结局演出 + 尾声结算合并于 ending 节点）
+const ENDING_TITLE := "【结局】%s"
+const ENDING_HOOK := "多周目钩子：%s"
+const ENDING_NGPLUS := "开始二周目"
+const ENDING_HOME := "回主屏"
+const ENDING_SAVED := "抄本已记录（结局快照，07 §4.2）"
+const ENDING_PLAYTHROUGH := "—— 第 %d 周目 完 ——"
+const NGPLUS_TOAST := "你带着抄本残页回到潮醒之前。织命者残简 ×1 随行，图鉴与权利如故。"
 # Hub（战役书 §4 N1-1：休整 / 商店 / 传闻；04 §3.3 半屏弹层）
 const HUB_SHOP := "商店"
 const HUB_REST := "休整"

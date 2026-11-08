@@ -6,7 +6,8 @@
 #   出战技能 = 整备选择 ∩（角色已习得 ∩ skills.json）（tech/04 §7）；
 #   道具 = 整备选择 ∩ 背包持有 ∩ items.json 含 use 块（tech/04 §4）；
 #   玩家模板叠加成长：属性点分配与每级 HP+2（11 §6；簿记 global.growth.*，tech/04 §8）；
-#   首回合优势 = 遭遇 party_advantage 旗标声明（11 §3.1：来源由内容包声明）。
+#   首回合优势 = 遭遇 party_advantage 旗标声明（11 §3.1：来源由内容包声明）；
+#   敌方条件削弱 = 遭遇 enemy_weaken 旗标声明（tech/02 §6：与 party_advantage 对称的难度修正）。
 # 纯数据组装，零引擎依赖；任何引用缺失/公式求值失败 → ok=false 并逐条报错（引导层 fail-fast）。
 class_name BattleDef
 extends RefCounted
@@ -86,6 +87,18 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 			fkey = "%s.%s" % [pack_id, fkey]
 		if bool(board.read(fkey)):
 			adv_rounds = int(adv.get("rounds", 1))
+
+	# ---- 敌方条件削弱（tech/02 §6 enemy_weaken：旗标驱动的难度修正，与 party_advantage 对称；
+	# 如战役书 §5 手下留情 → N4-1 税吏证词 Boss 攻击修正 -2）----
+	var weaken: Dictionary = enc.get("enemy_weaken", {})
+	if weaken.has("flag"):
+		var wkey := str(weaken["flag"])
+		if not wkey.contains("."):
+			wkey = "%s.%s" % [pack_id, wkey]
+		if bool(board.read(wkey)):
+			for u: Variant in foes:
+				(u as Dictionary)["attack_mod"] = int((u as Dictionary)["attack_mod"]) \
+					+ int(weaken.get("attack_mod", 0))
 
 	var loot: Array = []
 	for l: Variant in enc.get("loot", []):

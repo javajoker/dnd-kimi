@@ -1,7 +1,8 @@
 # 节点流程版流程控制器（tech/01 §10；04 §2 导航闭环 + §3.1/§④.2/§④.3；07 §4 存档；09 §3/§6/§7/§9.1；tech/02 §3/§4/§5）
-# 串流：①主屏 → ②战役入口（模式分支，09 §3）→ **故事图驱动节点流程**（序章 N0-1 → … → 幕一 N1-8）：
+# 串流：①主屏 → ②战役入口（模式分支，09 §3）→ **故事图驱动节点流程**（序章 N0-1 → … → 终章 E1~E4）：
 #   scene/check/dialog/hub 节点由双壳故事态呈现（StoryVM 单源）；battle 节点进整备→遭遇→战后边回图；
-#   branch（N1-8）选择后出切片范围 → ⑨结算（成长加点 + 结算快照 07 §4.2）→ 回主屏 / ⑧历史卷轴。
+#   强制幕（SL-0/SL-3）按 presentation.forced 换壳并以叙事化提示呈现（09 §3；N3-7 起 forced_except 解锁）；
+#   结局节点 → 结局屏（tech/02 §9：四分型文案 + 多周目钩子 + 开始二周目）→ NG+ / 回主屏 / ⑧历史卷轴。
 # 存档时机（07 §4.2）：切片/遭遇结算完成（主快照）+ 主屏闲置（兜底）+ 主屏手动"记录抄本"；
 # 遭遇进行中不存档——☰「保存并回主屏」= 恢复遭遇进入前快照（09 §7，战斗重打）；
 # 故事态（遭遇外）☰ = 存档后回主屏（节点进度在图快照 meta.graph 内）。
@@ -11,9 +12,9 @@
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
-# 本切片范围：序章 + 幕一 + 幕二「三支笔」（S/U/G/L 四链真实可玩至收束点 N2-C；
-# 幕三 SL-3 未接入——N2-C 出边即切片终点结算，标注见交付说明）
-const SLICE_ACTS: Array[String] = ["SL-0", "SL-1", "SL-2"]
+# 本切片范围：完整战役 M1（序章 → 幕一 → 幕二四链 → 幕三撤销区房间序列 → 终章 Boss/抉择/结局）；
+# 结局节点（E1~E4）进结局屏（tech/02 §9），战斗失败仍走 ⑨ 结算（失败即分支，09 §7）。
+const SLICE_ACTS: Array[String] = ["SL-0", "SL-1", "SL-2", "SL-3", "SL-4"]
 const LANDSCAPE_SIZE := Vector2i(1280, 720)
 const PACK_DIR := "res://packs/campaign01"
 const SHELL_SCENES := {
@@ -29,6 +30,7 @@ const SCREEN_SCENES := {
 	&"quests": "res://shell/ui/screen_quests.tscn",
 	&"inventory": "res://shell/ui/screen_inventory.tscn",
 	&"character": "res://shell/ui/screen_character.tscn",
+	&"ending": "res://shell/ui/screen_ending.tscn",
 }
 var stream: EventStream
 var board: Board
@@ -98,6 +100,8 @@ func _ready() -> void:
 		_run_shots_growth()
 	if args.has("--act2-shots"):
 		_run_shots_act2()
+	if args.has("--act3-shots"):
+		_run_shots_act3()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -200,7 +204,10 @@ func _on_campaign_start(entry: ScreenEntry) -> void:
 	_mode = entry.selected_mode
 	if _mode == &"":
 		return
-	if not graph.visit_log.is_empty() and not graph.is_at_ending():
+	if graph.is_at_ending():
+		_on_ngplus_start() # 已通关战役再开 = 多周目（战役书 §9：结局屏外同一继承语义）
+		return
+	if not graph.visit_log.is_empty():
 		_present_node() # 战役进行中：继续当前节点（主屏"继续"语义，04 §①）
 		return
 	_start_campaign()
@@ -217,10 +224,13 @@ func _start_campaign() -> void:
 
 # ---------------------------------------------------------------- 节点流程（故事图驱动；UI 只消费 StoryVM + 事件流）
 
-## 呈现当前节点：battle → 整备/遭遇；explore（迷宫探索序列，tech/02 §6 maze）→ 逐拍呈现；
-## 出切片范围/结局 → 切片结算；其余 → 双壳故事态。
+## 呈现当前节点：ending → 结局屏（tech/02 §9）；battle → 整备/遭遇；
+## explore（迷宫探索序列，tech/02 §6 maze）→ 逐拍呈现；出切片范围 → 切片结算；其余 → 双壳故事态。
 func _present_node() -> void:
-	if graph.is_at_ending() or not SLICE_ACTS.has(str(graph.current().get("act", ""))):
+	if graph.is_at_ending():
+		_present_ending()
+		return
+	if not SLICE_ACTS.has(str(graph.current().get("act", ""))):
 		_end_slice()
 		return
 	var ntype := str(graph.current().get("type", ""))
@@ -243,21 +253,52 @@ func _story_show(vm: Dictionary) -> void:
 	elif shell is EncounterLandscape:
 		(shell as EncounterLandscape).show_story(vm)
 
+## 当前节点要求的壳形态（tech/02 §2.1：forced 按幕强制、forced_except 幕内节点级例外——
+## 战役书幕三：SL-3 强制竖屏，N3-7 空白广场起恢复玩家所选形态"此处起解锁横屏"；09 §3 强制是叙事手段）。
+func _story_mode() -> StringName:
+	var pres: Dictionary = (pack.get("manifest", {}) as Dictionary).get("presentation", {})
+	var act := str(graph.current().get("act", ""))
+	var forced: Dictionary = pres.get("forced", {})
+	if forced.has(act):
+		var exempt: Array = (pres.get("forced_except", {}) as Dictionary).get(act, [])
+		if not exempt.has(graph.current_id):
+			return StringName(str(forced[act]))
+	return _mode
+
+func _shell_mode() -> StringName:
+	if shell is EncounterPortrait:
+		return ShellRouter.MODE_TIME
+	if shell is EncounterLandscape:
+		return ShellRouter.MODE_SPACE
+	return &""
+
 ## 故事壳就位：实例化/复用同一壳（09 §8 一局一壳），绑定故事回调（唯一指令通道）。
+## 强制幕换壳（09 §3 内容驱动，非玩家切换——router 的玩家切换锁不变）：形态不一致即重建壳，
+## 并以叙事化提示呈现（09 §3：禁止系统腔；锁定用 NOTICE_FORCED，解锁用 TextsZh.STORY_MODE_UNLOCK）。
 func _ensure_story_shell() -> void:
+	var want := _story_mode()
+	var notice := ""
+	if shell != null and _shell_mode() != want:
+		shell.queue_free()
+		shell = null
+		router = ShellRouter.new() # 换壳重开一局壳锁定（09 §8：锁管玩家切换，不管内容驱动换壳）
+		notice = str(ShellRouter.NOTICE_FORCED.get(want, "")) if want != _mode \
+			else TextsZh.STORY_MODE_UNLOCK
 	if shell == null:
-		shell = (load(SHELL_SCENES[_mode]) as PackedScene).instantiate()
+		shell = (load(SHELL_SCENES[want]) as PackedScene).instantiate()
 		add_child(shell)
 		shell.set("on_save_quit", Callable(self, "_on_save_quit"))
-		if _mode == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
+		if want == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
 			get_window().size = LANDSCAPE_SIZE
 			get_window().move_to_center()
-		router.lock_encounter(_mode) # 形态整场锁定（09 §3/§8：战役开始即定壳）
+		router.lock_encounter(want) # 形态整场锁定（09 §3/§8：战役开始即定壳）
 	if current_screen != null and current_screen != shell:
 		current_screen.queue_free()
 	current_screen = shell
 	shell.visible = true
 	shell.bind_story(stream, board, pack, {"edge": _on_story_edge, "hub": _on_hub_action})
+	if notice != "": # 换壳提示在新壳订阅事件流之后发出（事件流驱动 toast，壳只订阅）
+		stream.emit(EventTypes.LOG, {"msg": notice, "toast": true}, &"core", graph.current_id)
 
 ## 玩家执行节点选项：check 边真实掷骰（11 §3，check.roll 事件驱动两级演出 09 §6）；
 ## dialog 选项回复进日志；边效果/on_enter 写板由 StoryGraph 落（07 §1 溯源）。
@@ -313,6 +354,61 @@ func _end_slice() -> void:
 	_encounter_tail = _campaign_tail # 汇总区间 = 整个切片（逐项念给玩家听，04 §⑨）
 	_encounter_result = &"slice"
 	_show_settle()
+
+# ---------------------------------------------------------------- 结局与多周目（tech/02 §9；战役书 §9/§8）
+
+## 结局节点：写通关旗标（成就点亮路径 06 §2.1）→ story.ending 事件（tech/02 §9）→ 结局快照
+## （07 §4.2 主快照点）→ 结局屏（四分型文案 + 多周目钩子均取 endings.json，壳不再创作）。
+## 结局分型旗标（ending_e1~e4 / 解锁占位）由 ending 节点 on_enter 写板（nodes.json，V4 台账闭环）。
+func _present_ending() -> void:
+	_in_encounter = false
+	var eid := graph.current_id
+	if not bool(board.read("campaign01.cleared")):
+		board.write("campaign01.cleared", true,
+			{"event_id": stream.tail(), "node_id": eid, "pack_id": "campaign01"})
+	entitlements.check_achievements(ops_config)
+	var edef := {}
+	for e: Variant in pack.get("endings", []):
+		if str((e as Dictionary).get("id", "")) == eid:
+			edef = e
+	stream.emit(EventTypes.STORY_ENDING, {"ending": eid,
+		"title": str(edef.get("title", graph.current().get("title", eid)))}, &"graph", eid)
+	_save("ending")
+	var screen: ScreenEnding = (load(SCREEN_SCENES[&"ending"]) as PackedScene).instantiate()
+	_swap(screen)
+	screen.bind({"ending_id": eid, "title": str(edef.get("title", eid)),
+		"content": str(edef.get("content", "")), "hook": str(edef.get("ngplus_hook", "")),
+		"playthrough": int(board.read("campaign01.ngplus", 0)) + 1, "saved": true})
+	screen.ngplus_requested.connect(_on_ngplus_start)
+	screen.go_home.connect(_show_home)
+
+## 开始二周目（战役书 §8 投放第 4 枚残简 = 多周目继承 ×1；§9 E4：失败非终局、收集与图鉴进度保留）：
+## 保留 global.lore（图鉴）与 global.entitlement.*（权利），周目数 +1（campaign01.ngplus 簿记，
+## meta.ngplus/playthrough 数据源），其余状态重置后从入口节点重新开图（bot NG+ 语义同口径）。
+func _on_ngplus_start() -> void:
+	var lore: Array = board.get_lore()
+	var ents := {}
+	for key: String in board.keys_with_prefix("global.entitlement."):
+		ents[key] = board.read(key)
+	var ng := int(board.read("campaign01.ngplus", 0)) + 1
+	board = Board.new(stream)
+	entitlements = Entitlements.new(board, stream)
+	entitlements.apply_activities(ops_config)
+	var sys_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "system"}
+	for key: String in ents.keys():
+		board.write(key, ents[key], sys_prov) # 权利保留（global.entitlement.* 仅 system 可写，07 §3）
+	var pack_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "campaign01"}
+	board.write("global.lore", lore, pack_prov) # 图鉴保留（07 §2 全局白名单，任何包可写）
+	board.write("campaign01.ngplus", ng, pack_prov) # 周目数簿记（包命名空间）
+	board.give_item("codex_fragment", 1, pack_prov) # 多周目继承 ×1（战役书 §8 投放第 4 枚）
+	graph = StoryGraph.new(board, rng, pack)
+	if shell != null:
+		shell.queue_free()
+		shell = null
+	router = ShellRouter.new()
+	_battles_won = 0
+	stream.emit(EventTypes.LOG, {"msg": TextsZh.NGPLUS_TOAST, "toast": true}, &"core")
+	_start_campaign()
 
 # ---------------------------------------------------------------- 迷宫探索序列（tech/02 §6 maze 块；04 §④.3）
 # 逐拍呈现：check/ambush 拍掷 d20+修正（与检定边同一公式，11 §2/§3），loot 拍写板拾取；
@@ -873,7 +969,9 @@ func _bindings() -> Dictionary:
 		"framework": "1.0.0"}
 
 func _meta() -> Dictionary:
-	return {"playthrough": 1, "created_at": Time.get_datetime_string_from_system(false, true),
+	return {"playthrough": int(board.read("campaign01.ngplus", 0)) + 1,
+		"ngplus": int(board.read("campaign01.ngplus", 0)), # 周目数随快照落档（07 §4.1 meta）
+		"created_at": Time.get_datetime_string_from_system(false, true),
 		"progress": "当前节点 %s · 已访 %d 节点 · 胜场 %d" % [graph.current_id,
 			graph.visit_log.size(), _battles_won],
 		"graph": graph.serialize(),
@@ -1049,6 +1147,35 @@ func _run_shots_act2() -> void:
 	await get_tree().create_timer(1.8).timeout
 	await _shot("/tmp/act2_hybrid.png")
 	print("[shots] 幕二三张完成：/tmp/act2_escort.png /tmp/act2_maze.png /tmp/act2_hybrid.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 幕三/终章截图（模式锁定演出 / 分支门 / 结局屏证据 /tmp，不提交）
+
+## `-- --act3-shots`：横屏玩家路径——N2-C → N3-1 强制切竖屏壳（叙事化提示 toast，09 §3）→
+## R4 分支门（[物·黑羽令] 左路捷径 / fallback 右路，tech/02 §4.3）→ E3 结局屏（tech/02 §9）。
+func _run_shots_act3() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_SPACE) # 横屏玩家路径（强制幕换壳证据）
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	graph._enter("N2-C") # 横屏故事态就位（SL-2 随玩家所选形态）
+	_present_node()
+	await get_tree().create_timer(0.4).timeout
+	_on_story_edge(0) # N2-C → N3-1：强制切竖屏 + 模式锁定叙事化提示
+	await get_tree().create_timer(0.5).timeout
+	await _shot("/tmp/act3_mode_lock.png")
+	graph._enter("R4") # 分叉回廊分支门
+	_present_node()
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/act3_branch_gate.png")
+	graph._enter("E3") # 结局屏：四分型文案 + 多周目钩子（endings.json）
+	_present_node()
+	await get_tree().create_timer(0.5).timeout
+	await _shot("/tmp/act3_ending.png")
+	print("[shots] 幕三/终章三张完成：/tmp/act3_mode_lock.png /tmp/act3_branch_gate.png /tmp/act3_ending.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）

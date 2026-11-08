@@ -73,5 +73,39 @@
     "attack_mod": 4,
     "damage": "1d6+1",
     "note": "独狼失败路通缉战（N2L-1b，难）：三方共同雇佣的追兵；数值待定稿"
+  },
+  {
+    "id": "page_warden",
+    "name": "守页人",
+    "hp": 22,
+    "ac": 12,
+    "attrs": { "might": 2, "finesse": 1, "wits": 1 },
+    "attack_mod": 4,
+    "damage": "1d6+2",
+    "boss": true,
+    "skills": [
+      { "id": "seal_burst", "name": "封印冲击", "kind": "aoe", "damage": "1d8",
+        "uses": 2, "cooldown": 2,
+        "save": { "attr": "might", "dc": 12, "on_success": "half" },
+        "note": "封条展开的范围压制（11 §5.1 豁免范围效果；自 arena 守页人精英改造，数值占位待定稿）" }
+    ],
+    "note": "R5 Boss：誊写庭留下的自动缮写傀儡（战役书幕三）；回合行为脚本属战役书 §11 开放项"
+  },
+  {
+    "id": "tide_avatar",
+    "name": "墨潮化身",
+    "hp": 30,
+    "ac": 13,
+    "attrs": { "might": 2, "finesse": 2, "wits": 1 },
+    "attack_mod": 5,
+    "damage": "1d8+2",
+    "boss": true,
+    "skills": [
+      { "id": "tide_surge", "name": "墨潮席卷", "kind": "aoe", "damage": "1d8",
+        "uses": 3, "cooldown": 2,
+        "save": { "attr": "finesse", "dc": 13, "on_success": "half" },
+        "note": "褪墨之潮的群体冲刷（11 §5.1 豁免范围效果；数值占位待定稿）" }
+    ],
+    "note": "N4-1 最终 Boss：褪墨之潮的化身（战役书终章）；回合行为脚本属战役书 §11 开放项"
   }
 ]

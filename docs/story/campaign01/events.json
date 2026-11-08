@@ -73,7 +73,7 @@
     "id": "last_page", "name": "最后一页",
     "trigger": { "type": "auto", "node": "N3-7" },
     "objective": "通关终章",
-    "node": "N4-1",
+    "node": "N4-2",
     "settle": [ { "write": "campaign01_cleared", "value": true } ]
   }
 ]

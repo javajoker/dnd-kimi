@@ -34,6 +34,9 @@ func _init() -> void:
 	test_escort_sm()
 	test_maze_runner()
 	test_act2_chains()
+	test_act3_rooms()
+	test_finale_endings()
+	test_full_run_e4()
 	test_story_runtime()
 	test_story_vm()
 	test_subgame_arena()
@@ -50,6 +53,7 @@ func _async_shell_tests() -> void:
 	await test_subgame_flow()
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
+	await test_act3_forced_mode()
 	await test_main_flow()
 	if failures == 0:
 		print("== 全部通过 ==")
@@ -284,20 +288,20 @@ func test_pack_loader() -> void:
 	var pack: Dictionary = res["pack"]
 	check(pack["pack_id"] == "campaign01", "pack_id 解析")
 	check(str(pack["manifest"]["namespace"]) == "campaign01", "命名空间注册 = pack_id（tech/02 §2 防呆）")
-	check((pack["nodes"] as Dictionary).size() == 44, "节点表 44 节点")
+	check((pack["nodes"] as Dictionary).size() == 45, "节点表 45 节点（幕三接入补 R4-r2 派生节点）")
 	check((pack["acts"] as Array).size() == 5, "五幕 acts")
-	check((pack["encounters"] as Dictionary).size() == 16, "遭遇表 16 场（TP1 裁决 3 补登 N2G-2c/R1）")
+	check((pack["encounters"] as Dictionary).size() == 17, "遭遇表 17 场（幕三接入补 R4-r2 第二场）")
 	check((pack["items"] as Dictionary).size() == 7, "道具表 7 件（M2 补登 heal_potion）")
 	check((pack["characters"] as Dictionary).size() == 3, "角色表 3 条（玩家模板+珂兰+老费，tech/04 §2）")
 	check((pack["skills"] as Dictionary).size() == 6, "技能表 6 条（tech/04 §3）")
-	check((pack["enemies"] as Dictionary).size() == 7,
-		"敌人表 7 条（幕二阵容补登：墨魈群/黑羽卫/税吏卫队/雾码头伏击者/三方佣兵，tech/04 §1）")
+	check((pack["enemies"] as Dictionary).size() == 9,
+		"敌人表 9 条（幕三/终章补登：守页人/墨潮化身，tech/04 §1）")
 	var n17: Dictionary = pack["encounters"]["N1-7"]
 	check((n17["party"] as Array).size() == 3 and (n17["enemies"] as Array).size() == 3
 		and n17.has("pos") and n17.has("party_advantage"),
 		"N1-7 遭遇登记 party/enemies/pos/party_advantage（tech/02 §6 扩展字段）")
 	check((pack["endings"] as Array).size() == 4, "结局表 E1~E4")
-	check((pack["flags"] as Array).size() == 8, "旗标台账 8 条")
+	check((pack["flags"] as Array).size() == 14, "旗标台账 14 条（终章接入补：结局旗标 ×4 + 多周目解锁占位 ×2）")
 	check((pack["events"] as Array).size() == 10, "事件清单 10 条")
 	check((pack["lore"] as Array).size() == 7, "图鉴条目 7 条")
 	# 字段缺省容错（tech/02 §11）：N0-1 未声明 on_enter/on_complete 应补默认空数组
@@ -475,6 +479,7 @@ func test_story_graph() -> void:
 	check(not e_r4.is_empty() and bool(e_r4.get("via_fallback", false)),
 		"item 边未持有黑羽令 → fallback 变体（tech/02 §4.3）")
 	graph.take_edge(e_r4)
+	graph.take_edge(_edge_to(graph, "R4-r2")) # 右路第一场 → 第二场（战役书幕三 右路两场）
 	graph.take_edge(_edge_to(graph, "R5"))
 	graph.take_edge(_edge_to(graph, "N3-7"))
 	check(board.item_count("codex_fragment") == 2, "R5 战利品残简 ×1（累计 2）")
@@ -1982,6 +1987,271 @@ func test_act2_chains() -> void:
 	gl2.take_edge(_edge_to(gl2, "N2G-1"))
 	check(gl2.current_id == "N2G-1", "L 链失败路：择拾遗行会链 → N2G-1")
 
+# ---------------------------------------------------------------- 幕三「撤销区」房间序列（战役书幕三；tech/02 §4.3/§6；11 §5.1）
+
+## 推进至 N2-C（独狼链：N1-3 婉拒 → N1-8 → N2L-1 难检定成功直达；声望 0，无黑羽令/印戒/倾向投放）。
+func _reach_n2c(g: StoryGraph) -> void:
+	_reach_n18(g)
+	g.take_edge(_edge_to(g, "N2L-1"))
+	g.resolve_check(g.available_edges()[0], true) # 独狼难检定成功 → 跳链直达 N2-C
+
+func test_act3_rooms() -> void:
+	print("[act3_rooms]")
+	var pack := _load_campaign01()
+	# ---- R2 对话检定成败两路（战役书幕三：成功给残简+羁绊 / 失败旗标未能挽留）----
+	for success: bool in [true, false]:
+		var s := EventStream.new()
+		var b := Board.new(s)
+		var g := StoryGraph.new(b, Rng.new(42), pack)
+		_reach_n2c(g)
+		g.take_edge(_edge_to(g, "N3-1"))
+		g.take_edge(_edge_to(g, "R1"))
+		check(b.has_lore("revoked_registry_01"), "R1 on_enter：图鉴·褪色民居的门牌（lore.json source 对齐）")
+		g.take_edge(_edge_to(g, "R2"))
+		check(b.has_lore("revoked_registry_02"), "R2 on_enter：图鉴·空教室的花名册")
+		var frag_before := b.item_count("codex_fragment")
+		g.resolve_check(g.available_edges()[0], success)
+		check(g.current_id == "R3",
+			"R2 安抚检定%s → R3（成败汇合，差异在效果，08 §2）" % ("成功" if success else "失败"))
+		if success:
+			check(b.item_count("codex_fragment") == frag_before + 1 and int(b.get_bond("kelan")) == 20,
+				"R2 成功路：残简 ×1 + 羁绊 +20（战役书 §8 隐藏投放）")
+		else:
+			check(b.read("campaign01.failed_to_hold") == true
+				and b.item_count("codex_fragment") == frag_before,
+				"R2 失败路：未能挽留旗标、无残简（战役书幕三 R2）")
+	# ---- 房间序列主走（无黑羽令）：R1 拾取 → R3 战斗 → R4 fallback 右路两场 → R5 Boss → N3-7 ----
+	var s2 := EventStream.new()
+	var b2 := Board.new(s2)
+	var g2 := StoryGraph.new(b2, Rng.new(42), pack)
+	_reach_n2c(g2)
+	g2.take_edge(_edge_to(g2, "N3-1"))
+	g2.take_edge(_edge_to(g2, "R1"))
+	_run_maze(g2, pack, b2, s2)
+	check(b2.item_count("ink_core") == 1, "R1 拾取房：墨核 ×1（maze loot 拍，tech/02 §6）")
+	g2.take_edge(_edge_to(g2, "R2"))
+	g2.resolve_check(g2.available_edges()[0], true)
+	var sm3 := _win_pack_battle(pack, "R3", b2, s2)
+	check(sm3.result() == &"victory", "R3 墨魈巢穴战斗可胜（遭遇组装 + SM 通道）")
+	var r3_foes: Array = (pack["encounters"]["R3"] as Dictionary)["enemies"]
+	check(r3_foes.size() == 3 and str((r3_foes[0] as Dictionary)["ref"]) == "ink_fiend",
+		"R3 阵容：墨魈 + 幼体 ×2（数值占位待定稿，README 决策记录）")
+	g2.take_edge(_edge_to(g2, "R4"))
+	var e_r4 := _edge_to(g2, "R4-r")
+	check(not e_r4.is_empty() and bool(e_r4.get("via_fallback", false)),
+		"R4 分支门：无黑羽令 → 右路 fallback 变体（tech/02 §4.3）")
+	g2.take_edge(e_r4)
+	check(_win_pack_battle(pack, "R4-r", b2, s2).result() == &"victory", "R4-r 右路第一场可胜")
+	g2.take_edge(_edge_to(g2, "R4-r2"))
+	check(_win_pack_battle(pack, "R4-r2", b2, s2).result() == &"victory",
+		"R4-r2 右路第二场可胜（场间无休整，HP 持久 11 §7.1）")
+	g2.take_edge(_edge_to(g2, "R5"))
+	var warden: Dictionary = (pack["enemies"] as Dictionary)["page_warden"]
+	check(bool(warden.get("boss", false)) and (warden["skills"] as Array).size() == 1
+		and int(((warden["skills"] as Array)[0] as Dictionary)["save"]["dc"]) == 12
+		and str(((warden["skills"] as Array)[0] as Dictionary)["save"]["on_success"]) == "half",
+		"R5 Boss 守页人：封印冲击 save DC12/half 随条目挂载（11 §5.1；自 arena 守页人精英改造）")
+	check(_win_pack_battle(pack, "R5", b2, s2).result() == &"victory", "R5 守页人 Boss 战可胜（难）")
+	g2.take_edge(_edge_to(g2, "N3-7"))
+	check(g2.current_id == "N3-7" and b2.item_count("codex_fragment") == 2
+		and b2.item_count("ink_core") == 2,
+		"R5 战利品 → N3-7：残简 ×2（R2+R5）+ 墨核 ×2（R1+R5，战役书 §8 投放）")
+	# ---- R4 左路：持黑羽令 → 捷径直达 R5（tech/02 §4.3 主路；items.json unlocks）----
+	var s3 := EventStream.new()
+	var b3 := Board.new(s3)
+	var g3 := StoryGraph.new(b3, Rng.new(42), pack)
+	_reach_n2c(g3)
+	b3.give_item("black_feather_token", 1,
+		{"event_id": s3.tail(), "node_id": "R4", "pack_id": "campaign01"})
+	g3.take_edge(_edge_to(g3, "N3-1"))
+	g3.take_edge(_edge_to(g3, "R1"))
+	g3.take_edge(_edge_to(g3, "R2"))
+	g3.resolve_check(g3.available_edges()[0], true)
+	g3.take_edge(_edge_to(g3, "R4"))
+	var e_left := _edge_to(g3, "R5")
+	check(not e_left.is_empty() and not bool(e_left.get("via_fallback", false)),
+		"R4 分支门：持黑羽令 → 左路捷径主路边（[物·黑羽令]，战役书 §8）")
+	g3.take_edge(e_left)
+	check(g3.current_id == "R5", "左路捷径直达 R5（跳过右路两场）")
+
+# ---------------------------------------------------------------- 终章：免战/强攻 + 四结局（战役书终章/§9；tech/02 §9/§6）
+
+## 推进至 N3-7（独狼链 + 房间序列图级直走，不跑战斗数值；r2_success 控制 R2 成败路）。
+func _reach_n37(g: StoryGraph, r2_success: bool = true) -> void:
+	_reach_n2c(g)
+	g.take_edge(_edge_to(g, "N3-1"))
+	g.take_edge(_edge_to(g, "R1"))
+	g.take_edge(_edge_to(g, "R2"))
+	g.resolve_check(g.available_edges()[0], r2_success) # → R3
+	g.take_edge(_edge_to(g, "R4"))
+	var e := _edge_to(g, "R4-r")
+	if not e.is_empty():
+		g.take_edge(e)
+		g.take_edge(_edge_to(g, "R4-r2"))
+	g.take_edge(_edge_to(g, "R5"))
+	g.take_edge(_edge_to(g, "N3-7"))
+
+func test_finale_endings() -> void:
+	print("[finale_endings]")
+	var pack := _load_campaign01()
+	var prov := {"event_id": 1, "node_id": "N4-1", "pack_id": "campaign01"}
+	# ---- N4-1 强攻路：fallback → N4-1b（遭遇 N4-1）；难度差 = enemy_weaken 旗标驱动 ----
+	var s1 := EventStream.new()
+	var b1 := Board.new(s1)
+	var g1 := StoryGraph.new(b1, Rng.new(42), pack)
+	_reach_n37(g1)
+	g1.take_edge(_edge_to(g1, "N4-1"))
+	var e_assault := _edge_to(g1, "N4-1b")
+	check(not e_assault.is_empty() and bool(e_assault.get("via_fallback", false)),
+		"N4-1 无印戒 → fallback 强攻边（tech/02 §4.3）")
+	var def_plain := BattleDef.assemble(pack, "N4-1", {}, b1)
+	check(bool(def_plain["ok"]), "N4-1 强攻遭遇组装 ok（墨潮化身 + 幼体 ×2）")
+	var atk_plain := int(((def_plain["def"] as Dictionary)["enemies"][0] as Dictionary)["attack_mod"])
+	b1.write("campaign01.mercy_shown", true, prov)
+	var def_weak := BattleDef.assemble(pack, "N4-1", {}, b1)
+	var atk_weak := int(((def_weak["def"] as Dictionary)["enemies"][0] as Dictionary)["attack_mod"])
+	check(atk_plain - atk_weak == 2,
+		"手下留情 → Boss 攻击修正 -2（%d→%d；战役书 §5 税吏证词，tech/02 §6 enemy_weaken）" % [atk_plain, atk_weak])
+	g1.take_edge(e_assault)
+	check(g1.current_id == "N4-1b", "强攻边 → N4-1b（遭遇 N4-1 挂载节点，README 转写裁决）")
+	check(_win_pack_battle(pack, "N4-1", b1, s1).result() == &"victory",
+		"N4-1 墨潮化身 Boss 战可胜（难；手下留情已立 = 削弱后）")
+	g1.take_edge(_edge_to(g1, "N4-2"))
+	check(g1.current_id == "N4-2", "强攻胜利 → N4-2 抉择")
+	# ---- N4-1 免战路：印戒 + 誊写庭声望 ≥1 → item 边主路直达 N4-2（[物/声]）----
+	var s1b := EventStream.new()
+	var b1b := Board.new(s1b)
+	var g1b := StoryGraph.new(b1b, Rng.new(42), pack)
+	_reach_n37(g1b)
+	b1b.give_item("scriptorium_signet", 1, prov)
+	b1b.write("global.rep.scriptorium", 1, prov)
+	g1b.take_edge(_edge_to(g1b, "N4-1"))
+	var e_skip := _edge_to(g1b, "N4-2")
+	check(not e_skip.is_empty() and not bool(e_skip.get("via_fallback", false)),
+		"N4-1 印戒 + 声望 ≥1 → 免战主路边（items.json unlocks）")
+	g1b.take_edge(e_skip)
+	check(g1b.current_id == "N4-2", "印戒免战：跳过 Boss 直达 N4-2（战役书 §8 印戒解锁边）")
+	# ---- 四结局分别可达（构造状态触发 E1/E2/E3/E4；结局写板 + 结局表互证）----
+	# E1 墨守 >50
+	var r1 := _play_ending(pack, {"global.alignment": 60})
+	check(str(r1["ending"]) == "E1" and bool((r1["board"] as Board).read("campaign01.ending_e1")),
+		"E1 重墨：墨守过中线可达 + ending_e1 写板（tech/02 §9）")
+	# E2 留白 >50
+	var r2 := _play_ending(pack, {"global.alignment": 40})
+	check(str(r2["ending"]) == "E2" and bool((r2["board"] as Board).read("campaign01.ending_e2")),
+		"E2 自由灰：留白过中线可达 + ending_e2 写板")
+	# E3 残简 ×4 + 羁绊 ≥60（隐藏；路径已得 R2+R5 ×2，补足 ×4）
+	var r3 := _play_ending(pack, {"bond.kelan": 60, "item.codex_fragment": 2})
+	check(str(r3["ending"]) == "E3" and bool((r3["board"] as Board).read("campaign01.ending_e3"))
+		and bool((r3["board"] as Board).read("campaign01.unlock_scribe_identity")),
+		"E3 新篇：残简 ≥4 + 羁绊 ≥60 可达 + 执笔者身份解锁占位（战役书 §9 E3 钩子）")
+	# E4 兜底（独狼线：倾向 50 / 残简不足）
+	var r4 := _play_ending(pack, {}, false)
+	check(str(r4["ending"]) == "E4" and bool((r4["board"] as Board).read("campaign01.ending_e4"))
+		and bool((r4["board"] as Board).read("campaign01.ngplus_memory_view")),
+		"E4 褪墨吞港：条件均不满足兜底可达 + 追忆视角占位（tech/02 §9 default；战役书 §9 E4 钩子）")
+	check(bool((r4["board"] as Board).read("campaign01.campaign01_cleared")),
+		"E4 亦写 campaign01_cleared（失败非终局：last_page settle 于离开 N4-2）")
+
+## 构造终局状态并走到结局：独狼线至 N4-1 → 强攻 fallback 进 N4-2 → 应用 setup 写板 →
+## 取 N4-2 首条显形边（边序 = endings.json 求值序）。返回 {ending, board}；图边结局与结局表互证。
+func _play_ending(pack: Dictionary, setup: Dictionary, r2_success: bool = true) -> Dictionary:
+	var s := EventStream.new()
+	var b := Board.new(s)
+	var g := StoryGraph.new(b, Rng.new(42), pack)
+	_reach_n37(g, r2_success)
+	g.take_edge(_edge_to(g, "N4-1"))
+	g.take_edge(_edge_to(g, "N4-1b"))
+	g.take_edge(_edge_to(g, "N4-2"))
+	var prov := {"event_id": s.tail(), "node_id": "N4-2", "pack_id": "campaign01"}
+	for key: Variant in setup.keys():
+		var ks := str(key)
+		if ks.begins_with("bond."):
+			b.write("global." + ks, int(setup[key]), prov)
+		elif ks.begins_with("item."):
+			b.give_item(ks.substr(5), int(setup[key]), prov)
+		else:
+			b.write(ks, setup[key], prov)
+	var edges := g.available_edges()
+	check(not edges.is_empty(), "N4-2 恒有显形边（E4 兜底无条件）")
+	var by_table := g.pick_ending()
+	g.take_edge(edges[0])
+	check(g.is_at_ending() and g.current_id == by_table,
+		"图边结局 %s 与 endings.json 求值 %s 互证一致（tech/02 §9）" % [g.current_id, by_table])
+	return {"ending": g.current_id, "board": b}
+
+# ---------------------------------------------------------------- 全流程一局：N0-1 → E4 + 快照可续（07 §4；战役书 §9 E4 失败非终局）
+
+## R3 → E4 图级直走（独狼/无道具线：R4 fallback 右路两场、N4-1 fallback 强攻）；沿途真实战斗胜利。
+func _walk_r3_to_e4(g: StoryGraph, pack: Dictionary, b: Board, s: EventStream) -> void:
+	check(_win_pack_battle(pack, "R3", b, s).result() == &"victory", "全流程：R3 墨魈巢穴胜利")
+	g.take_edge(_edge_to(g, "R4"))
+	g.take_edge(_edge_to(g, "R4-r"))
+	check(_win_pack_battle(pack, "R4-r", b, s).result() == &"victory", "全流程：R4-r 第一场胜利")
+	g.take_edge(_edge_to(g, "R4-r2"))
+	check(_win_pack_battle(pack, "R4-r2", b, s).result() == &"victory", "全流程：R4-r2 第二场胜利")
+	g.take_edge(_edge_to(g, "R5"))
+	check(_win_pack_battle(pack, "R5", b, s).result() == &"victory", "全流程：R5 守页人胜利")
+	g.take_edge(_edge_to(g, "N3-7"))
+	g.take_edge(_edge_to(g, "N4-1"))
+	g.take_edge(_edge_to(g, "N4-1b")) # 无印戒 → 强攻
+	check(_win_pack_battle(pack, "N4-1", b, s).result() == &"victory", "全流程：N4-1 墨潮化身胜利")
+	g.take_edge(_edge_to(g, "N4-2"))
+
+func test_full_run_e4() -> void:
+	print("[full_run_e4]")
+	var pack := _load_campaign01()
+	var s := EventStream.new()
+	var b := Board.new(s)
+	var rng := Rng.new(99)
+	var g := StoryGraph.new(b, rng, pack)
+	g.start()
+	# 前半程：序章 → 幕一（婉拒）→ 独狼链 → 幕三 R2 失败路（未能挽留 = E4 演出加权旗标）
+	g.take_edge(_edge_to(g, "N0-2"))
+	g.roll_check(g.available_edges()[0])
+	g.take_edge(_edge_to(g, "N0-4"))
+	g.take_edge(_edge_to(g, "N1-1"))
+	var e_plain := {}
+	for e: Variant in g.available_edges():
+		if str((e as Dictionary).get("to", "")) == "N1-2" \
+				and ((e as Dictionary).get("effects", []) as Array).is_empty():
+			e_plain = e
+	g.take_edge(e_plain)
+	g.resolve_check(g.available_edges()[0], true) # → N1-3
+	g.take_edge(_edge_to(g, "N1-8")) # 婉拒所有邀约
+	g.take_edge(_edge_to(g, "N2L-1"))
+	g.resolve_check(g.available_edges()[0], true) # 独狼成功 → N2-C
+	g.take_edge(_edge_to(g, "N3-1"))
+	g.take_edge(_edge_to(g, "R1"))
+	g.take_edge(_edge_to(g, "R2"))
+	g.resolve_check(g.available_edges()[0], false) # 安抚失败 → 未能挽留
+	check(g.current_id == "R3", "全流程：抵达 R3（中途快照点）")
+	# 快照（07 §4.1：Board 全量 + 图进度 + RNG 状态）
+	var snap := {"board": b.serialize(), "graph": g.serialize(), "rng": rng.save_state()}
+	# 后半程：R3 → … → E4
+	_walk_r3_to_e4(g, pack, b, s)
+	check(g.pick_ending() == "E4", "全流程：独狼线倾向 50/残简不足 → E4 兜底（tech/02 §9）")
+	var e4 := _edge_to(g, "E4")
+	check(not e4.is_empty(), "N4-2：E4 边恒显形（无条件满足）")
+	g.take_edge(e4)
+	check(g.is_at_ending() and g.current_id == "E4", "全流程一局：N0-1 → E4 褪墨吞港")
+	check(bool(b.read("campaign01.ending_e4")) and bool(b.read("campaign01.ngplus_memory_view")),
+		"E4 写板：结局旗标 + 追忆视角占位（flags.json 台账 V4 闭环）")
+	check(bool(b.read("campaign01.campaign01_cleared")),
+		"E4 亦通关写板 campaign01_cleared（失败非终局，战役书 §9）")
+	# 快照恢复重走：同一状态应再到 E4（快照往返一致，07 §4.1/§4.3）
+	var s2 := EventStream.new()
+	var b2 := Board.new(s2)
+	var rng2 := Rng.new(1)
+	b2.deserialize(snap["board"])
+	rng2.load_state(snap["rng"])
+	var g2 := StoryGraph.new(b2, rng2, pack)
+	g2.deserialize(snap["graph"])
+	check(g2.current_id == "R3", "快照恢复：图进度回到 R3（meta.graph 随快照往返）")
+	_walk_r3_to_e4(g2, pack, b2, s2)
+	g2.take_edge(_edge_to(g2, "E4"))
+	check(g2.is_at_ending() and g2.current_id == "E4", "快照可续：恢复后重走仍达 E4（07 §4.1）")
+
 # ---------------------------------------------------------------- 节点流程运行时（11 §2/§3；09 §6；04 §3.1；战役书 §4 N1-1）
 
 func test_story_runtime() -> void:
@@ -2828,7 +3098,69 @@ func test_landscape_story() -> void:
 	land.queue_free()
 	await process_frame
 
+# ---------------------------------------------------------------- 幕三模式锁定（tech/02 §2.1 forced/forced_except；09 §3；世界观 §8；战役书幕三）
+
+func test_act3_forced_mode() -> void:
+	print("[act3_forced_mode]")
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	m._on_home_navigate(&"entry")
+	await process_frame
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_SPACE) # 横屏玩家路径
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	# SL-0 强制竖屏：横屏玩家开局即竖屏壳（manifest presentation.forced）
+	check(m.shell is EncounterPortrait and m.graph.current_id == "N0-1",
+		"SL-0 强制竖屏：横屏玩家开局切竖屏壳（tech/02 §2.1 forced）")
+	m._on_story_edge(0) # → N0-2
+	await process_frame
+	m._on_story_edge(0) # 掷检定
+	await create_timer(1.2).timeout
+	m._on_story_edge(0) # → N0-4
+	await process_frame
+	m._on_story_edge(0) # → N1-1（SL-1：恢复横屏）
+	await process_frame
+	check(m.shell is EncounterLandscape, "SL-1 起切回横屏（forced 幕外随玩家所选形态，tech/02 §2.1）")
+	check((m.shell as EncounterLandscape).flash_label.text.contains("全局的视野"),
+		"解锁提示叙事化呈现（09 §3：包装文案禁止系统腔）")
+	# N2-C → N3-1：横屏玩家强制切竖屏壳 + 模式锁定演出
+	m.graph._enter("N2-C") # 传送幕二收束点（SL-2 随玩家所选形态）
+	m._present_node()
+	await process_frame
+	check(m.shell is EncounterLandscape, "N2-C（SL-2）：横屏壳保持")
+	m._on_story_edge(0) # → N3-1
+	await process_frame
+	check(m.shell is EncounterPortrait,
+		"N2-C → N3-1：横屏玩家强制切竖屏壳（战役书幕三模式锁定演出）")
+	check((m.shell as EncounterPortrait).flash_label.text.contains("回放"),
+		"模式锁定叙事化提示：残篇只能逐房回放（世界观 §8；09 §3 NOTICE_FORCED）")
+	check(m.graph.current_id == "N3-1" and str(m.graph.current().get("act", "")) == "SL-3",
+		"幕三节点就位（SL-3 撤销区）")
+	# N3-7 起切回横屏（forced_except：空白广场解锁横屏）
+	m.graph._enter("N3-7")
+	m._present_node()
+	await process_frame
+	check(m.shell is EncounterLandscape,
+		"N3-7 起切回横屏（forced_except 解锁，战役书幕三「此处起解锁横屏」）")
+	check((m.shell as EncounterLandscape).flash_label.text.contains("全局的视野"),
+		"N3-7 解锁提示叙事化呈现（09 §3）")
+	m.queue_free()
+	await process_frame
+
 # ---------------------------------------------------------------- main 节点流程集成（tech/01 §10；04 §3.1/§④.2/§④.3/§⑨；07 §4.2；09 §6/§7）
+
+## main 流程战斗快捷通道：整备确认 → 遭遇 → 模拟胜利（真实战斗数值由 encounter_sm/包数据通道覆盖）。
+func _main_win_battle(m: Node) -> void:
+	var lo := m.current_screen as ScreenLoadout
+	lo._toggle_skill("inkbolt")
+	lo._toggle_skill("inkshield")
+	lo._on_confirm()
+	await create_timer(1.4).timeout
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", m.graph.current_id)
+	await create_timer(1.6).timeout
 
 func test_main_flow() -> void:
 	print("[main_flow]")
@@ -3036,7 +3368,7 @@ func test_main_flow() -> void:
 	for e: Variant in lone_vm["edges"]:
 		lone_labels += str((e as Dictionary)["label"]) + "|"
 	check(lone_labels.contains("我谁都不信"), "独狼隐藏边：三方声望 0 → 显形（tech/02 §4.5）")
-	# ---- 幕二「三支笔」S 链：护送战 → N2-C 收束 → 切片终点（幕三未接入标注）----
+	# ---- 幕二「三支笔」S 链：护送战 → N2-C 收束（战役书幕二）----
 	m._on_story_edge(0) # 誊写庭委托 → N2S-1（幕二在切片内：SLICE_ACTS 含 SL-2）
 	await process_frame
 	check(m.graph.current_id == "N2S-1" and not (m.current_screen is ScreenSettle),
@@ -3061,47 +3393,91 @@ func test_main_flow() -> void:
 	check(m.graph.current_id == "N2-C", "S 链收束 → N2-C（三方情报拼合，战役书幕二收束）")
 	check(m.board.read("campaign01.blank_memory") == true, "献出记忆写板 blank_memory（N2S-3 边效果）")
 	check(m.board.has_item("scriptorium_signet"), "离开 N2S-3 结算 on_complete（誊写庭印戒，tech/02 §3）")
-	m._on_story_edge(0) # N2-C → N3-1：幕三未接入 → 切片终点
-	await process_frame
-	check(m.current_screen is ScreenSettle, "N2-C → 幕三未接入 → ⑨结算屏（幕二收束点切片终点，04 §⑨）")
-	check(FileAccess.file_exists(save_path), "快照在结算落盘（07 §4.2 主快照点）")
-	var read_back := SaveSystem.read("slot1")
-	check(bool(read_back["ok"]) and bool(SaveSystem.migrate(read_back["snapshot"])["ok"]),
-		"结算快照可读可迁移（当前版本直通，07 §4.3）")
+	# ---- 幕三「撤销区」房间序列 → 终章 → 结局屏 → NG+（战役书幕三/终章；tech/02 §9）----
 	check(m.stream.query_by_type(EventTypes.QUEST_TRIGGER).any(
 		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "archive_quest"),
 		"branch 选择 → choice 触发 L3 事件（档案馆委托，tech/02 §5）")
+	m._on_story_edge(0) # N2-C → N3-1（模式锁定演出节点；time 玩家无换壳）
+	await process_frame
+	check(m.graph.current_id == "N3-1" and m.current_screen is EncounterPortrait,
+		"幕三接入：N2-C → N3-1 进入撤销区（SL-3，战役书幕三）")
+	m._on_story_edge(0) # N3-1 → R1 褪色民居（探索序列）
+	await process_frame
+	check(m.graph.current_id == "R1" and m.board.has_lore("revoked_registry_01"),
+		"R1：褪色民居 on_enter 图鉴·门牌（lore.json source 逐条对齐）")
+	m._on_story_edge(0) # R1 拾取拍（loot：墨核 ×1，tech/02 §6 maze）
+	await create_timer(1.2).timeout
+	check(m.graph.current_id == "R1", "R1 探索序列完成回节点呈现出边")
+	m._on_story_edge(0) # R1 → R2 空教室
+	await process_frame
+	check(m.board.has_lore("revoked_registry_02"), "R2：空教室 on_enter 图鉴·花名册")
+	m._on_story_edge(0) # R2 安抚检定（真实掷骰；成败均至 R3，差异在效果，08 §2）
+	await create_timer(1.2).timeout
+	check(m.graph.current_id == "R3", "R2 对话检定 → R3 墨魈巢穴（tech/02 §4.2）")
+	# R3 战斗 → R4 分支门（S 链无黑羽令 → fallback 右路两场）
+	check(m.current_screen is ScreenLoadout, "R3 战斗房 → 整备（09 §9.1）")
+	await _main_win_battle(m)
+	check(m.graph.current_id == "R4", "R3 胜利 → R4 分叉回廊（分支门）")
+	check(bool(m.graph.available_edges()[0].get("via_fallback", false)),
+		"R4 分支门：无黑羽令 → 右路 fallback 变体（tech/02 §4.3）")
+	m._on_story_edge(0) # → R4-r 第一场
+	await process_frame
+	check(m.graph.current_id == "R4-r", "R4 右路 → R4-r 第一场（战役书幕三 右路两场战斗）")
+	await _main_win_battle(m)
+	check(m.graph.current_id == "R4-r2", "R4-r 胜利 → R4-r2 第二场（场间无休整，HP 持久 11 §7.1）")
+	await _main_win_battle(m)
+	check(m.graph.current_id == "R5", "R4-r2 胜利 → R5 守页人 Boss 战")
+	await _main_win_battle(m)
+	check(m.graph.current_id == "N3-7", "R5 胜利 → N3-7 空白广场（终章入口，战役书幕三）")
+	check(m.board.item_count("ink_core") == 2, "墨核累计 ×2（R1 拾取 + R5 节点边战利品，战役书 §8）")
+	# ---- 终章：免战门 → 抉择 → 结局屏 ----
+	m._on_story_edge(0) # N3-7 → N4-1 潮汐塔顶（免战门节点）
+	await process_frame
+	check(m.graph.current_id == "N4-1", "终章：N3-7 → N4-1（SL-4，战役书终章）")
+	var n41: Array = m.graph.available_edges()
+	check(n41.size() == 1 and not bool(n41[0].get("via_fallback", false)),
+		"N4-1 免战边显形：印戒 + 誊写庭声望 ≥1（[物/声]，items.json unlocks）")
+	m._on_story_edge(0) # 出示誊写庭印戒 → 免战直达 N4-2
+	await process_frame
+	check(m.graph.current_id == "N4-2", "印戒免战：跳过 Boss 直达抉择（战役书 §8 印戒解锁边）")
+	var n42: Array = m.graph.available_edges()
+	check(n42.size() == 2 and str(n42[0].get("to", "")) == "E1",
+		"N4-2 抉择：墨守过中线 → E1 显形，E4 兜底（tech/02 §9 顺序求值）")
+	check(m.graph.pick_ending() == "E1", "结局表求值 E1（图边选择与 endings.json 互证）")
+	m._on_story_edge(0) # 修补卷轴 → E1
+	await process_frame
+	check(m.graph.current_id == "E1" and m.graph.is_at_ending(), "抵达结局 E1 重墨（tech/02 §9）")
+	check(bool(m.board.read("campaign01.ending_e1")),
+		"结局写板：ending_e1（ending 节点 on_enter，flags.json 台账 V4 闭环）")
+	check(bool(m.board.read("campaign01.campaign01_cleared")),
+		"结局写板：campaign01_cleared（last_page settle 于离开 N4-2，战役书 §6）")
+	# 结局屏：四分型文案 + 多周目钩子（endings.json；壳不再创作）
+	var es := m.current_screen as ScreenEnding
+	check(es != null, "结局屏呈现（战役书 §9：结局演出 + 尾声结算合并于 ending 节点）")
+	check(es.title_label.text.contains("重墨") and es.content_text.text.contains("港城被重新书写"),
+		"结局屏文案 = endings.json content 字段（E1 重墨）")
+	check(es.hook_label.text.contains("缮写圣城"), "结局屏多周目钩子 = ngplus_hook 字段")
+	check(m.stream.query_by_type(EventTypes.STORY_ENDING).size() == 1,
+		"story.ending 事件进事件流（tech/02 §9）")
+	check(FileAccess.file_exists(save_path), "结局快照落盘（07 §4.2 主快照点）")
+	var read_back := SaveSystem.read("slot1")
+	check(bool(read_back["ok"]) and bool(SaveSystem.migrate(read_back["snapshot"])["ok"]),
+		"结局快照可读可迁移（当前版本直通，07 §4.3）")
 	check(bool(m.board.read("campaign01.cleared"))
 		and bool(m.board.read("global.entitlement.arena")),
-		"通关自动成就点亮：campaign01.cleared → entitlement.arena（烬港通关者免费入场，06 §2.1）")
-	var summary := (m.current_screen as ScreenSettle).summary_text.text
-	check(summary.contains("经验 +350") and summary.contains("声望：scriptorium +1")
-		and summary.contains("旗标：campaign01.seen_fading") and not summary.contains("campaign01.gold"),
-		"结算汇总：切片全程逐项念出（XP/声望/旗标；簿记键不念，04 §⑨）")
-	var points := Growth.attr_points(m.board)
-	check(points == 1 and Growth.level(m.board) == 2 and Growth.xp(m.board) == 350,
-		"成长：350 XP 跨 300 档 → Lv.2、属性点 +1（11 §6；簿记 global.growth.*，tech/04 §8）")
-	check(int((m._battle_def({})["party"] as Array)[0]["max_hp"]) == 16,
-		"成长：Lv.2 HP+2（14→16，11 §6）")
-	m._on_settle_allocate("might")
-	check(Growth.attr_points(m.board) == points - 1 and Growth.attrs_total(m.board, "might") == 1,
-		"结算加点写板 global.growth.*（属性点 -1，力 +1）")
-	# 单项 +3 封顶（11 §6）
-	m.board.write("global.growth.attrs.might", 3,
-		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
-	m.board.write("global.growth.attr_points", 2,
-		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
-	check(not m._apply_attr_alloc({"might": 1}), "单项 +3 封顶：力 +1 拒绝（11 §6）")
-	check(m._apply_attr_alloc({"finesse": 1}), "未满项仍可分配（敏 +1）")
-	# 结算 → 卷轴 → 回结算 → 回主屏（04 §5 双列检查）
-	(m.current_screen as ScreenSettle).go_history.emit()
+		"通关成就点亮：campaign01.cleared → entitlement.arena（06 §2.1）")
+	# ---- 多周目：开始二周目 → NG+ 继承（战役书 §8 投放第 4 枚 / §9 失败非终局）----
+	var lore_before: int = m.board.get_lore().size()
+	es.ngplus_button.pressed.emit()
 	await process_frame
-	check(m.current_screen is ScreenHistory, "结算 → ⑧历史卷轴（04 §⑨ 出口）")
-	(m.current_screen as ScreenHistory).back_requested.emit()
 	await process_frame
-	check(m.current_screen is ScreenSettle, "卷轴 → 回结算（返回来源界面，04 §5）")
-	(m.current_screen as ScreenSettle).go_home.emit()
-	await process_frame
-	check(m.current_screen is ScreenHome, "结算 → 回主屏（元循环落笔，04 §2）")
+	check(m.graph.current_id == "N0-1" and int(m.board.read("campaign01.ngplus", 0)) == 1,
+		"NG+：周目数 +1（campaign01.ngplus 簿记 → meta.ngplus）并从入口重开")
+	check(m.board.item_count("codex_fragment") == 1, "NG+：继承织命者残简 ×1（战役书 §8 投放第 4 枚）")
+	check(m.board.get_lore().size() == lore_before, "NG+：图鉴保留（global.lore，战役书 §9）")
+	check(bool(m.board.read("global.entitlement.arena")), "NG+：权利保留（global.entitlement.*，07 §3）")
+	check(Growth.xp(m.board) == 0 and m.board.get_doom_clock() == 0
+		and m.board.get_alignment() == 50 and not m.board.has_item("ink_core"),
+		"NG+：其余状态重置（成长/时钟/倾向/战利品）")
 	m.queue_free()
 	await process_frame

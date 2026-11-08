@@ -8,6 +8,7 @@
   "presentation": {
     "mode": "choice",
     "forced": { "SL-0": "time", "SL-3": "time" },
+    "forced_except": { "SL-3": ["N3-7"] },
     "recommend": { "N4-1": "space" }
   },
   "namespace": "campaign01",

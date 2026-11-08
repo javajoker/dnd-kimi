@@ -280,13 +280,14 @@
       "title": "褪色民居",
       "summary": "拾取/检定房：被撤销者的生活痕迹。",
       "encounter": "R1",
+      "on_enter": [ { "lore": "revoked_registry_01" } ],
       "edges": [ { "type": "choice", "label": "下一间", "to": "R2" } ]
     },
     {
       "id": "R2", "act": "SL-3", "type": "dialog",
       "title": "空教室",
       "summary": "对话房：还记得自己名字的孩子。隐藏拾取：织命者残简 ×1。",
-      "on_enter": [ { "lore": "revoked_registry_01" }, { "lore": "revoked_registry_02" } ],
+      "on_enter": [ { "lore": "revoked_registry_02" } ],
       "edges": [ {
         "type": "check", "skill": "soothe", "difficulty": "medium",
         "success": "R3", "failure": "R3",
@@ -312,9 +313,16 @@
     {
       "id": "R4-r", "act": "SL-3", "type": "battle",
       "title": "回廊右路",
-      "summary": "右路两场战斗。",
+      "summary": "右路第一场战斗（无黑羽令路径，场间无休整）。",
       "encounter": "R4-r",
-      "edges": [ { "type": "choice", "label": "继续", "to": "R5" } ]
+      "edges": [ { "type": "choice", "label": "继续深入", "to": "R4-r2" } ]
+    },
+    {
+      "id": "R4-r2", "act": "SL-3", "type": "battle",
+      "title": "回廊右路·深处",
+      "summary": "右路第二场战斗：巢穴深处的墨魈王庭。",
+      "encounter": "R4-r2",
+      "edges": [ { "type": "choice", "label": "走向守页人", "to": "R5" } ]
     },
     {
       "id": "R5", "act": "SL-3", "type": "battle",
@@ -333,12 +341,11 @@
     },
 
     {
-      "id": "N4-1", "act": "SL-4", "type": "battle",
+      "id": "N4-1", "act": "SL-4", "type": "scene",
       "title": "潮汐塔顶",
-      "summary": "最终 Boss 战：褪墨之潮的化身。印戒可说服守卫免战；税吏证词降低 Boss 难度。",
-      "encounter": "N4-1",
+      "summary": "塔顶守卫拦在最后一页之前。印戒可说服守卫免战；强攻则直面褪墨之潮的化身（税吏证词降低 Boss 难度）。",
       "edges": [
-        { "type": "item", "item": "scriptorium_signet", "to": "N4-2",
+        { "type": "item", "item": "scriptorium_signet", "label": "出示誊写庭印戒，说服守卫", "to": "N4-2",
           "fallback": "N4-1b",
           "requires": { "rep.scriptorium": { ">=": 1 } } }
       ]
@@ -366,19 +373,25 @@
     },
     {
       "id": "E1", "act": "SL-4", "type": "ending", "title": "重墨",
-      "summary": "结局演出 + 尾声结算。", "edges": []
+      "summary": "结局演出 + 尾声结算。",
+      "on_enter": [ { "write": "ending_e1", "value": true } ], "edges": []
     },
     {
       "id": "E2", "act": "SL-4", "type": "ending", "title": "自由灰",
-      "summary": "结局演出 + 尾声结算。", "edges": []
+      "summary": "结局演出 + 尾声结算。",
+      "on_enter": [ { "write": "ending_e2", "value": true } ], "edges": []
     },
     {
       "id": "E3", "act": "SL-4", "type": "ending", "title": "新篇",
-      "summary": "结局演出 + 尾声结算（隐藏）。", "edges": []
+      "summary": "结局演出 + 尾声结算（隐藏）。",
+      "on_enter": [ { "write": "ending_e3", "value": true },
+        { "write": "unlock_scribe_identity", "value": true } ], "edges": []
     },
     {
       "id": "E4", "act": "SL-4", "type": "ending", "title": "褪墨吞港",
-      "summary": "结局演出 + 尾声结算（失败非终局）。", "edges": []
+      "summary": "结局演出 + 尾声结算（失败非终局）。",
+      "on_enter": [ { "write": "ending_e4", "value": true },
+        { "write": "ngplus_memory_view", "value": true } ], "edges": []
     }
   ]
 }

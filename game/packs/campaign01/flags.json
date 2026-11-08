@@ -14,5 +14,17 @@
   { "id": "failed_to_hold", "name": "未能挽留", "type": "bool", "default": false,
     "writers": ["R2"], "readers": ["E4（演出加权）", "羁绊事件"] },
   { "id": "campaign01_cleared", "name": "烬港通关", "type": "bool", "default": false,
-    "writers": ["N4-4 尾声结算"], "readers": ["多周目继承", "主屏战役卡状态"] }
+    "writers": ["N4-4 尾声结算"], "readers": ["多周目继承", "主屏战役卡状态"] },
+  { "id": "ending_e1", "name": "结局·重墨", "type": "bool", "default": false,
+    "writers": ["E1"], "readers": ["结局屏", "多周目钩子（缮写圣城传闻）"] },
+  { "id": "ending_e2", "name": "结局·自由灰", "type": "bool", "default": false,
+    "writers": ["E2"], "readers": ["结局屏", "多周目钩子（裂页荒原传闻）"] },
+  { "id": "ending_e3", "name": "结局·新篇", "type": "bool", "default": false,
+    "writers": ["E3"], "readers": ["结局屏", "多周目钩子（执笔者身份）"] },
+  { "id": "ending_e4", "name": "结局·褪墨吞港", "type": "bool", "default": false,
+    "writers": ["E4"], "readers": ["结局屏", "多周目钩子（追忆视角）"] },
+  { "id": "unlock_scribe_identity", "name": "解锁执笔者身份", "type": "bool", "default": false,
+    "writers": ["E3"], "readers": ["多周目开局身份（占位，战役书 §9 E3 钩子）"] },
+  { "id": "ngplus_memory_view", "name": "追忆视角", "type": "bool", "default": false,
+    "writers": ["E4"], "readers": ["二周目追忆视角（占位，战役书 §9 E4 钩子）"] }
 ]
