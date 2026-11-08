@@ -129,6 +129,13 @@ const ENTRY_MODE_PICK := "选择这一程的讲述方式（整场战役锁定，
 const ENTRY_MODE_CHOSEN := "已选："
 const ENTRY_COLLECT := "分支收集度"
 const ENTRY_PLAYED := "已玩模式："
+# ② 子游戏卡（04 §6：入口挂战役入口区作特殊战役书卡；pack_type=subgame 数据驱动入列）
+const ENTRY_SUBGAME_SECTION := "—— 特殊战役书卡 · 子游戏 ——"
+const ENTRY_SUBGAME_TAG := "〔子游戏 · 连战〕"
+const SUBGAME_ENTER_TIME := "竖屏参战"
+const SUBGAME_ENTER_SPACE := "横屏参战"
+const SUBGAME_STATS := "累计胜场 %d · 最佳连战 %d"
+const SUBGAME_LEVEL := "建议等级 Lv.%d+"
 
 # 整备（09 §9.1）
 const LOADOUT_TITLE := "整备"

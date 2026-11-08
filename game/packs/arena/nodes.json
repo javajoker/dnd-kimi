@@ -1,0 +1,69 @@
+{
+  "acts": [
+    { "id": "AR", "title": "连战擂台", "role": "子游戏" }
+  ],
+  "nodes": [
+    {
+      "id": "A-0",
+      "act": "AR",
+      "type": "scene",
+      "title": "誊写场夜擂",
+      "summary": "地下誊写场的油灯一盏盏亮起。擂主敲响墨锣：连战三场，场间不休——打到哪里，算到哪里。",
+      "edges": [
+        { "type": "choice", "label": "整备妥当，踏入擂台", "to": "A-1" }
+      ]
+    },
+    {
+      "id": "A-1",
+      "act": "AR",
+      "type": "battle",
+      "title": "第一场 · 幼体群",
+      "summary": "三团未成形的墨魈幼体被赶上擂台，蠕动着围拢过来。",
+      "encounter": "AR-1",
+      "edges": [
+        { "type": "choice", "label": "乘胜追击（第二场 · 无休整）", "to": "A-2",
+          "effects": [ { "write": "stage1_cleared", "value": true } ] },
+        { "type": "choice", "label": "见好就收（按一胜结算）", "to": "A-END",
+          "effects": [ { "write": "stage1_cleared", "value": true } ] }
+      ]
+    },
+    {
+      "id": "A-2",
+      "act": "AR",
+      "type": "battle",
+      "title": "第二场 · 墨魈",
+      "summary": "墨雨未干，成形的墨魈踏着幼体的残迹登场，胸腔里翻涌着黑色的潮声。",
+      "encounter": "AR-2",
+      "edges": [
+        { "type": "choice", "label": "乘胜追击（决胜场 · 无休整）", "to": "A-3",
+          "requires": { "flag.stage1_cleared": true },
+          "effects": [ { "write": "stage2_cleared", "value": true } ] },
+        { "type": "choice", "label": "见好就收（按两胜结算）", "to": "A-END",
+          "effects": [ { "write": "stage2_cleared", "value": true } ] }
+      ]
+    },
+    {
+      "id": "A-3",
+      "act": "AR",
+      "type": "battle",
+      "title": "决胜场 · 守页人精英",
+      "summary": "压轴的是一位退役的守页人精英。他展开封条般的双臂：「让我看看，你的那一页还剩多少墨。」",
+      "encounter": "AR-3",
+      "edges": [
+        { "type": "choice", "label": "全胜谢幕", "to": "A-END",
+          "requires": { "flag.stage2_cleared": true },
+          "effects": [ { "write": "stage3_cleared", "value": true },
+            { "write": "flawless", "value": true },
+            { "give_item": "ink_core" } ] }
+      ]
+    },
+    {
+      "id": "A-END",
+      "act": "AR",
+      "type": "ending",
+      "title": "连战结算",
+      "summary": "墨锣再响，擂主记下你的战绩。无论走到哪里，誊写场的灯都为你留一盏。",
+      "edges": []
+    }
+  ]
+}

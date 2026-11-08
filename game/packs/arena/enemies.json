@@ -1,0 +1,43 @@
+[
+  {
+    "id": "ink_imp",
+    "name": "墨魈幼体",
+    "hp": 8,
+    "ac": 10,
+    "attrs": { "might": 0, "finesse": 0, "wits": 0 },
+    "attack_mod": 2,
+    "damage": "1d4"
+  },
+  {
+    "id": "ink_fiend",
+    "name": "墨魈",
+    "hp": 16,
+    "ac": 11,
+    "attrs": { "might": 1, "finesse": 1, "wits": 0 },
+    "attack_mod": 3,
+    "damage": "1d4+1",
+    "boss": true,
+    "skills": [
+      { "id": "ink_rain", "name": "墨雨溅射", "kind": "aoe", "damage": "1d6",
+        "uses": 2, "cooldown": 2,
+        "save": { "attr": "finesse", "dc": 11, "on_success": "half" },
+        "note": "every_other_round（cooldown 2 = 隔一回合并用，11 §5.1 豁免范围效果）" }
+    ]
+  },
+  {
+    "id": "page_warden_elite",
+    "name": "守页人精英",
+    "hp": 22,
+    "ac": 12,
+    "attrs": { "might": 2, "finesse": 1, "wits": 1 },
+    "attack_mod": 4,
+    "damage": "1d6+2",
+    "boss": true,
+    "skills": [
+      { "id": "seal_burst", "name": "封印冲击", "kind": "aoe", "damage": "1d8",
+        "uses": 2, "cooldown": 2,
+        "save": { "attr": "might", "dc": 12, "on_success": "half" },
+        "note": "封条展开的范围压制（11 §5.1 豁免范围效果，数值在 light_v1 范围内）" }
+    ]
+  }
+]

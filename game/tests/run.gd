@@ -33,6 +33,7 @@ func _init() -> void:
 	test_hp_persistence()
 	test_story_runtime()
 	test_story_vm()
+	test_subgame_arena()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
@@ -41,6 +42,7 @@ func _async_shell_tests() -> void:
 	await test_landscape_story()
 	await test_shell_diff()
 	await test_ui_screens()
+	await test_subgame_flow()
 	await test_main_flow()
 	if failures == 0:
 		print("== 全部通过 ==")
@@ -1652,6 +1654,219 @@ func test_story_vm() -> void:
 	check(StoryVM.toast_text({"type": EventTypes.LOG, "payload": {"msg": "x", "toast": true}}) == "x"
 		and StoryVM.toast_text({"type": EventTypes.LOG, "payload": {"msg": "x"}}) == "",
 		"toast：仅显式标记的日志上浮")
+
+# ---------------------------------------------------------------- 子游戏「竞技场连战」（M3：白皮书 §10.2 扩展承诺验证）
+# 关键验证点：core 零改动——子游戏 = 内容包（packs/arena）+ 引导层流程（SubgameRunner/main.gd），
+# 复用 PackLoader/StoryGraph/EncounterSM/BattleDef/Board 全部现有 core 能力。
+
+func _load_arena() -> Dictionary:
+	var res := PackLoader.load_pack("res://packs/arena")
+	check(res["ok"], "arena 包加载成功：%s" % ";".join(res["errors"]))
+	return res["pack"]
+
+## 托管打完一场连战（同构 Command 通道，09 §9.3）；buff=必胜夹具 / weaken=必败夹具。
+func _sub_run_battle(runner: SubgameRunner, seed: int, buff: bool, weaken: bool = false) -> EncounterSM:
+	var def := runner.battle_def({"skills": [], "items": []})
+	check(not def.is_empty(), "遭遇 %s 组装 ok" % runner.encounter_id())
+	if buff: # 必胜夹具：全队高修正重骰普攻（流程验证，非数值平衡验证；移除技能避免技能伤害盖过重骰）
+		for u: Variant in def["party"]:
+			(u as Dictionary)["attack_mod"] = 30
+			(u as Dictionary)["damage"] = "30d6"
+			(u as Dictionary).erase("skills")
+			(u as Dictionary).erase("items")
+	if weaken:
+		for u: Variant in def["party"]:
+			(u as Dictionary)["hp"] = 1
+			(u as Dictionary)["attack_mod"] = -50
+			(u as Dictionary)["damage"] = "1d1"
+		for u: Variant in def["enemies"]:
+			(u as Dictionary)["damage"] = "10d6"
+	var sm := EncounterSM.new(runner.board, runner.stream, Rng.new(seed), "arena")
+	var agent := AutoAgent.new()
+	sm.enter(runner.graph.current_id)
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(def)
+	var guard := 0
+	while not sm.is_over() and guard < 500:
+		guard += 1
+		var cmd := agent.next_command(sm)
+		if cmd.is_empty():
+			break
+		sm.submit_command(cmd)
+	return sm
+
+func test_subgame_arena() -> void:
+	print("[subgame_arena]")
+	# ---- 包加载与 manifest 声明（tech/02 §2）----
+	var pack := _load_arena()
+	if pack.is_empty():
+		return
+	var manifest: Dictionary = pack["manifest"]
+	check(str(manifest["pack_type"]) == "subgame", "manifest pack_type=subgame（tech/02 §2）")
+	check(str(manifest["namespace"]) == "arena", "命名空间 = pack_id（§2 防呆）")
+	var sub: Dictionary = manifest["subgame"]
+	check(bool((sub["rules_override"] as Dictionary).get("arena_mode", false)),
+		"rules_override = { arena_mode: true }（复用 light_v1 仅表现层变体，概念设计 §5）")
+	check(str((manifest["presentation"] as Dictionary)["mode"]) == "choice", "双模式可选（tech/02 §2.1）")
+	check((sub["gold_reward"] as Array).size() == 3, "subgame.gold_reward 三场金币声明（数据驱动奖励）")
+	check((pack["nodes"] as Dictionary).size() == 5 and (pack["encounters"] as Dictionary).size() == 3
+		and (pack["enemies"] as Dictionary).size() == 3, "节点图 5 节点 / 3 场遭遇 / 3 种敌人（含新增守页人精英）")
+	check((pack["enemies"] as Dictionary).has("page_warden_elite")
+		and (pack["enemies"] as Dictionary).has("ink_fiend"), "阵容：复用墨魈系 + 新增守页人精英")
+	# ---- packlint V1~V13（tech/02 §12 + tech/04 §6）----
+	var issues := PacklintCore.lint(pack)
+	var fails: Array = []
+	for issue: Dictionary in issues:
+		if issue["level"] == PacklintCore.LEVEL_FAIL:
+			fails.append("%s: %s" % [issue["v"], issue["msg"]])
+	check(fails.is_empty(), "arena packlint V1~V13 无 FAIL：%s" % ";".join(fails))
+	for v: String in ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V11", "V12", "V13"]:
+		check(issues.any(func(i: Dictionary) -> bool:
+			return i["v"] == v and i["level"] == PacklintCore.LEVEL_PASS), "arena packlint %s PASS" % v)
+	# ---- core 零改动（白皮书 §10.2 "子游戏不动框架" 的硬证据）----
+	var git_out: Array = []
+	OS.execute("git", ["-C", ProjectSettings.globalize_path("res://.."), "diff", "--name-only",
+		"HEAD", "--", "game/core/"], git_out, true)
+	var diff_text := "".join(git_out).strip_edges()
+	check(diff_text.is_empty(), "core/ 目录 git diff 为空（子游戏不动框架）：%s" % diff_text)
+
+	# ---- 连战三场全胜流程（复用 EncounterSM ×3；奖励写板；战绩旗标）----
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "A-0", "pack_id": "arena"})
+	var runner := SubgameRunner.new(pack, board, stream, Rng.new(77))
+	runner.start()
+	check(runner.graph.current_id == "A-0", "进场节点 A-0（tech/02 §3）")
+	runner.take_edge(0) # 踏入擂台 → A-1
+	var stage_encs: Array[String] = ["AR-1", "AR-2", "AR-3"]
+	for stage: int in 3:
+		check(runner.encounter_id() == stage_encs[stage], "第 %d 场遭遇 = %s（节点图驱动）" % [stage + 1, stage_encs[stage]])
+		var snap: Dictionary = board.serialize() # 夹具尝试回滚：每场以同一赛前状态重试，簿记不被失败尝试污染
+		var won := false
+		for seed: int in range(1, 100):
+			var sm := _sub_run_battle(runner, seed, true)
+			if sm.result() == &"victory":
+				won = true
+				if stage == 0:
+					check(board.has("arena.hp.player_blank"), "第 1 场后 HP 写板（11 §7.1 连战持久前提）")
+				break
+			board.deserialize(snap)
+		check(won, "seed 空间内第 %d 场必胜样本" % (stage + 1))
+		if not won:
+			return
+		runner.on_victory() # 每场胜利：金币 + 累计胜场写板（04 §6）
+		if stage == 1:
+			var def2 := runner.battle_def({})
+			var hp_board := int(board.read("arena.hp.player_blank"))
+			check(int(def2["party"][0]["hp"]) == clampi(hp_board, 1, int(def2["party"][0]["max_hp"])),
+				"第 3 场前组装以持久 HP 开局（含死亡 0→1 抬升，11 §7.1 / battle_def 抬升语义）")
+		runner.take_edge(0) # 乘胜追击 / 全胜谢幕
+	check(runner.graph.current_id == "A-END" and runner.graph.is_at_ending(), "全胜 → 结算节点 A-END")
+	check(int(board.read("arena.gold", 0)) == 100, "三场金币 20+30+50=100 落板（manifest gold_reward）")
+	check(int(board.read("arena.wins", 0)) == 3, "累计胜场 3 落板（stat_keys.wins）")
+	check(board.read("arena.stage1_cleared") == true and board.read("arena.stage2_cleared") == true
+		and board.read("arena.stage3_cleared") == true and board.read("arena.flawless") == true,
+		"场次旗标 + 全胜旗标落板（边效果 DSL，V4 闭环）")
+	check(board.has_item("ink_core"), "全胜追加墨核 ×1 进 global.inv（互通，概念设计 §3）")
+	var xp_sum := 0
+	for ev: Dictionary in stream.query_by_type(EventTypes.XP_GAIN):
+		xp_sum += int(ev["payload"]["amount"])
+	check(xp_sum == 250, "三场经验 50+80+120=250（encounters.xp 数据驱动）")
+	var summary := runner.finish_run(&"victory")
+	check(int(summary["wins"]) == 3 and int(summary["gold"]) == 100 and int(summary["best"]) == 3,
+		"收场汇总：3 胜 / 100 金 / 最佳 3")
+	check(int(board.read("arena.best", 0)) == 3, "最佳连战纪录写板（stat_keys.best）")
+
+	# ---- 中途败北：按已完成场次结算（失败即分支的竞技场形态，概念设计 §2）----
+	var s2 := EventStream.new()
+	var b2 := Board.new(s2)
+	var r2 := SubgameRunner.new(pack, b2, s2, Rng.new(7))
+	r2.start()
+	r2.take_edge(0) # → A-1
+	var snap1: Dictionary = b2.serialize() # 夹具尝试回滚（同上）
+	var won1 := false
+	for seed: int in range(1, 100):
+		if _sub_run_battle(r2, seed, true).result() == &"victory":
+			won1 = true
+			break
+		b2.deserialize(snap1)
+	check(won1, "败北局：第 1 场先胜（铺垫已完成场次）")
+	r2.on_victory()
+	r2.take_edge(0) # 追击 → A-2
+	var snap2: Dictionary = b2.serialize() # 夹具尝试回滚（同上）
+	var lost := false
+	for seed: int in range(1, 400):
+		if _sub_run_battle(r2, seed, false, true).result() == &"defeat":
+			lost = true
+			break
+		b2.deserialize(snap2)
+	check(lost, "seed 空间内第 2 场败北样本（全员倒地团灭，11 §5.2）")
+	var sum2 := r2.finish_run(&"defeat")
+	check(int(sum2["wins"]) == 1 and int(sum2["gold"]) == 20, "中途败北：按已完成 1 场结算（1 胜 / 20 金）")
+	check(b2.read("arena.stage1_cleared") == true and b2.read("arena.stage2_cleared") == false,
+		"败北场次不写场次旗标（失败即分支）")
+	check(int(b2.read("arena.best", 0)) == 1, "败北收场：最佳纪录 = 已完成场次（1）")
+
+# ---------------------------------------------------------------- 子游戏 UI 流程（04 §6：入口卡 → 整备 → 连战 → ⑨ 结算 → 回主屏）
+
+func test_subgame_flow() -> void:
+	print("[subgame_flow]")
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	check(m._subgames.has("arena"), "子游戏包发现：pack_type=subgame 即入列（数据驱动，不写死 arena）")
+	m._on_home_navigate(&"entry")
+	await process_frame
+	var entry := m.current_screen as ScreenEntry
+	var card_found := false
+	var mode_buttons := 0
+	for child: Node in entry.subgame_box.get_children():
+		if child is Label and (child as Label).text.contains("竞技场连战"):
+			card_found = true
+		if child is HBoxContainer:
+			for b: Node in child.get_children():
+				if b is Button:
+					mode_buttons += 1
+	check(card_found, "② 入口卡：特殊战役书卡呈现（04 §6）")
+	check(mode_buttons == 2, "入口卡：竖屏/横屏双模式参战按钮（tech/02 §2.1 choice）")
+	entry.subgame_start.emit("arena", ShellRouter.MODE_TIME)
+	await process_frame
+	check(m._sub_active and str(m.board.read("global.mode_choice.arena")) == "time",
+		"子游戏模式选择写板 global.mode_choice.arena（09 §3）")
+	check(m._sub.graph.current_id == "A-0" and m.graph.current_id == "",
+		"子游戏开图 A-0，战役图不受污染（命名空间/状态隔离）")
+	m._on_sub_story_edge(0) # 踏入擂台
+	await process_frame
+	check(m.current_screen is ScreenLoadout, "战斗节点 → 进场整备（09 §9.1；连战仅进场一次）")
+	(m.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.5).timeout
+	check(m._sub_battling and m.shell is EncounterPortrait, "整备 → 连战第一场（EncounterSM × 双壳复用）")
+	# 模拟第一场胜利（真实战斗数值由 subgame_arena runner 级断言覆盖）
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 2}, &"core", "A-1")
+	await create_timer(1.6).timeout
+	check(not m._sub_battling, "第一场结束回战后边（不进休整态，连战无休整）")
+	check(int(m.board.read("arena.gold", 0)) == 20 and int(m.board.read("arena.wins", 0)) == 1,
+		"第一场胜利写板：金币 +20 / 胜场 +1（04 §6 硬要求）")
+	var sh := m.shell as EncounterPortrait
+	var texts := sh.story_option_texts()
+	var joined := " ".join(texts)
+	check(joined.contains("乘胜追击") and joined.contains("见好就收"), "战后边：追击（无休整）/ 收兵选项")
+	var retire_idx := -1
+	for i: int in texts.size():
+		if str(texts[i]).contains("见好就收"):
+			retire_idx = i
+	m._on_sub_story_edge(retire_idx) # 收兵 → A-END
+	await process_frame
+	check(m.current_screen is ScreenSettle, "收兵 → ⑨ 结算屏（04 §6 离场必经结算界面）")
+	var summary := (m.current_screen as ScreenSettle).summary_text.text
+	check(summary.contains("战绩：本次 1 胜") and summary.contains("金币 +20"),
+		"结算汇总：战绩/金币逐项念出（04 §⑨）")
+	(m.current_screen as ScreenSettle).go_home.emit()
+	await process_frame
+	check(m.current_screen is ScreenHome and not m._sub_active, "结算 → 回主屏（离场闭环，不新增导航项）")
+	m.queue_free()
+	await process_frame
 
 # ---------------------------------------------------------------- 九类界面闭环（04 §2/§5，TP4 无头断言）
 

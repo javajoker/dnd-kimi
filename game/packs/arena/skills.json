@@ -1,0 +1,15 @@
+[
+  { "id": "slash", "name": "佩剑挥砍", "kind": "attack", "attr": "might", "damage": "1d6+2",
+    "uses_per_encounter": null, "target": "enemy_single", "gesture": "tap" },
+  { "id": "inkbolt", "name": "墨术飞矢", "kind": "attack", "attr": "wits", "damage": "1d6",
+    "uses_per_encounter": 2, "target": "enemy_single", "gesture": "path" },
+  { "id": "inkshield", "name": "墨盾格挡", "kind": "utility",
+    "uses_per_encounter": 1, "target": "self", "gesture": "path",
+    "effect": { "attackers_disadvantage": true } },
+  { "id": "inklance", "name": "墨枪突刺", "kind": "attack", "attr": "might", "damage": "1d8",
+    "uses_per_encounter": 1, "target": "enemy_single", "gesture": "path" },
+  { "id": "kelan_bolt", "name": "墨矢", "kind": "attack", "attr": "finesse", "damage": "1d6+1",
+    "uses_per_encounter": null, "target": "enemy_single", "gesture": "tap" },
+  { "id": "laofei_hook", "name": "船钩", "kind": "attack", "attr": "might", "damage": "1d6+1",
+    "uses_per_encounter": null, "target": "enemy_single", "gesture": "tap" }
+]

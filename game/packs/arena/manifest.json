@@ -1,0 +1,20 @@
+{
+  "pack_id": "arena",
+  "name": "竞技场连战",
+  "pack_type": "subgame",
+  "pack_version": 1,
+  "min_framework_version": "1.0.0",
+  "rule_pack": { "id": "light", "min_version": 1 },
+  "presentation": { "mode": "choice" },
+  "namespace": "arena",
+  "recommended_level": [2, 4],
+  "estimated_hours": "0.5",
+  "node_budget": 8,
+  "loadout": { "enabled": true, "item_slots": 2, "skill_slots": 2, "respec": false },
+  "subgame": {
+    "rules_override": { "arena_mode": true },
+    "gold_reward": [20, 30, 50],
+    "stat_keys": { "wins": "arena.wins", "best": "arena.best" }
+  },
+  "source_doc": "docs/subgames/arena/01-概念设计.md"
+}

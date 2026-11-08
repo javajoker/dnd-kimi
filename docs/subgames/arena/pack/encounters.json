@@ -1,0 +1,62 @@
+[
+  {
+    "id": "AR-1",
+    "node": "A-1",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "easy",
+    "max_units": 6,
+    "party": [
+      { "id": "pc", "ref": "player_blank" },
+      { "id": "kelan", "ref": "companion_kelan" },
+      { "id": "laofei", "ref": "companion_laofei" }
+    ],
+    "enemies": [
+      { "id": "imp1", "ref": "ink_imp" },
+      { "id": "imp2", "ref": "ink_imp" },
+      { "id": "imp3", "ref": "ink_imp" }
+    ],
+    "xp": 50,
+    "note": "第一场 · 幼体群（易）：复用 campaign01 墨魈幼体 ×3"
+  },
+  {
+    "id": "AR-2",
+    "node": "A-2",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 6,
+    "party": [
+      { "id": "pc", "ref": "player_blank" },
+      { "id": "kelan", "ref": "companion_kelan" },
+      { "id": "laofei", "ref": "companion_laofei" }
+    ],
+    "enemies": [
+      { "id": "boss", "ref": "ink_fiend" },
+      { "id": "imp1", "ref": "ink_imp" },
+      { "id": "imp2", "ref": "ink_imp" }
+    ],
+    "xp": 80,
+    "note": "第二场 · 墨魈（中）：复用 campaign01 墨魈（墨雨溅射 11 §5.1）+ 幼体 ×2"
+  },
+  {
+    "id": "AR-3",
+    "node": "A-3",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "hard",
+    "max_units": 6,
+    "party": [
+      { "id": "pc", "ref": "player_blank" },
+      { "id": "kelan", "ref": "companion_kelan" },
+      { "id": "laofei", "ref": "companion_laofei" }
+    ],
+    "enemies": [
+      { "id": "warden", "ref": "page_warden_elite" },
+      { "id": "imp1", "ref": "ink_imp" },
+      { "id": "imp2", "ref": "ink_imp" }
+    ],
+    "xp": 120,
+    "note": "决胜场 · 守页人精英（难）：新增精英（封印冲击豁免 DC12/半伤，11 §5.1）+ 幼体 ×2"
+  }
+]

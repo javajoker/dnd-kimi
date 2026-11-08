@@ -1,0 +1,10 @@
+[
+  { "id": "stage1_cleared", "name": "第一场已克", "type": "bool", "default": false,
+    "writers": ["A-1"], "readers": ["settle_screen", "history_scroll"] },
+  { "id": "stage2_cleared", "name": "第二场已克", "type": "bool", "default": false,
+    "writers": ["A-2"], "readers": ["settle_screen", "history_scroll"] },
+  { "id": "stage3_cleared", "name": "决胜场已克", "type": "bool", "default": false,
+    "writers": ["A-3"], "readers": ["settle_screen", "history_scroll"] },
+  { "id": "flawless", "name": "连战全胜", "type": "bool", "default": false,
+    "writers": ["A-3"], "readers": ["settle_screen", "history_scroll"] }
+]

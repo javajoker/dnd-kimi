@@ -9,6 +9,7 @@ extends Control
 signal mode_chosen(mode: StringName)
 signal start_requested
 signal back_requested
+signal subgame_start(pack_id: String, mode: StringName) # 子游戏卡参战（04 §6）
 
 var card_label: RichTextLabel
 var mode_time_button: Button
@@ -18,6 +19,7 @@ var collect_label: Label
 var played_label: Label
 var start_button: Button
 var back_button: Button
+var subgame_box: VBoxContainer
 
 var selected_mode: StringName = &""
 
@@ -69,6 +71,54 @@ func _build() -> void:
 	back_button.text = TextsZh.COMMON_BACK
 	back_button.pressed.connect(func() -> void: back_requested.emit())
 	v.add_child(back_button)
+	# 子游戏卡区（04 §6：pack_type=subgame 即入列，数据驱动；无子游戏包时保持为空不占位）
+	subgame_box = VBoxContainer.new()
+	subgame_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	subgame_box.add_theme_constant_override("separation", 6)
+	v.add_child(subgame_box)
+
+## 绑定子游戏卡（04 §6 特殊战役书卡）：cards = [{pack_id, name, level_min, stats, mode}]，
+## 全部由 manifest 数据驱动；mode=choice 呈现竖/横两个参战入口（概念设计 §5：双模式可选）。
+func bind_subgames(cards: Array) -> void:
+	for child: Node in subgame_box.get_children():
+		child.queue_free()
+	if cards.is_empty():
+		return
+	var head := Label.new()
+	head.text = TextsZh.ENTRY_SUBGAME_SECTION
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subgame_box.add_child(head)
+	for card: Variant in cards:
+		var c: Dictionary = card
+		var name_label := Label.new()
+		name_label.text = "%s《%s》 %s" % [TextsZh.ENTRY_SUBGAME_TAG, str(c.get("name", c.get("pack_id", ""))),
+			TextsZh.SUBGAME_LEVEL % int(c.get("level_min", 1))]
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		subgame_box.add_child(name_label)
+		var stats_label := Label.new()
+		var st: Dictionary = c.get("stats", {})
+		stats_label.text = TextsZh.SUBGAME_STATS % [int(st.get("wins", 0)), int(st.get("best", 0))]
+		stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+		subgame_box.add_child(stats_label)
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 12)
+		subgame_box.add_child(row)
+		var pid := str(c.get("pack_id", ""))
+		var mode := str(c.get("mode", "choice"))
+		if mode != "space":
+			var bt := Button.new()
+			bt.text = TextsZh.SUBGAME_ENTER_TIME
+			bt.custom_minimum_size = Vector2(150, 40)
+			bt.pressed.connect(func() -> void: subgame_start.emit(pid, ShellRouter.MODE_TIME))
+			row.add_child(bt)
+		if mode != "time":
+			var bs := Button.new()
+			bs.text = TextsZh.SUBGAME_ENTER_SPACE
+			bs.custom_minimum_size = Vector2(150, 40)
+			bs.pressed.connect(func() -> void: subgame_start.emit(pid, ShellRouter.MODE_SPACE))
+			row.add_child(bs)
 
 func _mode_card(parent: Container, name: String, desc: String, mode: StringName) -> Button:
 	var card := VBoxContainer.new()

@@ -1,0 +1,11 @@
+[
+  { "id": "ink_core", "name": "墨核",
+    "roles": ["stat"],
+    "source": "竞技场连战全胜追加（A-3 胜利边）",
+    "unlocks": [] },
+  { "id": "heal_potion", "name": "补给药水",
+    "roles": ["stat"],
+    "source": "进场整备携行（与主线背包互通，global.inv）",
+    "unlocks": [],
+    "use": { "timing": "bonus_action", "heal": "1d4+2", "consume": true } }
+]

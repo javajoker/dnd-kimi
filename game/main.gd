@@ -36,6 +36,15 @@ var router := ShellRouter.new()
 var current_screen: Control = null
 var shell: Control = null
 
+# ---- 子游戏（白皮书 §10.2；04 §6：入口挂 ② 战役入口区，进出场必经 ⑨ 结算）----
+var _subgames: Dictionary = {}        # pack_id -> pack（pack_type=subgame 数据驱动入列，不写死 arena）
+var _sub: SubgameRunner = null        # 进行中的子游戏流程核
+var _sub_active := false
+var _sub_battling := false
+var _sub_mode: StringName = &""
+var _sub_tail := 0                    # 子游戏开始锚点（结算汇总区间，04 §⑨）
+var _sub_snapshot: Dictionary = {}    # 子游戏遭遇进入前快照（09 §7 ☰ 恢复点）
+
 var _cli_mode: StringName = &""
 var _in_encounter := false
 var _encounter_snapshot: Dictionary = {} # 遭遇进入前快照（09 §7 ☰ 回主屏恢复点）
@@ -60,6 +69,7 @@ func _ready() -> void:
 		push_error("campaign01 加载失败：%s" % ";".join(res["errors"]))
 		return
 	pack = res["pack"]
+	_discover_subgames()
 	stream = EventStream.new()
 	board = Board.new(stream)
 	rng = Rng.new(BATTLE_SEED)
@@ -68,6 +78,25 @@ func _ready() -> void:
 	_show_home()
 	if _shots:
 		_run_shots_m2n()
+	if args.has("--m3-shots"):
+		_run_shots_m3()
+
+## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
+## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
+func _discover_subgames() -> void:
+	var dir := DirAccess.open("res://packs")
+	if dir == null:
+		return
+	for sub: String in dir.get_directories():
+		if sub == str(pack.get("pack_id", "")):
+			continue
+		var res := PackLoader.load_pack("res://packs/%s" % sub)
+		if not res["ok"]:
+			push_warning("[main] 包 %s 加载失败（跳过）：%s" % [sub, ";".join(res["errors"])])
+			continue
+		var p: Dictionary = res["pack"]
+		if str((p["manifest"] as Dictionary).get("pack_type", "")) == "subgame":
+			_subgames[str(p["pack_id"])] = p
 
 # ---------------------------------------------------------------- 导航（04 §2/§5：任何界面有明确来路退路）
 
@@ -81,6 +110,9 @@ func _swap(screen: Control) -> void:
 
 func _show_home() -> void:
 	_in_encounter = false
+	_sub_active = false # 回主屏即子游戏离场（04 §6：离场必经结算，未到结算即放弃本次连战）
+	_sub_battling = false
+	_sub = null
 	if shell != null: # 壳随离场回收（09 §7 结算态之后为正常离场）
 		shell.queue_free()
 		shell = null
@@ -117,6 +149,18 @@ func _show_entry() -> void:
 	entry.mode_chosen.connect(_on_mode_chosen)
 	entry.start_requested.connect(_on_campaign_start.bind(entry))
 	entry.back_requested.connect(_show_home)
+	# 子游戏卡（04 §6 特殊战役书卡）：manifest 数据驱动（名称/建议等级/模式/战绩键）
+	var cards: Array = []
+	for pid: String in _subgames:
+		var p: Dictionary = _subgames[pid]
+		var manifest: Dictionary = p["manifest"]
+		var runner := SubgameRunner.new(p, board, stream, rng)
+		cards.append({"pack_id": pid, "name": str(manifest.get("name", pid)),
+			"level_min": int((manifest.get("recommended_level", [1]) as Array)[0]),
+			"mode": str((manifest.get("presentation", {}) as Dictionary).get("mode", "choice")),
+			"stats": runner.stats()})
+	entry.bind_subgames(cards)
+	entry.subgame_start.connect(_on_subgame_start)
 	if _cli_mode != &"":
 		entry.pick_mode(_cli_mode)
 	elif not played.is_empty():
@@ -356,6 +400,9 @@ func _on_save_quit() -> void:
 # ---------------------------------------------------------------- 结算（04 §⑨；07 §4.2 主快照点）
 
 func _on_event(ev: Dictionary) -> void:
+	if ev["type"] == EventTypes.COMBAT_END and _sub_active and _sub_battling:
+		_sub_on_combat_end(ev["payload"]["result"]) # 子游戏连战路由（04 §6）
+		return
 	if ev["type"] == EventTypes.COMBAT_END and _in_encounter:
 		_encounter_result = ev["payload"]["result"]
 		_show_settle_deferred()
@@ -487,13 +534,186 @@ func _show_history() -> void:
 	screen.back_requested.connect(func() -> void:
 		if _history_origin == &"settle":
 			_bind_settle() # 返回来源界面（04 §5 出口列：结算→卷轴→结算）
+		elif _history_origin == &"sub_settle":
+			_sub_bind_settle() # 子游戏结算同理（04 §6：子游戏复用框架界面）
 		else:
 			_show_home())
+
+# ---------------------------------------------------------------- 子游戏连战（白皮书 §10.2；04 §6；docs/subgames/arena/01-概念设计.md）
+# 流程：② 入口卡 → A-0 演出 → 整备（仅进场一次）→ EncounterSM ×N（场间无休整，HP 持久 11 §7.1）
+#   → 每场胜利写金币/胜场（SubgameRunner）→ 战后边（追击/收兵）→ ⑨ 结算（写板硬要求）→ 回主屏。
+# 全部数据驱动自子游戏包（节点图/遭遇/奖励声明），core 零改动；本块是 §10.2"子游戏不动框架"的运行时落点。
+
+func _on_subgame_start(pack_id: String, mode: StringName) -> void:
+	if not _subgames.has(pack_id) or _sub_active:
+		return
+	_sub = SubgameRunner.new(_subgames[pack_id], board, stream, rng)
+	_sub_mode = mode
+	_sub_active = true
+	_sub_battling = false
+	_sub_tail = stream.tail()
+	# 模式选择 = 一次分支，写入状态板（09 §3；global.mode_choice.* 白名单，07 §3 v1.1）
+	board.write("global.mode_choice.%s" % pack_id, String(mode),
+		{"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": pack_id})
+	_sub.start()
+	_sub_present()
+
+## 子游戏节点呈现：ending → ⑨ 结算；battle → 整备/遭遇；其余 → 双壳故事态（StoryVM 单源）。
+func _sub_present() -> void:
+	var node := _sub.current()
+	var t := str(node.get("type", ""))
+	if t == "ending":
+		_sub_finish(&"victory")
+		return
+	if t == "battle":
+		_sub_enter_battle()
+		return
+	_ensure_sub_shell()
+	_story_show(StoryVM.build(_sub.graph, board, _sub.pack))
+
+## 子游戏故事壳：复用双壳场景（09 §8 一局一壳），绑定子游戏包与子游戏回调（与战役通道隔离）。
+func _ensure_sub_shell() -> void:
+	if shell == null:
+		shell = (load(SHELL_SCENES[_sub_mode]) as PackedScene).instantiate()
+		add_child(shell)
+		if _sub_mode == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
+			get_window().size = LANDSCAPE_SIZE
+			get_window().move_to_center()
+		router.lock_encounter(_sub_mode) # 形态整场锁定（09 §3/§8）
+	if current_screen != null and current_screen != shell:
+		current_screen.queue_free()
+	current_screen = shell
+	shell.visible = true
+	shell.set("on_save_quit", Callable(self, "_on_sub_save_quit"))
+	shell.bind_story(stream, board, _sub.pack,
+		{"edge": _on_sub_story_edge, "hub": func(_a: String, _b: String) -> void: pass})
+
+func _on_sub_story_edge(idx: int) -> void:
+	_sub.take_edge(idx)
+	_sub_present()
+
+## 战斗节点：进场一次整备（09 §9.1；连战中途不再整备、HP 不恢复——概念设计 §2 无休整）。
+func _sub_enter_battle() -> void:
+	var cfg := _sub.loadout_config()
+	if not cfg.is_empty() and _sub.run_wins == 0:
+		var screen: ScreenLoadout = (load(SCREEN_SCENES[&"loadout"]) as PackedScene).instantiate()
+		_swap(screen)
+		screen.bind(cfg, _sub.loadout_candidates())
+		screen.confirmed.connect(_on_sub_loadout_confirmed.bind(cfg))
+		screen.back_requested.connect(_sub_leave_home) # 整备可退（04 §5 有退路）
+		return
+	_sub_begin_combat({"skills": [], "items": [], "attr_alloc": {}})
+
+func _on_sub_loadout_confirmed(selection: Dictionary, cfg: Dictionary) -> void:
+	Loadout.confirm(stream, cfg, selection["skills"], selection["items"],
+		selection.get("attr_alloc", {}), _sub.graph.current_id, _sub.pack_id) # loadout.confirm（09 §9.1）
+	_sub_begin_combat(selection)
+
+func _sub_begin_combat(selection: Dictionary) -> void:
+	_sub_battling = true
+	_sub_snapshot = SaveSystem.make_snapshot(board, stream, rng, _bindings(), _meta()) # ☰ 恢复点（09 §7）
+	var sm := EncounterSM.new(board, stream, rng, _sub.pack_id)
+	var agent := AutoAgent.new()
+	_ensure_sub_shell()
+	if current_screen != null and current_screen != shell:
+		current_screen.queue_free()
+	current_screen = shell
+	shell.visible = true
+	if shell is EncounterPortrait:
+		(shell as EncounterPortrait).bind(sm, agent)
+	else:
+		(shell as EncounterLandscape).bind(sm, agent)
+	var nid := _sub.graph.current_id
+	sm.enter(nid)
+	sm.transition(EncounterSM.S_EXPLORE)
+	stream.emit(EventTypes.LOG, {"msg": str(_sub.current().get("summary", ""))}, &"core", nid)
+	await get_tree().create_timer(1.0).timeout
+	if sm.state == EncounterSM.S_EXPLORE:
+		var def := _sub.battle_def(selection)
+		if def.is_empty():
+			return # fail-fast：包数据缺陷不进战斗（报错已由 battle_def 输出）
+		sm.begin_combat(def)
+
+## 连战收场路由（COMBAT_END 由 _on_event 分发）：胜利 → 写奖励 + 战后边回图（追击/收兵）；
+## 败北 → 按已完成场次直接进 ⑨ 结算（失败即分支，概念设计 §2）。
+func _sub_on_combat_end(result: StringName) -> void:
+	await get_tree().create_timer(1.2).timeout
+	_sub_battling = false
+	if result == &"victory":
+		_sub.on_victory() # 每场胜利：金币 + 累计胜场写板（04 §6 写状态板硬要求）
+		_ensure_sub_shell()
+		_story_show(StoryVM.build(_sub.graph, board, _sub.pack)) # 战后边：追击（无休整）/ 收兵
+	else:
+		_sub_finish(result)
+
+## ⑨ 结算（04 §6/§9：进出场必经；逐项念给玩家听）→ 结算快照（07 §4.2）→ 回主屏 / ⑧ 卷轴。
+func _sub_finish(result: StringName) -> void:
+	_sub_battling = false
+	var summary := _sub.finish_run(result) # 最佳连战纪录取大写板
+	_save("settle")
+	_sub_settle_cache = _sub_settle_lines(summary, result)
+	_sub_bind_settle()
+
+var _sub_settle_cache: Dictionary = {}
+
+func _sub_settle_lines(summary: Dictionary, result: StringName) -> Dictionary:
+	var lines: Array[String] = []
+	var xp := 0
+	for ev: Dictionary in stream.since(_sub_tail):
+		var p: Dictionary = ev["payload"]
+		match StringName(ev["type"]):
+			EventTypes.XP_GAIN:
+				xp += int(p.get("amount", 0))
+			EventTypes.ITEM_GAIN:
+				var iid := str(p.get("item_id", ""))
+				lines.append("获得：%s ×%d（已入背包，global.inv 互通）" % [
+					str((_sub.pack.get("items", {}) as Dictionary).get(iid, {}).get("name", iid)),
+					int(p.get("count", 1))])
+	if xp > 0:
+		lines.append("经验 +%d" % xp)
+	if int(summary["gold"]) > 0:
+		lines.append("金币 +%d（%s.gold 累计 %d）" % [int(summary["gold"]), _sub.pack_id,
+			int(board.read("%s.gold" % _sub.pack_id, 0))])
+	lines.append("战绩：本次 %d 胜 · 累计 %d 胜 · 最佳连战 %d" % [int(summary["wins"]),
+		int((_sub.stats() as Dictionary)["wins"]), int(summary["best"])])
+	if bool(summary["flawless"]):
+		lines.append("全胜谢幕：擂台为你留名（arena.flawless 已落板）")
+	return {"title": "%s · %s" % [str((_sub.pack["manifest"] as Dictionary).get("name", _sub.pack_id)),
+			str(_sub.current().get("title", "连战结算"))],
+		"result": String(result), "lines": lines, "saved": true, "attr_points": 0, "attrs": {}}
+
+func _sub_bind_settle() -> void:
+	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
+	_swap(screen)
+	screen.bind(_sub_settle_cache)
+	screen.allocate.connect(func(_a: String) -> void: pass) # 子游戏不接战役加点（概念设计 §8 待裁决 3）
+	screen.go_home.connect(_sub_leave_home)
+	screen.go_history.connect(func() -> void:
+		_history_origin = &"sub_settle"
+		_show_history())
+
+## ☰「保存并回主屏」（09 §7）：战斗中 = 恢复本场进入前快照（本场重打，不存档）；故事态 = 落档回主屏。
+func _on_sub_save_quit() -> void:
+	if _sub_battling:
+		SaveSystem.apply(_sub_snapshot, board, rng)
+		stream.emit(EventTypes.LOG, {"msg": "你合上抄本。擂台的墨锣声远去了。"}, &"core")
+	_save("quit_home")
+	_sub_leave_home()
+
+func _sub_leave_home() -> void:
+	_sub_active = false
+	_sub_battling = false
+	_sub = null
+	_show_home()
 
 # ---------------------------------------------------------------- 存档（07 §4）
 
 func _bindings() -> Dictionary:
-	return {"packs": {str(pack.get("pack_id", "campaign01")): int((pack.get("manifest", {}) as Dictionary).get("pack_version", 1))},
+	var packs := {str(pack.get("pack_id", "campaign01")):
+		int((pack.get("manifest", {}) as Dictionary).get("pack_version", 1))}
+	for pid: String in _subgames: # 子游戏包版本随快照绑定（07 §4.1 三方版本解耦，tech/02 §11）
+		packs[pid] = int(((_subgames[pid] as Dictionary).get("manifest", {}) as Dictionary).get("pack_version", 1))
+	return {"packs": packs,
 		"rule_pack": (pack.get("manifest", {}) as Dictionary).get("rule_pack", {}),
 		"framework": "1.0.0"}
 
@@ -591,3 +811,28 @@ func _shot(path: String) -> void:
 	await RenderingServer.frame_post_draw
 	var err := get_viewport().get_texture().get_image().save_png(path)
 	print("[shots] ", path, " err=", err)
+
+# ---------------------------------------------------------------- M3 截图（子游戏证据 /tmp，不提交）
+
+## ② 入口卡 + 连战第一场（竖屏）：`-- --m3-shots`。
+func _run_shots_m3() -> void:
+	await get_tree().create_timer(1.2).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/m3_entry.png") # ② 战役入口：子游戏特殊战役书卡（04 §6）
+	if _subgames.is_empty():
+		print("[shots] 无子游戏包，跳过连战截图")
+		get_tree().quit()
+		return
+	var pid := str((_subgames.keys() as Array)[0])
+	_on_subgame_start(pid, ShellRouter.MODE_TIME)
+	await get_tree().create_timer(0.4).timeout
+	_on_sub_story_edge(0) # A-0 → 踏入擂台
+	await get_tree().create_timer(0.4).timeout
+	var lo := current_screen as ScreenLoadout
+	if lo != null:
+		lo._on_confirm() # 空选择 = BattleDef 缺省出战（与战役引导同一兜底）
+		await get_tree().create_timer(2.0).timeout # 探索演出 1s + 战斗铺开
+	await _shot("/tmp/m3_battle.png") # 连战第一场（无休整，HP 持久 11 §7.1）
+	print("[shots] M3 两张完成：/tmp/m3_entry.png /tmp/m3_battle.png")
+	get_tree().quit()
