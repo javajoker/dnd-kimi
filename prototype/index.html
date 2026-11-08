@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抄本纪元 · 交互原型（烬港残页切片）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="toolbar">
+  <span class="tb-title">抄本纪元 · 交互原型</span>
+  <span class="tb-note">切片范围：序章「潮醒」+ 幕一「褪色的街」（campaign01）</span>
+  <button id="btn-mode-compare" class="tb-btn" title="原型调试用：对比另一形态渲染。正式版模式在战役入口择定并锁定（F1.6）。">⇄ 形态对比（原型调试）</button>
+</div>
+<div id="stage">
+  <div id="device" class="portrait">
+    <!-- 状态栏带：只放"看"的信息（04 文档 §3.1） -->
+    <div id="status-band">
+      <div id="sb-clock" title="纪元时间钟：褪墨度"></div>
+      <div id="sb-party"></div>
+      <div id="sb-progress"></div>
+    </div>
+    <div id="screen-host"></div>
+  </div>
+</div>
+<!-- 全屏接管层：仅关键检定演出与战役通关演出（04 文档 §3.3） -->
+<div id="dice-overlay" class="hidden">
+  <div id="dice-stage"><div id="dice-die">20</div></div>
+  <div id="dice-caption"></div>
+  <div id="dice-skip">长按跳过</div>
+</div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
