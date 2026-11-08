@@ -229,62 +229,34 @@ func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	_refresh_all()
 
 func _on_event(ev: Dictionary) -> void:
+	var line := BattleText.event_log_text(ev, _unit_name) # 日志文案两壳共享（battle_text.gd）
+	if line != "":
+		_log_line(line)
 	match StringName(ev["type"]):
 		EventTypes.STATE_ENTERED:
 			var st := StringName(ev["payload"]["state"])
 			apply_breathing(STATE_PROFILE.get(st, &"explore"))
-			_log_line("—— 进入「%s」——" % _state_name(st))
 		EventTypes.COMBAT_START:
 			_flash("遭遇战开始！")
-			_log_line("战斗开始，先攻序：%s" % " → ".join(ev["payload"]["order"]))
 		EventTypes.TURN_START:
 			if str(ev["payload"].get("side", "")) == "party":
 				round_label.text = "第 %d 轮" % int(ev["payload"]["round"])
 		EventTypes.BATTLE_ATTACK:
 			var p: Dictionary = ev["payload"]
-			var txt := "%s 攻击 %s：%s" % [p["attacker_name"], p["target_name"],
-				"命中 %d 点" % int(p["damage"]) if bool(p["hit"]) else "失手"]
-			if bool(p["crit"]):
-				txt += "（暴击！）"
-			elif bool(p["fumble"]):
-				txt += "（大失败）"
-			_log_line(txt + _src_tag(p))
-			_flash(txt)
+			_flash(BattleText.attack_text(p))
 			_tray_roll(p)
 		EventTypes.CHECK_ROLL:
 			var p: Dictionary = ev["payload"]
-			_log_line(_check_text(p) + _src_tag(p))
 			if bool(p.get("key", false)):
 				var q := p.duplicate(true)
 				q["event_id"] = ev["id"]
 				_play_key_roll(q) # 关键判定：全屏演出（09 §6）
 			else:
 				_tray_roll(p)
-		EventTypes.SKILL_USE:
-			var p: Dictionary = ev["payload"]
-			_log_line("%s 发动「%s」%s" % [_unit_name(str(p["unit"])), p["name"], _src_tag(p)])
-		EventTypes.ITEM_USE:
-			var p: Dictionary = ev["payload"]
-			_log_line("%s 使用「%s」→ %s（回复 %d）%s" % [_unit_name(str(p["unit"])), p["item"],
-				_unit_name(str(p["target"])), int(p["healed"]), _src_tag(p)])
 		EventTypes.BATTLE_DOWN:
-			_log_line("⚠ %s 倒地！" % str(ev["payload"]["name"]))
 			_flash("%s 倒地！" % str(ev["payload"]["name"]))
-		EventTypes.BATTLE_DEAD:
-			_log_line("✝ %s 消散。" % str(ev["payload"]["name"]))
-		EventTypes.BATTLE_REVIVE:
-			_log_line("%s 重新站起（1 HP，%s）。" % [ev["payload"]["name"], ev["payload"]["reason"]])
-		EventTypes.COMMAND_REJECTED:
-			_log_line("（命令被拒：%s）" % str(ev["payload"]["reason"]))
 		EventTypes.COMBAT_END:
 			set_auto(false) # 遭遇结束托管自动停止（09 §9.3）
-			_log_line("—— 战斗结束：%s ——" % str(ev["payload"]["result"]))
-		EventTypes.LOG:
-			_log_line(str(ev["payload"].get("msg", "")))
-		EventTypes.ITEM_GAIN:
-			_log_line("获得物品：%s ×%d" % [ev["payload"]["item_id"], int(ev["payload"]["count"])])
-		EventTypes.XP_GAIN:
-			_log_line("经验 +%d" % int(ev["payload"]["amount"]))
 	_refresh_all()
 
 # ---------------------------------------------------------------- 呼吸（04 §④.1：高度变化只随状态切换发生）
@@ -366,39 +338,17 @@ func pip_state(index: int) -> StringName:
 func _refresh_quickbar() -> void:
 	for child: Node in quickbar.get_children():
 		child.queue_free()
-	if sm == null or sm.state != EncounterSM.S_COMBAT or sm.is_over() or sm.phase() != &"party":
+	if sm == null:
 		return
-	var uid := sm.current_actor_id()
-	if uid == "":
+	# 快捷栏内容 = EncounterSM 可用指令集（09 §9.2），与横屏行动轮盘同源，禁止壳内复制过滤逻辑
+	var actions := sm.get_available_actions()
+	if actions.is_empty():
 		return
-	var u := sm.get_unit(uid)
 	var actor_label := Label.new()
-	actor_label.text = "【%s】" % str(u["name"])
+	actor_label.text = "【%s】" % str(sm.get_unit(sm.current_actor_id())["name"])
 	quickbar.add_child(actor_label)
-	var target := _default_enemy_target()
-	_add_chip(TextsZh.CHIP_ATTACK, bool(u["action_used"]) or target == "",
-		func() -> void: _manual(_cmd(EncounterSM.CMD_ATTACK, uid, target)))
-	for sk: Variant in (u["skills"] as Array):
-		var uses: int = (u["skill_uses"] as Dictionary).get(str((sk as Dictionary)["id"]), -1)
-		var label := str((sk as Dictionary).get("name", (sk as Dictionary)["id"]))
-		if uses >= 0:
-			label += " ×%d" % uses # 次数余量实时呈现（09 §9.2）
-		var sk_id := str((sk as Dictionary)["id"])
-		var sk_target := str((sk as Dictionary).get("target", "enemy"))
-		var t := uid if sk_target == "self" else target
-		_add_chip(label, bool(u["action_used"]) or uses == 0 or t == "",
-			func() -> void: _manual(_cmd(EncounterSM.CMD_SKILL, uid, t, sk_id)))
-	for it: Variant in (u["items"] as Array):
-		var it_d: Dictionary = it
-		var label := "%s ×%d" % [str(it_d.get("name", it_d["id"])), int(it_d.get("count", 0))]
-		var it_id := str(it_d["id"])
-		_add_chip(label, bool(u["bonus_used"]),
-			func() -> void: _manual(_cmd(EncounterSM.CMD_ITEM, uid, uid, "", it_id)))
-	var aid_target := _first_downed_ally()
-	_add_chip(TextsZh.CHIP_FIRST_AID, bool(u["action_used"]) or aid_target == "",
-		func() -> void: _manual(_cmd(EncounterSM.CMD_FIRST_AID, uid, aid_target)))
-	_add_chip(TextsZh.CHIP_END_TURN, false,
-		func() -> void: _manual(_cmd(EncounterSM.CMD_END_TURN, uid)))
+	for a: Dictionary in actions:
+		_add_chip(TextsZh.action_label(a), bool(a["disabled"]), func() -> void: press_action(a))
 
 func _add_chip(label: String, disabled: bool, on_press: Callable) -> void:
 	var b := Button.new()
@@ -407,16 +357,38 @@ func _add_chip(label: String, disabled: bool, on_press: Callable) -> void:
 	b.pressed.connect(on_press)
 	quickbar.add_child(b)
 
-func _cmd(ctype: StringName, actor: String, target: String = "", skill: String = "",
-		item: String = "") -> Dictionary:
-	return {"type": ctype, "actor": actor, "target": target, "skill": skill, "item": item,
-		"source": &"player"}
-
 ## 手操命令：先接管托管（09 §9.3 一键接管即时生效），再走统一 Command 通道。
 func _manual(cmd: Dictionary) -> void:
+	if cmd.is_empty():
+		return
 	if auto_on:
 		set_auto(false)
 	if sm != null:
+		sm.submit_command(cmd)
+
+## 芯片点按（09 §9.2 点按=默认目标；enemy 目标优先用主视野点选，12 §1）。
+func press_action(action: Dictionary) -> void:
+	if sm == null:
+		return
+	var target := ""
+	if str(action.get("target_kind", "")) == "enemy":
+		target = _default_enemy_target()
+	_manual(sm.command_from_action(action, target))
+
+## 测试/比对探针：按下指令集第 i 项（默认目标，不经 UI 状态）。
+func press_action_index(i: int) -> void:
+	if sm == null:
+		return
+	var actions := sm.get_available_actions()
+	if i >= 0 and i < actions.size():
+		_manual(sm.command_from_action(actions[i]))
+
+## 测试/比对探针：托管步进一次（与 _on_auto_timeout 同一通道，09 §9.3）。
+func debug_step_auto() -> void:
+	if sm == null or sm.is_over():
+		return
+	var cmd := agent.next_command(sm)
+	if not cmd.is_empty():
 		sm.submit_command(cmd)
 
 # ---------------------------------------------------------------- 托管（09 §9.3：节拍下限 shell 侧 Timer ≥0.8s，1×/2×）
@@ -582,33 +554,10 @@ func _flash(text: String) -> void:
 	var tw := create_tween()
 	tw.tween_property(flash_label, "modulate:a", 0.25, 1.2)
 
-func _src_tag(p: Dictionary) -> String:
-	var src := str(p.get("source", ""))
-	return "（托管）" if src == "auto" else ""
-
 func _unit_name(id: String) -> String:
 	if sm == null:
 		return id
 	return str(sm.get_unit(id).get("name", id))
-
-func _state_name(st: StringName) -> String:
-	return {"enter": "进场", "explore": "探索", "discover": "发现", "combat": "战斗",
-		"settle": "结算", "rest": "休整", "exit": "出场"}.get(st, str(st))
-
-func _check_text(p: Dictionary) -> String:
-	match str(p.get("kind", "")):
-		"death_save":
-			return "%s 死亡豁免：%d → %s（%d胜%d负）" % [_unit_name(str(p["roller"])),
-				int(p["keep"]), TextsZh.RESULT_SUCCESS if bool(p["success"]) else TextsZh.RESULT_FAIL,
-				int(p.get("s", 0)), int(p.get("f", 0))]
-		"save":
-			return "%s 豁免：%d%+d=%d vs %d → %s（伤 %d）" % [_unit_name(str(p["roller"])),
-				int(p["keep"]), int(p["mod"]), int(p["total"]), int(p["dc"]),
-				TextsZh.RESULT_SUCCESS if bool(p["success"]) else TextsZh.RESULT_FAIL, int(p.get("damage", 0))]
-		"first_aid":
-			return "%s 急救 %s：%d → %s" % [_unit_name(str(p["roller"])), _unit_name(str(p["target"])),
-				int(p["total"]), TextsZh.RESULT_SUCCESS if bool(p["success"]) else TextsZh.RESULT_FAIL]
-	return "检定：%d" % int(p.get("total", 0))
 
 func _default_enemy_target() -> String:
 	if sm == null:
@@ -618,12 +567,3 @@ func _default_enemy_target() -> String:
 		if not t.is_empty() and not bool(t["dead"]):
 			return _selected_target
 	return sm.first_alive_enemy()
-
-func _first_downed_ally() -> String:
-	if sm == null:
-		return ""
-	for id: String in sm.get_order():
-		var u := sm.get_unit(id)
-		if u["side"] == &"party" and bool(u["downed"]) and not bool(u["dead"]):
-			return id
-	return ""

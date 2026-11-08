@@ -24,10 +24,13 @@ func _init() -> void:
 	test_light_v1()
 	test_encounter_sm()
 	test_auto_agent()
+	test_shell_router()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
 	await test_portrait_shell()
+	await test_landscape_shell()
+	await test_shell_diff()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -967,3 +970,158 @@ func test_portrait_shell() -> void:
 
 	portrait.queue_free()
 	await process_frame
+
+# ---------------------------------------------------------------- 壳路由（09 §2/§3/§8、tech/02 §2.1）
+
+func test_shell_router() -> void:
+	print("[shell_router]")
+	var pack := _load_campaign01()
+	var pres: Dictionary = pack["manifest"]["presentation"]
+	check(str(pres["mode"]) == "choice", "campaign01 manifest mode=choice（tech/02 §2.1）")
+	var r1 := ShellRouter.resolve(pres, PackedStringArray(["--mode=space"]), "SL-1")
+	check(r1["mode"] == ShellRouter.MODE_SPACE and not bool(r1["forced"]), "choice + --mode=space → 横屏")
+	var r2 := ShellRouter.resolve(pres, PackedStringArray([]), "SL-1")
+	check(r2["mode"] == ShellRouter.MODE_TIME, "choice 无启动参数 → 缺省 time（竖屏）")
+	var r3 := ShellRouter.resolve(pres, PackedStringArray(["--mode=time"]), "SL-1")
+	check(r3["mode"] == ShellRouter.MODE_TIME, "choice + --mode=time → 竖屏")
+	var r4 := ShellRouter.resolve(pres, PackedStringArray(["--mode=space"]), "SL-0")
+	check(r4["mode"] == ShellRouter.MODE_TIME and bool(r4["forced"]),
+		"forced 幕 SL-0 强制竖屏（启动参数不生效，tech/02 §2.1）")
+	var notice := str(r4["notice"])
+	check(notice != "" and not notice.contains("锁定") and not notice.contains("模式"),
+		"强制幕叙事化提示（09 §3：包装文案禁止系统腔）")
+	var r5 := ShellRouter.resolve(pres, PackedStringArray([]), "SL-3")
+	check(r5["mode"] == ShellRouter.MODE_TIME and bool(r5["forced"]), "forced 幕 SL-3 强制竖屏")
+	var r6 := ShellRouter.resolve({"mode": "space"}, PackedStringArray([]), "SL-9")
+	check(r6["mode"] == ShellRouter.MODE_SPACE and bool(r6["forced"]), "mode=space 单模式战役直接落定")
+	# 单局内禁止切换（09 §8：形态是战役级属性）
+	var router := ShellRouter.new()
+	check(router.request_switch(ShellRouter.MODE_SPACE), "遭遇开始前可定壳")
+	router.lock_encounter(ShellRouter.MODE_TIME)
+	check(router.is_locked() and router.locked_mode == ShellRouter.MODE_TIME, "遭遇开始即壳锁定")
+	check(not router.request_switch(ShellRouter.MODE_SPACE), "锁定后切换请求拒绝（09 §8）")
+	check(not router.request_switch(ShellRouter.MODE_TIME), "锁定后同形态请求亦拒绝（一局之内无切换入口）")
+
+# ---------------------------------------------------------------- 横屏壳（04 §③、09 §4/§6/§7/§9，无头断言）
+
+func test_landscape_shell() -> void:
+	print("[landscape_shell]")
+	var scene: PackedScene = load("res://shell/landscape/encounter_landscape.tscn")
+	var land: EncounterLandscape = scene.instantiate()
+	root.add_child(land)
+	# 横屏冻结指标按横屏尺寸断言（09 §4）：脱离项目竖屏视口，给定 1280×720
+	land.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land.position = Vector2.ZERO
+	land.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(11), "campaign01")
+	land.bind(sm, AutoAgent.new())
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	await process_frame
+	await process_frame
+	var z := land.get_zone_ratios()
+	check(absf(float(z["top"]) - 0.08) < 0.02 and absf(float(z["bottom"]) - 0.05) < 0.02,
+		"五区：上缘 8% / 下缘 5%（09 §4 冻结指标）")
+	check(absf(float(z["left"]) - 15.0 / 87.0) < 0.02 and absf(float(z["center"]) - 60.0 / 87.0) < 0.02
+		and absf(float(z["right"]) - 12.0 / 87.0) < 0.02
+		and absf(float(z["left"]) + float(z["center"]) + float(z["right"]) - 1.0) < 0.001,
+		"五区：三栏权重 15:60:12 归一拉伸至满宽（09 §4 + TP3 验收裁决 1：≈17.2/69.0/13.8%）")
+	check(not land.init_bar.visible, "探索态先攻顺序条收起（战斗时展开，09 §4）")
+	check(land.menu_button.text == TextsZh.MENU, "☰ 常驻上缘右端（09 §7）")
+	sm.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	check(land.init_bar.visible and land.init_bar.get_child_count() == sm.get_order().size(),
+		"先攻顺序条战斗时展开且按先攻序全员排列")
+	# 战术格（09 §4：8×5 占位、格边长可读、敌我按格落位、敌红我金）
+	check(land.grid.get_child_count() == 40, "战术格 8×5=40 占位（同屏 ≤12×8，09 §4）")
+	check(land.cell_side() >= land.size.y * 0.08, "格边长 ≥ 屏高 8%（09 §4 可读性）")
+	var units := sm.get_units()
+	var all_placed := true
+	for id: String in units:
+		var c := land.unit_cell(id)
+		if c.x < 0 or c.x >= 8 or c.y < 0 or c.y >= 5:
+			all_placed = false
+	check(all_placed and land.unit_cell(sm.first_alive_enemy()) != Vector2i(-1, -1), "敌我单位全部按格落位")
+	check(land.token_color(sm.first_alive_enemy()) == EncounterLandscape.COLOR_ENEMY, "敌方 token 红色（09 §4）")
+	check(land.token_color("pc") == EncounterLandscape.COLOR_PARTY, "我方 token 金色（09 §4）")
+	# 行动轮盘与竖屏快捷栏同源（同一 EncounterSM 可用指令集）；驱动到 pc 行动（其技能/道具最全）
+	var guard0 := 0
+	while sm.current_actor_id() != "pc" and guard0 < 6:
+		guard0 += 1
+		sm.submit_command(_cmd(EncounterSM.CMD_END_TURN, sm.current_actor_id()))
+	await process_frame
+	var actions := sm.get_available_actions()
+	var wheel_labels: Array = []
+	for child: Node in land.wheel_box.get_children():
+		if child is Button:
+			wheel_labels.append((child as Button).text)
+	check(wheel_labels.size() == actions.size() and not actions.is_empty(),
+		"行动轮盘 = 同一 EncounterSM 可用指令集生成（禁止复制过滤逻辑）")
+	var joined := " ".join(wheel_labels)
+	check(joined.contains("攻击") and joined.contains("墨术飞矢 ×2") and joined.contains("补给药水")
+		and joined.contains("结束回合"), "轮盘芯片与快捷栏同文案（TextsZh.action_label 单源）")
+	# 轮盘按钮真实点按 → 统一 Command 通道（12 §1 点按=默认目标）
+	var atks_before := stream.query_by_type(EventTypes.BATTLE_ATTACK).size()
+	for child: Node in land.wheel_box.get_children():
+		if child is Button and (child as Button).text == TextsZh.CHIP_ATTACK and not (child as Button).disabled:
+			(child as Button).pressed.emit()
+			break
+	await process_frame
+	check(stream.query_by_type(EventTypes.BATTLE_ATTACK).size() == atks_before + 1,
+		"轮盘点按经统一 Command 通道产出 battle.attack")
+	await create_timer(0.6).timeout # 等骰子盘快掷落定（≤0.5s，09 §6）
+	var last_keep := int(stream.query_by_type(EventTypes.BATTLE_ATTACK).back()["payload"]["keep"])
+	check(land.dice_label.text == str(last_keep), "骰子盘呈现最近一次攻击的 d20 明细")
+	# 日志带：点击展开半屏 ↔ 收起 5%（09 §4）
+	check(not land.log_expanded, "日志带默认收起（下缘 5%）")
+	land.toggle_log()
+	await process_frame
+	await process_frame
+	check(land.log_expanded and absf(float(land.get_zone_ratios()["bottom"]) - 0.5) < 0.02,
+		"日志带点击展开至半屏（09 §4）")
+	check(land.log_full.visible and land.log_full.get_parsed_text().contains("战斗开始"),
+		"展开日志含事件流条目（与竖屏日志 Tab 同源）")
+	land.toggle_log()
+	await process_frame
+	await process_frame
+	check(not land.log_expanded and absf(float(land.get_zone_ratios()["bottom"]) - 0.05) < 0.02,
+		"日志带收起回落 5%")
+	# 关键判定全屏演出（09 §6：与竖屏同一事件源；死亡豁免恒定关键，11 §7）
+	stream.emit(EventTypes.CHECK_ROLL, {"roller": "kelan", "kind": "death_save", "rolls": [3],
+		"keep": 3, "dc": 10, "success": false, "s": 0, "f": 1, "key": true, "extreme": false}, &"core")
+	await create_timer(0.2).timeout
+	check(land.key_overlay.visible, "关键判定全屏覆盖（横屏，09 §6）")
+	var mb := InputEventMouseButton.new()
+	mb.pressed = true
+	land._on_key_overlay_input(mb)
+	await create_timer(0.3).timeout
+	check(not land.key_overlay.visible, "关键演出可点击跳过（09 §6）")
+	# 托管节拍下限（09 §9.3）
+	check(land.auto_timer.wait_time == 0.8, "托管 1× 节拍 0.8s")
+	land.set_speed(2)
+	check(absf(land.auto_timer.wait_time - 0.4) < 0.001, "托管 2× 节拍 0.4s")
+	land.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 双壳事件流逐字节比对（tech/01 §10 TP3；白皮书 §7.3 数据零差异）
+
+func test_shell_diff() -> void:
+	print("[shell_diff]")
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	# 普通局：同一脚本化遭遇（同种子、同指令序列）两壳各跑一遍
+	var pair: Dictionary = await sd.run_pair(self, 20261108, 7, false)
+	check(int(pair["count"]) > 40, "脚本化遭遇完整跑完（事件 %d 条）" % int(pair["count"]))
+	check(str(pair["result"]) != "", "普通局有战斗结果（%s）" % str(pair["result"]))
+	check(str(pair["portrait"]) == str(pair["landscape"]),
+		"普通局：两壳事件流 JSON 逐字节一致（数据零差异，白皮书 §7.3）")
+	# 乱序压力版：同种子 bot 指令序列（含托管命令）两壳各 3 局比对
+	for i: int in 3:
+		var p2: Dictionary = await sd.run_pair(self, 20261108 + i, 100 + i * 31, true)
+		check(str(p2["result"]) != "", "托管乱序局 %d 有战斗结果（%s）" % [i + 1, str(p2["result"])])
+		check(str(p2["portrait"]) == str(p2["landscape"]),
+			"托管乱序局 %d：两壳事件流逐字节一致（含 source=auto 命令）" % (i + 1))

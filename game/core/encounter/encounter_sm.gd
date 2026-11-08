@@ -601,11 +601,93 @@ func first_alive_party() -> String:
 
 ## 有队友倒地（急救芯片可用条件，11 §5.2）。
 func any_party_downed() -> bool:
+	return _first_downed_ally_id() != ""
+
+func _first_downed_ally_id() -> String:
 	for id: String in _order:
 		var u: Dictionary = _units[id]
 		if u["side"] == &"party" and bool(u["downed"]) and not bool(u["dead"]):
-			return true
-	return false
+			return id
+	return ""
+
+# ---------------------------------------------------------------- 可用指令集（09 §9.2：快捷栏/行动轮盘内容 = 当前整备选择 + 情境实时过滤）
+# 两壳同源铁律：横屏行动轮盘与竖屏快捷栏都从本 getter 生成，壳内禁止复制过滤逻辑（godot-dev §7）。
+# 每项：{type, skill, item, name, uses, count, disabled, reason, target_kind, default_target}
+# —— 只读视图，不产出事件、不改状态；文案名取自内容数据，壳只负责排版。
+
+## 当前友方行动单位的可用指令集；非友方阶段/非战斗态返回空数组。
+func get_available_actions() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	if state != S_COMBAT or _over or _phase != &"party":
+		return out
+	var uid := current_actor_id()
+	if uid == "":
+		return out
+	var u: Dictionary = _units[uid]
+	var enemy := first_alive_enemy()
+	var acted := bool(u["action_used"])
+	# 普攻（11 §4：1 动作）
+	out.append({"type": CMD_ATTACK, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
+		"disabled": acted or enemy == "",
+		"reason": "action_used" if acted else ("no_target" if enemy == "" else ""),
+		"target_kind": "enemy", "default_target": enemy})
+	# 技能（次数制，11 §8；target: enemy/self/ally）
+	for sk: Variant in (u["skills"] as Array):
+		var s: Dictionary = sk
+		var sk_id := str(s["id"])
+		var uses := int((u["skill_uses"] as Dictionary).get(sk_id, -1))
+		var tkind := str(s.get("target", "enemy"))
+		var dt := ""
+		match tkind:
+			"enemy":
+				dt = enemy
+			"self":
+				dt = uid
+			"ally":
+				dt = first_alive_party()
+		var reason := ""
+		if acted:
+			reason = "action_used"
+		elif uses == 0:
+			reason = "skill_depleted"
+		elif dt == "":
+			reason = "no_target"
+		out.append({"type": CMD_SKILL, "skill": sk_id, "item": "",
+			"name": str(s.get("name", sk_id)), "uses": uses, "count": -1,
+			"disabled": reason != "", "reason": reason,
+			"target_kind": tkind, "default_target": dt})
+	# 道具（附赠动作，tech/04 §4）
+	for it: Variant in (u["items"] as Array):
+		var d: Dictionary = it
+		out.append({"type": CMD_ITEM, "skill": "", "item": str(d["id"]),
+			"name": str(d.get("name", d["id"])), "uses": -1, "count": int(d.get("count", 0)),
+			"disabled": bool(u["bonus_used"]),
+			"reason": "bonus_used" if bool(u["bonus_used"]) else "",
+			"target_kind": "ally", "default_target": uid})
+	# 急救（11 §5.2：目标须倒地队友）
+	var downed := _first_downed_ally_id()
+	var fa_reason := ""
+	if acted:
+		fa_reason = "action_used"
+	elif downed == "":
+		fa_reason = "no_target"
+	out.append({"type": CMD_FIRST_AID, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
+		"disabled": fa_reason != "", "reason": fa_reason,
+		"target_kind": "downed_ally", "default_target": downed})
+	# 结束回合
+	out.append({"type": CMD_END_TURN, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
+		"disabled": false, "reason": "", "target_kind": "none", "default_target": ""})
+	return out
+
+## 由指令集条目构建同构 Command（tech/01 §6.2 键集恒定）；target 缺省 = default_target（09 §9.2 点按=默认目标）。
+func command_from_action(action: Dictionary, target: String = "") -> Dictionary:
+	var uid := current_actor_id()
+	if uid == "":
+		return {}
+	return {"type": action["type"], "actor": uid,
+		"target": target if target != "" else str(action.get("default_target", "")),
+		"skill": str(action.get("skill", "")), "item": str(action.get("item", "")),
+		"source": &"player"}
 
 # ---------------------------------------------------------------- 内部工具
 
