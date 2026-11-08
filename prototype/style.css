@@ -252,3 +252,16 @@ button { font-family:inherit; cursor:pointer; }
 .toast { position:absolute; top:12%; left:50%; transform:translateX(-50%); background:var(--paper2);
   border:1px solid var(--gold-dim); color:var(--gold); padding:6px 16px; border-radius:16px;
   font-size:12px; z-index:50; animation:fadein .3s; white-space:nowrap; }
+
+/* ===== 教程与单局菜单（12 文档） ===== */
+.coach { position:absolute; inset:0; z-index:80; background:rgba(5,6,10,.72);
+  display:flex; align-items:center; justify-content:center; animation:fadein .25s; }
+.coach-card { width:78%; max-width:340px; background:var(--paper); border:1px solid var(--gold-dim);
+  border-radius:10px; padding:18px; }
+#enc-menu { flex:none; width:24px; height:18px; margin-left:6px; background:var(--paper2);
+  border:1px solid var(--line); border-radius:3px; color:var(--dim); font-size:10px; line-height:1; }
+#enc-menu:hover { border-color:var(--gold); color:var(--gold); }
+#vp-battle { touch-action:none; }
+#ls-center { touch-action:none; }
+.unit, #grid-map .cell.ally { cursor:grab; }
+#grid-map .cell.drop-ok { outline:2px solid var(--gold); }

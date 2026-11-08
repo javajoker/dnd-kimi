@@ -12,10 +12,12 @@ const Board = {
   flags: {},
   rep: { scriptorium: 0, uninked: 0, salvage: 0 },
   clock: 0,                       // 褪墨度 0~10
-  inv: ["fatedie"],
+  inv: ["fatedie", "heal_potion"],
   gold: 50,
   bond: { "珂兰": 20, "老费": 10 },
-  alignment: 50
+  alignment: 50,
+  xp: 0,
+  level: 1
 };
 
 /* ---------- 事件流（append-only） ---------- */
@@ -72,8 +74,26 @@ function giveItem(id) {
   emit("item.gain", { id, name: PACK.items[id].name });
 }
 function addXp(n) {
+  Board.xp += n;
   runtime.settleBuf.push({ k: "经验", v: "+" + n });
   emit("xp.gain", { n });
+}
+
+/* ---------- 成长（11 文档 §6：300/700/1200 经验门槛） ---------- */
+const XP_TABLE = [0, 300, 700, 1200];
+function levelTarget() {
+  let l = 1;
+  for (let i = 1; i < XP_TABLE.length; i++) if (Board.xp >= XP_TABLE[i]) l = i + 1;
+  return l;
+}
+function doLevelUp(attr) {
+  if (Board.level >= levelTarget()) return;
+  Board.level++;
+  PACK.player.attrs[attr] = Math.min(3, PACK.player.attrs[attr] + 1);
+  PACK.player.maxhp += 2; PACK.player.hp += 2;
+  emit("level.up", { level: Board.level, attr });
+  toast(`等级提升！Lv${Board.level}　${attr}+1　HP上限+2`);
+  renderSettle();
 }
 
 /* ---------- 轻规则包 v1：检定与战斗 ---------- */
@@ -144,8 +164,10 @@ function renderHome() {
           <div class="d">${Board.inv.length} 件道具 · 四系列图鉴</div></button>
         <button class="op-btn" onclick="go('character')"><div class="t">角色</div>
           <div class="d">队伍 · 羁绊 · 配装</div></button>
-        <button class="op-btn" style="grid-column:1/3" onclick="go('history')"><div class="t">历史卷轴</div>
-          <div class="d">为什么会变成这样——事件流档案（${Events.length} 条）</div></button>
+        <button class="op-btn" onclick="go('history')"><div class="t">历史卷轴</div>
+          <div class="d">事件流档案（${Events.length} 条）</div></button>
+        <button class="op-btn" onclick="showCoach(HELP_PAGES,null)"><div class="t">帮助</div>
+          <div class="d">手势图鉴 · 重学教程</div></button>
       </div>
     </div>
   </div>`;
@@ -269,7 +291,7 @@ function renderEncounterPortrait() {
   }).join("");
   host.innerHTML = `
   <div id="enc-portrait" class="screen st-${runtime.phase === "battle" ? "battle" : runtime.phase === "dialog" ? "dialog" : runtime.phase === "settle" ? "settle" : "explore"}">
-    <div id="room-track" title="房间序列推进条（下滑可回看已过房间）">${track}</div>
+    <div id="room-track" title="房间序列推进条（下滑可回看已过房间）">${track}<button id="enc-menu" onclick="openEncMenu()" title="单局菜单">☰</button></div>
     <div id="vp-view" class="scrolly">${viewHTML(node)}</div>
     <div id="vp-console">
       <div id="console-tabs">${["action", "dice", "log", "char"].map(t =>
@@ -280,6 +302,7 @@ function renderEncounterPortrait() {
   </div>`;
   const log = $("#console-body");
   if (runtime.tab === "log" && log) log.scrollTop = log.scrollHeight;
+  attachGestures();
 }
 function setTab(t) { runtime.tab = t; renderEncounter(); }
 
@@ -316,6 +339,7 @@ function actionHTML(node) {
   }
   if (node.type === "hub") {
     h += `<button class="btn" onclick="openShop()">🛒 杂货铺（金币 ${Board.gold}）</button>`;
+    h += `<button class="btn" onclick="doRest()">🔥 休整（恢复 HP 与技能次数）</button>`;
     h += `<button class="btn" onclick="showRumor()">👂 听听传闻</button>`;
   }
   h += node.edges.map(e =>
@@ -323,6 +347,14 @@ function actionHTML(node) {
   return h;
 }
 function showRumor() { toast("传闻：" + PACK.nodes["N1-1"].rumor); }
+function doRest() {
+  PACK.player.hp = PACK.player.maxhp;
+  PACK.companions.forEach(c => c.hp = c.maxhp);
+  addLog(`<b class="heal">休整</b>：HP 与技能次数全部恢复（休整态）。`);
+  emit("rest", {});
+  toast("休整完成：全队伍恢复");
+  renderStatusBand();
+}
 
 /* ---------- 检定（含关键判定全屏演出，09 文档 §6） ---------- */
 function doNodeCheck() {
@@ -409,7 +441,8 @@ function startBattle(node) {
   const spec = PACK.enemies[node.encounter.enemy];
   runtime.phase = "battle";
   runtime.battle = {
-    spec, round: 1, busy: false, over: false,
+    spec, round: 1, busy: false, over: false, fled: false,
+    moved: false, bonusUsed: false,
     enemies: Array.from({ length: spec.count }, (_, i) => ({
       name: spec.name + (spec.count > 1 ? "·" + "甲乙"[i] : ""), hp: spec.hp, ac: spec.ac, atk: spec.atk, dmg: spec.dmg
     })),
@@ -419,6 +452,7 @@ function startBattle(node) {
   runtime.battle.pos = { allies: [[2, 4]], enemies: spec.count === 1 ? [[3, 1]] : [[2, 1], [4, 1]] };
   addLog(`<b class="hurt">遭遇战开始：${node.title}</b>（先攻：d20+敏，玩家先手）`);
   emit("battle.start", { id: node.encounter.id, enemy: spec.name });
+  if (!localStorage.getItem("proto_tut_battle")) setTimeout(() => showCoach(TUT_BATTLE, "proto_tut_battle"), 400);
 }
 function battleViewHTML() {
   const b = runtime.battle;
@@ -436,14 +470,44 @@ function battleActionsHTML() {
   const b = runtime.battle;
   if (!b || b.over) return `<button class="btn primary" onclick="winBattle()">战斗结束 → 结算</button>`;
   if (b.busy) return `<div class="check-hint">敌方行动中……</div>`;
-  let h = `<div class="check-hint">三段式行动经济：动作 + 附赠（移动已省略于切片）</div>`;
+  let h = `<div class="check-hint">动作 + 附赠 + 移动　|　手势：拖动=移动 · 轨迹=施法 · 双击=结束回合 · 捏合=缩放</div>`;
   PACK.player.skills.forEach((s, i) => {
     const uses = s.uses ? (b.skillUses[s.id] || 0) : 0;
     const left = s.uses ? s.uses - uses : Infinity;
     h += `<button class="btn" ${left <= 0 ? "disabled" : ""} onclick="attack(${i})">⚔️ ${s.name}
       <span class="badge">${s.dmg}${s.uses ? " · 余 " + (left) : ""}</span></button>`;
   });
+  h += battleItemButtons();
+  h += `<button class="btn center" onclick="endTurn()">⏭ 结束回合（双击战场同效）</button>`;
   return h;
+}
+function battleItemButtons() {
+  const b = runtime.battle;
+  const usable = [...new Set(Board.inv)].filter(id => PACK.items[id].use);
+  if (!usable.length) return "";
+  return usable.map(id => {
+    const it = PACK.items[id];
+    return `<button class="btn" ${b && b.bonusUsed ? "disabled" : ""} onclick="useItemInBattle('${id}')">🧪 ${it.name}
+      <span class="badge">附赠 · ${it.use.heal || ""}${b && b.bonusUsed ? " · 本回合已用附赠" : ""}</span></button>`;
+  }).join("");
+}
+function useItemInBattle(id) {
+  const b = runtime.battle, it = PACK.items[id];
+  if (!it.use) return;
+  if (b) { if (b.bonusUsed || b.busy || b.over) return; b.bonusUsed = true; }
+  const heal = dmgRoll(it.use.heal);
+  PACK.player.hp = Math.min(PACK.player.maxhp, PACK.player.hp + heal);
+  if (it.use.consume) Board.inv.splice(Board.inv.indexOf(id), 1);
+  addLog(`<b class="heal">使用「${it.name}」</b>（附赠动作）：恢复 <b class="heal">${heal}</b> HP → ${PACK.player.hp}/${PACK.player.maxhp}`);
+  emit("item.use", { id, heal });
+  renderStatusBand(); renderEncounter();
+}
+function endTurn() {
+  const b = runtime.battle;
+  if (!b || b.busy || b.over) return;
+  addLog(`<b>你结束了回合</b>。`);
+  b.busy = true; renderEncounter();
+  setTimeout(enemyTurn, 600);
 }
 function attack(i) {
   const b = runtime.battle, s = PACK.player.skills[i];
@@ -468,7 +532,7 @@ function enemyTurn() {
     if (hit) PACK.player.hp -= dmg;
     addLog(`<b class="hurt">${e.name}</b>反扑：d20=${roll}+${e.atk}=${total} vs AC ${PACK.player.ac} → ${hit ? `<b class="hurt">命中</b>，你受到 <b class="hurt">${dmg}</b> 伤害` : "被闪开"}`);
   });
-  b.round++; b.busy = false;
+  b.round++; b.busy = false; b.moved = false; b.bonusUsed = false;
   if (PACK.player.hp <= 0) { deathSave(); return; }
   renderEncounter();
 }
@@ -520,6 +584,7 @@ function renderEncounterLandscape() {
       <span style="color:var(--gold)">${node.title}</span>
       <span style="color:var(--dim)">${nodeActTitle()}</span>
       <div id="ls-top-init">${inBattle ? `<span class="init-chip on">你</span>` + runtime.battle.enemies.map(e => `<span class="init-chip">${e.name}</span>`).join("") : ""}</div>
+      <button id="enc-menu" onclick="openEncMenu()" title="单局菜单" style="background:none;border:1px solid var(--line);color:var(--dim);border-radius:4px;padding:2px 8px;margin-left:8px">☰</button>
     </div>
     <div id="ls-mid">
       <div id="ls-left">${lsActionsHTML(node)}</div>
@@ -530,6 +595,7 @@ function renderEncounterLandscape() {
   </div>`;
   const btm = $("#ls-bottom");
   if (btm.classList.contains("open")) btm.innerHTML = logHTML();
+  attachGestures();
 }
 function lsActionsHTML(node) {
   if (runtime.phase === "battle" && runtime.battle) {
@@ -538,7 +604,7 @@ function lsActionsHTML(node) {
     return PACK.player.skills.map((s, i) => {
       const left = s.uses ? s.uses - (runtime.battle.skillUses[s.id] || 0) : Infinity;
       return `<button class="btn act" ${left <= 0 ? "disabled" : ""} onclick="attack(${i})">${s.name}<br><span style="font-size:10px;color:var(--dim)">${s.dmg}${s.uses ? " ·余" + left : ""}</span></button>`;
-    }).join("");
+    }).join("") + battleItemButtons() + `<button class="btn act" onclick="endTurn()">结束回合</button>`;
   }
   if (node.type === "check" && !node._rolled) {
     const c = node.check;
@@ -549,7 +615,7 @@ function lsActionsHTML(node) {
     return node.options.map((o, i) => `<button class="btn act" onclick="pickOption(${i})">${o.label}</button>`).join("");
   }
   let h = "";
-  if (node.type === "hub") h += `<button class="btn act" onclick="openShop()">🛒 商店</button><button class="btn act" onclick="showRumor()">👂 传闻</button>`;
+  if (node.type === "hub") h += `<button class="btn act" onclick="openShop()">🛒 商店</button><button class="btn act" onclick="doRest()">🔥 休整</button><button class="btn act" onclick="showRumor()">👂 传闻</button>`;
   h += node.edges.map(e => `<button class="btn primary act" onclick="gotoNode('${e.to}')">${e.label}</button>`).join("");
   return h;
 }
@@ -566,10 +632,10 @@ function gridHTML() {
     b.pos.enemies.forEach(([ex, ey], i) => {
       if (ex === x && ey === y && b.enemies[i].hp > 0) { cls = "enemy"; label = "墨"; }
     });
-    cells += `<div class="cell ${cls}">${label}${cls === "" ? `<span class="sub">${x},${y}</span>` : ""}</div>`;
+    cells += `<div class="cell ${cls}" data-x="${x}" data-y="${y}">${label}${cls === "" ? `<span class="sub">${x},${y}</span>` : ""}</div>`;
   }
-  return `<div id="grid-map">${cells}</div>
-    <div style="position:absolute;bottom:8px;font-size:10px;color:var(--dim)">战术格 8×5 · 同屏单位 ≤8 · 弹道线/威胁范围以描边表达</div>`;
+  return `<div id="grid-map" style="transform:scale(${runtime.zoom || 1})">${cells}</div>
+    <div style="position:absolute;bottom:8px;font-size:10px;color:var(--dim)">战术格 8×5 · 拖动=移动 · 拖向敌人=施法 · 双击=结束回合 · 捏合=缩放</div>`;
 }
 
 /* ---------- 日志（事件流视图） ---------- */
@@ -702,6 +768,7 @@ function renderHistory() {
  * ============================================================ */
 function renderSettle() {
   const lines = runtime.settleBuf.length ? runtime.settleBuf : [{ k: "切片完成", v: "《烬港残页》序章+幕一" }];
+  const canLevel = Board.level < levelTarget();
   host.innerHTML = `
   <div class="screen" id="settle-screen">
     <h2>结 算</h2>
@@ -711,11 +778,214 @@ function renderSettle() {
       <div class="settle-line" style="animation-delay:${lines.length * 0.18}s">
         <span class="k">新增卷轴条目</span><span class="v">${Events.length} 条事件流</span></div>
     </div>
+    ${canLevel ? `
+    <div class="card" style="width:100%;max-width:300px;border-color:var(--gold)">
+      <div class="t">⬆ 成长加点（经验 ${Board.xp}，可升至 Lv${Board.level + 1}）</div>
+      <div class="d" style="margin-bottom:6px">选择一项属性 +1（HP 上限 +2）：</div>
+      <div style="display:flex;gap:6px">
+        ${["力", "敏", "智"].map(a => `<button class="btn center" style="margin:0" onclick="doLevelUp('${a}')">${a} ${PACK.player.attrs[a]}→${PACK.player.attrs[a] + 1}</button>`).join("")}
+      </div>
+    </div>` : ""}
     <div style="width:100%;max-width:300px">
-      <button class="btn primary center" onclick="runtime.consoleReturn='settle';go('history')">查看新增卷轴条目</button>
+      <button class="btn primary center" onclick="runtime.consoleReturn='settle';go('history')">查看新增卷轴条目（复盘）</button>
       <button class="btn center" onclick="go('home')">回主屏（营地）</button>
     </div>
   </div>`;
+}
+
+/* ============================================================
+ * 手势层（framework/12）：拖动=移动 · 轨迹=施法 · 双击=结束回合
+ * 捏合=缩放 · 长按=详情 · 横滑=切 Tab。按钮永远有等价路径。
+ * ============================================================ */
+const gest = { down: null, line: null, pointers: new Map(), pinchD0: 0, zoom0: 1, lastTap: 0, pressTimer: null };
+
+function svgLine() {
+  let svg = $("#gesture-svg");
+  if (!svg) {
+    device.insertAdjacentHTML("beforeend",
+      `<svg id="gesture-svg" style="position:absolute;inset:0;pointer-events:none;z-index:60"><line stroke="var(--gold)" stroke-width="2" stroke-dasharray="6 4"/></svg>`);
+    svg = $("#gesture-svg");
+  }
+  return svg.querySelector("line");
+}
+function devicePos(e) {
+  const r = device.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function drawPath(a, b) {
+  const l = svgLine();
+  l.setAttribute("x1", a.x); l.setAttribute("y1", a.y);
+  l.setAttribute("x2", b.x); l.setAttribute("y2", b.y);
+  l.style.display = "block";
+}
+function hidePath() { const l = svgLine(); l.style.display = "none"; }
+
+function attachGestures() {
+  if (runtime.screen !== "encounter") return;
+  const field = $("#ls-center") || $("#vp-battle");
+  // —— 竖屏：操作台横滑切 Tab ——
+  const console_ = $("#vp-console");
+  if (console_) {
+    let sx = 0, sy = 0;
+    console_.addEventListener("pointerdown", e => { sx = e.clientX; sy = e.clientY; });
+    console_.addEventListener("pointerup", e => {
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 60 && Math.abs(dy) < 30) {
+        const tabs = ["action", "dice", "log", "char"];
+        let i = tabs.indexOf(runtime.tab) + (dx < 0 ? 1 : -1);
+        runtime.tab = tabs[(i + tabs.length) % tabs.length];
+        renderEncounter();
+      }
+    });
+  }
+  if (!field || !runtime.battle || runtime.battle.over) return;
+
+  // —— 战场：单位拖动（移动/施法轨迹）、双击结束回合、捏合缩放、长按详情 ——
+  field.style.touchAction = "none";
+  field.addEventListener("pointerdown", e => {
+    gest.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gest.pointers.size === 2) {                      // 捏合开始
+      const [p, q] = [...gest.pointers.values()];
+      gest.pinchD0 = Math.hypot(p.x - q.x, p.y - q.y);
+      gest.zoom0 = runtime.zoom || 1;
+      gest.down = null; hidePath();
+      return;
+    }
+    const unitEl = e.target.closest(".unit.active, .cell.ally");
+    if (unitEl) {
+      gest.down = { kind: "unit", el: unitEl, x0: e.clientX, y0: e.clientY, moved: false };
+    } else if (e.target.closest(".unit")) {
+      // 长按敌方/任意单位 = 详情卡（12 §2）
+      const u = e.target.closest(".unit");
+      gest.pressTimer = setTimeout(() => showUnitInfo(u), 400);
+    } else {
+      // 空白处双击 = 结束回合
+      const now = Date.now();
+      if (now - gest.lastTap < 280) { gest.lastTap = 0; endTurn(); }
+      else gest.lastTap = now;
+    }
+  });
+  field.addEventListener("pointermove", e => {
+    if (gest.pointers.has(e.pointerId)) gest.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gest.pointers.size === 2 && gest.pinchD0) {      // 捏合缩放（12 §1：间距变化>20%）
+      const [p, q] = [...gest.pointers.values()];
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      runtime.zoom = Math.max(0.7, Math.min(1.6, gest.zoom0 * d / gest.pinchD0));
+      const m = $("#grid-map") || document.querySelector("#vp-battle .lane");
+      if (m) m.style.transform = `scale(${runtime.zoom})`;
+      return;
+    }
+    if (!gest.down) return;
+    clearTimeout(gest.pressTimer);
+    if (Math.hypot(e.clientX - gest.down.x0, e.clientY - gest.down.y0) > 10) {
+      gest.down.moved = true;
+      drawPath(devicePos({ clientX: gest.down.x0, clientY: gest.down.y0 }), devicePos(e));
+    }
+  });
+  field.addEventListener("pointerup", e => {
+    gest.pointers.delete(e.pointerId);
+    if (gest.pointers.size < 2) gest.pinchD0 = 0;
+    clearTimeout(gest.pressTimer);
+    hidePath();
+    const b = runtime.battle, g = gest.down; gest.down = null;
+    if (!g || !g.moved || !b || b.busy || b.over) return;
+    const drop = document.elementFromPoint(e.clientX, e.clientY);
+    const enemyEl = drop && drop.closest(".unit.enemy, .cell.enemy");
+    if (enemyEl) {                                       // 轨迹终点=敌 → 施法
+      const idx = PACK.player.skills.findIndex(s => s.id === "inkbolt");
+      const left = PACK.player.skills[idx].uses - (b.skillUses.inkbolt || 0);
+      if (left > 0) attack(idx); else toast("墨术飞矢次数已尽");
+      return;
+    }
+    if (b.moved) { toast("本回合移动段已用"); return; }
+    const cell = drop && drop.closest(".cell");
+    if (cell && !cell.classList.contains("ally")) {      // 空格 → 移动（≤2 格）
+      const [ax, ay] = b.pos.allies[0];
+      const nx = +cell.dataset.x, ny = +cell.dataset.y;
+      if (Math.abs(nx - ax) + Math.abs(ny - ay) <= 2) {
+        b.pos.allies[0] = [nx, ny]; b.moved = true;
+        addLog(`<b>移动</b>：(${ax},${ay}) → (${nx},${ny})（移动段）`);
+        emit("battle.move", { from: [ax, ay], to: [nx, ny] });
+        renderEncounter();
+      } else toast("超出移动范围（≤2 格）");
+      return;
+    }
+    if (drop && drop.closest("#vp-battle")) {            // 竖屏：纵向拖动=调整站位
+      b.moved = true;
+      addLog(`<b>移动</b>：${e.clientY < g.y0 ? "前压" : "后撤"}一步（移动段）`);
+      emit("battle.move", { stance: e.clientY < g.y0 ? "forward" : "back" });
+      renderEncounter();
+    }
+  });
+  field.addEventListener("pointercancel", () => { gest.pointers.clear(); gest.pinchD0 = 0; gest.down = null; hidePath(); clearTimeout(gest.pressTimer); });
+}
+function showUnitInfo(u) {
+  const b = runtime.battle;
+  const isEnemy = u.classList.contains("enemy");
+  const info = isEnemy
+    ? `${b.spec.name}　HP ${b.spec.hp} · AC ${b.spec.ac} · 伤害 ${b.spec.dmg}`
+    : `${PACK.player.name}　HP ${PACK.player.hp}/${PACK.player.maxhp} · AC ${PACK.player.ac}　力${PACK.player.attrs.力}/敏${PACK.player.attrs.敏}/智${PACK.player.attrs.智}`;
+  host.insertAdjacentHTML("beforeend",
+    `<div class="dim-mask" onclick="closeSheet()"></div>
+     <div class="sheet"><button class="close" onclick="closeSheet()">✕</button>
+     <div class="page-head" style="border:none;padding:0 0 8px"><h3>${isEnemy ? "敌方单位" : "己方单位"}</h3></div>
+     <div class="card"><div class="d">${info}</div></div></div>`);
+}
+
+/* ---------- ☰ 单局菜单（09 文档 §7） ---------- */
+function openEncMenu() {
+  host.insertAdjacentHTML("beforeend",
+    `<div class="dim-mask" onclick="closeSheet()"></div>
+     <div class="sheet"><button class="close" onclick="closeSheet()">✕</button>
+     <div class="page-head" style="border:none;padding:0 0 8px"><h3>暂停</h3></div>
+     <button class="btn" onclick="closeSheet()">继续</button>
+     <button class="btn" id="btn-save-home" onclick="saveAndHome(this)">保存并回主屏</button>
+     <div class="check-hint" style="padding:0 4px">遭遇进行中不存档：回到主屏后，本遭遇将从头开始（已写板的世界状态不受影响）。</div>
+     <button class="btn" onclick="closeSheet();showCoach(HELP_PAGES,null)">手势帮助</button>
+     </div>`);
+}
+function saveAndHome(btn) {
+  if (!btn.dataset.armed) { btn.dataset.armed = "1"; btn.textContent = "确认：放弃本遭遇进度并回主屏"; return; }
+  closeSheet();
+  runtime.battle = null; runtime.phase = "explore";
+  go("home");
+  toast("已回到主屏——本遭遇将从头开始（07 文档 §4.2）");
+}
+
+/* ---------- 首进教程与帮助页（12 文档 §4） ---------- */
+const TUT_HOME = [
+  { t: "欢迎来到抄本纪元", d: "三个手势就够开局：<br><b>点按</b>＝选择与确认<br><b>长按</b>＝查看详情 / 跳过演出<br><b>横滑</b>＝切换操作台页签" },
+  { t: "命骰", d: "关键判定会全屏演出——<b>长按可跳过</b>，结果永远写入日志与历史卷轴，跳过不丢信息。" },
+  { t: "双形态", d: "进入战役时选择横屏空间或竖屏时间形态，整场锁定。顶部「形态对比」按钮是原型评审专用，正式版没有。" }
+];
+const TUT_BATTLE = [
+  { t: "战斗手势", d: "<b>拖动己方单位</b>＝移动（移动段）<br><b>从自己拖到敌人</b>＝释放墨术飞矢（轨迹即弹道）<br><b>双击战场</b>＝结束回合<br><b>双指捏合</b>＝缩放战场<br>——按钮永远可用，手势只是更快。" }
+];
+const HELP_PAGES = [
+  { t: "手势图鉴（1/2）", d: "<b>点按</b>＝选择/确认　<b>双击</b>＝结束回合/快掷<br><b>长按</b>＝详情/跳过演出　<b>横滑</b>＝切页签" },
+  { t: "手势图鉴（2/2）", d: "<b>拖动</b>＝移动单位/滚动　<b>拖动轨迹</b>＝施法<br><b>双指捏合</b>＝缩放　<b>双指拖动</b>＝平移镜头<br>——完整规范见 framework/12-手势与交互规范.md" }
+];
+function showCoach(pages, flagKey) {
+  let i = 0;
+  const render = () => {
+    document.querySelectorAll(".coach").forEach(e => e.remove());
+    const p = pages[i];
+    device.insertAdjacentHTML("beforeend",
+      `<div class="coach"><div class="coach-card">
+        <div class="t" style="color:var(--gold);font-size:16px;margin-bottom:8px">${p.t}</div>
+        <div class="d" style="font-size:13px;line-height:2;color:var(--text)">${p.d}</div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn center" id="coach-skip" style="margin:0">跳过</button>
+          <button class="btn primary center" id="coach-next" style="margin:0">${i < pages.length - 1 ? "下一条" : "知道了"}</button>
+        </div></div></div>`);
+    $("#coach-skip").onclick = done;
+    $("#coach-next").onclick = () => { i++; i < pages.length ? render() : done(); };
+  };
+  const done = () => {
+    document.querySelectorAll(".coach").forEach(e => e.remove());
+    if (flagKey) localStorage.setItem(flagKey, "1");
+  };
+  render();
 }
 
 /* ---------- 通用 ---------- */
@@ -735,5 +1005,5 @@ $("#btn-mode-compare").addEventListener("click", () => {
   toast("（原型调试）切换为" + (runtime.mode === "space" ? "横屏 · 空间" : "竖屏 · 时间") + "形态——同一事件流，两套渲染");
   renderEncounter();
 });
-
 render();
+if (!localStorage.getItem("proto_tut_main")) showCoach(TUT_HOME, "proto_tut_main");

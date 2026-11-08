@@ -32,7 +32,7 @@ const PACK = {
 
     "N1-1": { type:"hub", title:"自由市广场",
       text:"烬港最后的繁华都挤在这个广场上了。半座城的居民已被「撤销」，剩下的人守着一半的记忆生活。\n杂货铺的老板娘冲你招手——白页者的名声比你的脚步快。",
-      shop:[{ item:"half_tide_table", price:30 }],
+      shop:[{ item:"half_tide_table", price:30 }, { item:"heal_potion", price:15 }],
       rumor:"「听说了吗？昨晚又有一条街不见了。誊写庭的人把自己锁在档案馆里。」",
       edges:[{ label:"前往褪色现场调查", to:"N1-2" }] },
     "N1-2": { type:"check", title:"褪色现场调查",
@@ -72,7 +72,7 @@ const PACK = {
     "N1-7": { type:"battle", title:"午夜墨雨",
       text:"午夜，墨色的雨。\n雨点落地成字，字扭曲着立起——墨魈，褪墨中诞生的扭曲文本，朝着广场上唯一的「空白」涌来。\n（教学 Boss 战）",
       encounter:{ id:"N1-7", enemy:"inkfiend", difficulty:"easy", boss:true },
-      onWin:{ xp:200, item:"ink_core" },
+      onWin:{ xp:250, item:"ink_core" },
       edges:[{ label:"雨停之后", to:"N1-8" }] },
     "N1-8": { type:"branch", title:"三份邀约",
       text:"天亮前，三份邀约摆在你面前：誊写庭的委托、断墨会的黑羽、拾遗行会的契约。\n——切片到此为止。完整战役的幕二「三支笔」将由此分岔。",
@@ -81,6 +81,7 @@ const PACK = {
 
   items: {
     half_tide_table:{ name:"半页潮汐表", roles:["branch_key"], desc:"雾码头残缺的潮汐记录。边缘有行小字：『沉书阁的密道，随退潮显现。』（开启幕二打捞密道）" },
+    heal_potion:{ name:"补给药水", roles:["stat"], desc:"行会配给的墨绿色药剂。\n【使用 · 附赠动作】恢复 1d4+2 点 HP，用后消耗。", use:{ timing:"bonus_action", heal:"1d4+2", consume:true } },
     ink_core:{ name:"墨核", roles:["stat"], desc:"墨魈消散后留下的凝块，仍微微搏动。可用于强化武器。" },
     fatedie:{ name:"命骰", roles:["codex"], quest:true, desc:"织命者遗留的二十面骨骰。只有白页者掷得出声音。" }
   },
