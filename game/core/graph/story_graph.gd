@@ -94,10 +94,10 @@ func resolve_check(edge: Dictionary, success: bool) -> void:
 # ---------------------------------------------------------------- 检定掷骰（11 §2/§3；09 §6 两级演出标记）
 # UI 只按下"检定"按钮；掷骰、check.roll 事件、成败双路推进全部在 core 完成（godot-dev §2）。
 
-## 玩家有效属性 = 模板属性 + 已分配加点（11 §6；簿记键 <pack>.attrs）。
+## 玩家有效属性 = 模板属性 + 已分配加点（11 §6；簿记 global.growth.attrs.*，tech/04 §8）。
 func player_attrs() -> Dictionary:
 	var out: Dictionary = (_player_template().get("attrs", {}) as Dictionary).duplicate(true)
-	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
+	var alloc := Growth.attrs_map(board)
 	for k: Variant in alloc.keys():
 		out[str(k)] = int(out.get(str(k), 0)) + int(alloc[k])
 	return out
@@ -212,8 +212,8 @@ func hub_buy(item_id: String) -> bool:
 ## hp_formula + 11 §6 等级加值重算，<pack>.hp.<cid> 簿记键见 07 §2）；次数制技能按 11 §8
 ## 遭遇内计次，离场即随遭遇组装重置（tech/02 §6），休整日志一并说明。
 func hub_rest() -> Dictionary:
-	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
-	var level := int(board.read("%s.level" % pack_id, 1))
+	var alloc := Growth.attrs_map(board)
+	var level := Growth.level(board)
 	var hp_bonus := (level - 1) * LightV1.LEVEL_HP_BONUS
 	var restored := {}
 	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
@@ -235,8 +235,8 @@ func hub_rest() -> Dictionary:
 ## 队伍状态（状态栏带 04 §3.1「队伍 HP 概览」只读数据源）：
 ## [{id, name, hp, max_hp}]；hp 取 <pack>.hp.<cid> 簿记，未写入时按满值（公式重算上限）。
 func party_status() -> Array:
-	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
-	var level := int(board.read("%s.level" % pack_id, 1))
+	var alloc := Growth.attrs_map(board)
+	var level := Growth.level(board)
 	var hp_bonus := (level - 1) * LightV1.LEVEL_HP_BONUS
 	var out: Array = []
 	for cid: String in (pack.get("characters", {}) as Dictionary).keys():

@@ -89,6 +89,8 @@ func _ready() -> void:
 		_run_shots_m3()
 	if args.has("--m4-shots"):
 		_run_shots_m4()
+	if args.has("--growth-shots"):
+		_run_shots_growth()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -286,11 +288,12 @@ func _end_slice() -> void:
 		board.write("campaign01.cleared", true,
 			{"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"})
 	entitlements.check_achievements(ops_config)
-	var gained := _grant_growth() # 11 §6：结算界面 = 成长加点时机（04 §⑨）
+	# 成长在 xp 效果产出时已即时汇入 global.growth.*（tech/04 §8 规则1/2）；
+	# 结算界面 = 成长加点时机（11 §6；04 §⑨），此处只呈现与分配。
 	_save("settle")
 	_encounter_tail = _campaign_tail # 汇总区间 = 整个切片（逐项念给玩家听，04 §⑨）
 	_encounter_result = &"slice"
-	_show_settle(gained)
+	_show_settle()
 
 # ---------------------------------------------------------------- 整备（09 §9.1；tech/02 §2.4）
 
@@ -302,7 +305,7 @@ func _enter_encounter() -> void:
 	if not cfg.is_empty():
 		cfg = cfg.duplicate() # 2→3 级技能槽 +1（11 §6；槽位基值仍读配置，tech/02 §2.4）
 		cfg["skill_slots"] = int(cfg["skill_slots"]) \
-			+ LightV1.skill_slot_bonus(LightV1.level_for_xp(int(board.read("campaign01.xp_total", 0))))
+			+ LightV1.skill_slot_bonus(Growth.level(board))
 	if cfg.is_empty():
 		_begin_encounter({"skills": [], "items": ["heal_potion"], "attr_alloc": {}}) # 空选择 = BattleDef 缺省
 		return
@@ -325,8 +328,8 @@ func _loadout_candidates() -> Dictionary:
 		if it.has("use") and board.has_item(iid):
 			items.append({"id": iid, "name": str(it.get("name", iid)), "count": board.item_count(iid)})
 	return {"skills": skill_pool, "items": items,
-		"attr_points": int(board.read("campaign01.attr_points", 0)),
-		"attrs": board.read("campaign01.attrs", {}), # 已分配值（单项 +3 封顶判定用，11 §6）
+		"attr_points": Growth.attr_points(board), # 成长簿记归全局键（tech/04 §8）
+		"attrs": Growth.attrs_map(board), # 已分配值（单项 +3 封顶判定用，11 §6）
 		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0}}
 
 ## 玩家模板条目（tech/04 §2 kind=player_template；找不到 = 包数据缺陷，返回空字典由组装层报错）。
@@ -343,19 +346,23 @@ func _on_loadout_confirmed(selection: Dictionary, cfg: Dictionary) -> void:
 	_apply_attr_alloc(selection.get("attr_alloc", {}), int(selection.get("attr_points_left", 0)))
 	_begin_encounter(selection)
 
-## 属性点分配写板（07 §1 溯源）；单项 ≤+3 封顶（11 §6），越顶拒绝整体分配并返回 false。
-func _apply_attr_alloc(alloc: Dictionary, points_left: int) -> bool:
-	var attrs: Dictionary = board.read("campaign01.attrs", {}).duplicate(true)
+## 属性点分配经成长系统写板 global.growth.*（07 §1 溯源；tech/04 §8 规则3）；
+## 单项 ≤+3 封顶（11 §6）或点数不足 → 拒绝整体分配并返回 false。
+func _apply_attr_alloc(alloc: Dictionary, _points_left: int = 0) -> bool:
+	var growth := Growth.new(board)
 	for attr: String in alloc.keys():
-		if int(attrs.get(attr, 0)) + int(alloc[attr]) > LightV1.ATTR_POINT_CAP:
+		var n := int(alloc[attr])
+		if n <= 0:
+			continue
+		if Growth.attrs_total(board, attr) + n > LightV1.ATTR_POINT_CAP:
 			return false # 单项 ≤+3 封顶（11 §6）
-	if alloc.is_empty() and points_left == int(board.read("campaign01.attr_points", 0)):
-		return true
+		if n > Growth.attr_points(board):
+			return false # 未分配点数不足
 	var prov := {"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"}
 	for attr: String in alloc.keys():
-		attrs[attr] = int(attrs.get(attr, 0)) + int(alloc[attr])
-	board.write("campaign01.attrs", attrs, prov)
-	board.write("campaign01.attr_points", points_left, prov)
+		for i: int in int(alloc[attr]):
+			if not growth.alloc(attr, prov):
+				return false
 	return true
 
 # ---------------------------------------------------------------- 遭遇（09 §2/§7/§8；tech/02 §2.1）
@@ -442,24 +449,28 @@ func _show_settle_deferred() -> void:
 		_present_node()
 	else:
 		_save("settle") # 失败即分支：结算仍是元循环落笔（09 §7 失败不读档）
-		_show_settle(0)
+		_show_settle()
 
 ## 汇总区间 = 锚点之后的事件（04 §⑨：逐项念给玩家听）。
-func _show_settle(attr_gained: int) -> void:
+func _show_settle() -> void:
 	var lines: Array[String] = []
 	var xp := 0
+	var attr_gained := 0
 	for ev: Dictionary in stream.since(_encounter_tail):
 		var p: Dictionary = ev["payload"]
 		match StringName(ev["type"]):
 			EventTypes.XP_GAIN:
 				xp += int(p.get("amount", 0))
+			EventTypes.LEVEL_UP:
+				attr_gained += int(p.get("attr_points", 0)) # 升级即发放（tech/04 §8 规则2）
 			EventTypes.ITEM_GAIN:
 				lines.append("获得：%s ×%d（已入背包）" % [_item_name(str(p.get("item_id", ""))),
 					int(p.get("count", 1))])
 			EventTypes.FLAG_WRITE:
 				var fkey := str(p.get("key", ""))
 				# 内部簿记键（成长/模式选择/金币/HP）不念给玩家（04 §⑨ 呈现语义：旗标变化摘要）
-				if fkey.begins_with("campaign01.attr") or fkey == "campaign01.xp_total" \
+				if fkey.begins_with("global.growth.") or fkey.begins_with("campaign01.attr") \
+						or fkey == "campaign01.xp_total" \
 						or fkey == "campaign01.gold" or fkey.begins_with("campaign01.hp.") \
 						or fkey.begins_with("global.mode_choice."):
 					continue
@@ -471,7 +482,7 @@ func _show_settle(attr_gained: int) -> void:
 				lines.append("整备：技能 %s / 道具 %s" % [str(p.get("skills", [])), str(p.get("items", []))])
 	if xp > 0:
 		lines.insert(0, "经验 +%d" % xp)
-	var level := int(board.read("campaign01.level", 1))
+	var level := Growth.level(board)
 	if level > 1:
 		lines.append("等级：Lv.%d（11 §6 成长表）" % level)
 	if attr_gained > 0:
@@ -485,8 +496,8 @@ func _bind_settle() -> void:
 	_swap(screen)
 	screen.bind({"title": TextsZh.STORY_SLICE_END if _encounter_result == &"slice" else _battle_title,
 		"result": String(_encounter_result), "lines": _settle_lines,
-		"saved": true, "attr_points": int(board.read("campaign01.attr_points", 0)),
-		"attrs": board.read("campaign01.attrs", {})})
+		"saved": true, "attr_points": Growth.attr_points(board),
+		"attrs": Growth.attrs_map(board)})
 	screen.allocate.connect(_on_settle_allocate)
 	screen.go_home.connect(_show_home)
 	screen.go_history.connect(func() -> void:
@@ -494,35 +505,10 @@ func _bind_settle() -> void:
 		_show_history())
 
 func _on_settle_allocate(attr: String) -> void:
-	var points := int(board.read("campaign01.attr_points", 0))
-	if points <= 0:
-		return
-	if not _apply_attr_alloc({attr: 1}, points - 1):
-		return # 单项 +3 封顶（11 §6）：拒绝并保持界面
-	_bind_settle() # 刷新可用点数与已分配值
-
-## 成长（11 §6 成长表）：累计 XP 跨档即升级（300/700/1200），每级 HP+2、属性点 +1。
-## 簿记：xp_total / level / attr_points / attrs / attr_granted 全在包命名空间（可存档、带溯源）。
-## 返回本次新增属性点数。
-func _grant_growth() -> int:
-	var xp_total := 0
-	for ev: Dictionary in stream.query_by_type(EventTypes.XP_GAIN):
-		xp_total += int(ev["payload"].get("amount", 0))
 	var prov := {"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"}
-	board.write("campaign01.xp_total", xp_total, prov)
-	var level := LightV1.level_for_xp(xp_total)
-	if level > int(board.read("campaign01.level", 1)):
-		board.write("campaign01.level", level, prov)
-		stream.emit(EventTypes.LOG, {"msg": "等级提升至 Lv.%d：HP+%d，属性点+%d（11 §6）" % [level,
-			LightV1.hp_bonus_for_xp(xp_total), LightV1.attr_points_for_xp(xp_total)]}, &"core", graph.current_id)
-	var earned := LightV1.attr_points_for_xp(xp_total)
-	var granted := int(board.read("campaign01.attr_granted", 0))
-	var gained := maxi(0, earned - granted)
-	if gained > 0:
-		board.write("campaign01.attr_points",
-			int(board.read("campaign01.attr_points", 0)) + gained, prov)
-		board.write("campaign01.attr_granted", earned, prov)
-	return gained
+	if not Growth.new(board).alloc(attr, prov):
+		return # 点数不足或单项 +3 封顶（11 §6）：拒绝并保持界面
+	_bind_settle() # 刷新可用点数与已分配值
 
 # ---------------------------------------------------------------- ⑤⑥⑦⑧ 功能界面（04 §⑤⑥⑦⑧ 最小版）
 
@@ -544,7 +530,8 @@ func _show_character() -> void:
 	var bonds := {}
 	for key: String in board.keys_with_prefix("global.bond."):
 		bonds[key.trim_prefix("global.bond.")] = board.read(key)
-	screen.bind(_battle_def({})["party"], bonds)
+	# 成长区（tech/04 §8）：等级 / XP 进度 / 已分配属性 / 未分配点数
+	screen.bind(_battle_def({})["party"], bonds, Growth.xp_progress(board))
 	screen.back_requested.connect(_show_home)
 
 ## ⑧ 历史卷轴：从主屏 / 结算进入，返回来源界面（04 §5 出口列）。
@@ -656,6 +643,13 @@ func _sub_enter_battle() -> void:
 func _on_sub_loadout_confirmed(selection: Dictionary, cfg: Dictionary) -> void:
 	Loadout.confirm(stream, cfg, selection["skills"], selection["items"],
 		selection.get("attr_alloc", {}), _sub.graph.current_id, _sub.pack_id) # loadout.confirm（09 §9.1）
+	# 整备分配写板 global.growth.*（tech/04 §8 规则3；与战役整备同一通道）
+	var growth := Growth.new(board)
+	var prov := {"event_id": stream.tail(), "node_id": _sub.graph.current_id, "pack_id": _sub.pack_id}
+	for attr: String in (selection.get("attr_alloc", {}) as Dictionary).keys():
+		for i: int in int((selection["attr_alloc"] as Dictionary)[attr]):
+			if not growth.alloc(attr, prov):
+				push_warning("[main] 子游戏整备加点被拒（%s，封顶或点数不足，11 §6）" % attr)
 	_sub_begin_combat(selection)
 
 func _sub_begin_combat(selection: Dictionary) -> void:
@@ -729,13 +723,21 @@ func _sub_settle_lines(summary: Dictionary, result: StringName) -> Dictionary:
 		lines.append("全胜谢幕：擂台为你留名（arena.flawless 已落板）")
 	return {"title": "%s · %s" % [str((_sub.pack["manifest"] as Dictionary).get("name", _sub.pack_id)),
 			str(_sub.current().get("title", "连战结算"))],
-		"result": String(result), "lines": lines, "saved": true, "attr_points": 0, "attrs": {}}
+		"result": String(result), "lines": lines, "saved": true,
+		# 成长簿记归框架全局键（tech/04 §8）：子游戏结算屏同口径呈现与分配
+		"attr_points": Growth.attr_points(board), "attrs": Growth.attrs_map(board)}
 
 func _sub_bind_settle() -> void:
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(_sub_settle_cache)
-	screen.allocate.connect(func(_a: String) -> void: pass) # 子游戏不接战役加点（概念设计 §8 待裁决 3）
+	# 子游戏结算屏同接成长分配（tech/04 §8 规则3：结算屏分配；概念设计 §8 待裁决 3 随全局簿记结构消解）
+	screen.allocate.connect(func(attr: String) -> void:
+		if Growth.new(board).alloc(attr, {"event_id": stream.tail(),
+				"node_id": _sub.graph.current_id, "pack_id": _sub.pack_id}):
+			_sub_settle_cache["attr_points"] = Growth.attr_points(board)
+			_sub_settle_cache["attrs"] = Growth.attrs_map(board)
+			_sub_bind_settle()) # 刷新可用点数与已分配值
 	screen.go_home.connect(_sub_leave_home)
 	screen.go_history.connect(func() -> void:
 		_history_origin = &"sub_settle"
@@ -860,6 +862,22 @@ func _shot(path: String) -> void:
 	await RenderingServer.frame_post_draw
 	var err := get_viewport().get_texture().get_image().save_png(path)
 	print("[shots] ", path, " err=", err)
+
+# ---------------------------------------------------------------- 成长截图（角色界面⑦成长区证据 /tmp，不提交）
+
+## ⑦ 角色：汇入 350 XP（跨 300 档升 Lv.2）+ 力 +1 后的成长区呈现：`-- --growth-shots`。
+func _run_shots_growth() -> void:
+	await get_tree().create_timer(0.8).timeout
+	var prov := {"event_id": stream.tail(), "node_id": "", "pack_id": "campaign01"}
+	var growth := Growth.new(board)
+	growth.grant_xp(350, prov) # tech/04 §8 规则1/2：汇入即写 global.growth.xp，跨档自动升级
+	growth.alloc("might", prov) # 规则3：属性点分配
+	_encounter_id = "N1-7" # ⑦ 队伍卡数据源需要一场已登记遭遇（tech/02 §6）
+	_show_character()
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/growth_char.png")
+	print("[shots] 角色界面成长区完成：/tmp/growth_char.png")
+	get_tree().quit()
 
 # ---------------------------------------------------------------- M3 截图（子游戏证据 /tmp，不提交）
 

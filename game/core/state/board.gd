@@ -1,6 +1,6 @@
 # 世界状态板（docs/framework/07-世界状态机规范.md 全文；docs/tech/01-技术方案讨论稿.md §4）
 # - 键格式 "<namespace>.<name>"；六类变量是同一键值上的六个语义标签（07 §1、tech/01 §4.1）。
-# - 命名空间权限（07 §3）：包内旗标仅本包可写；global 白名单（rep/alignment/bond/inv/doom_clock/lore/tutorial.*/mode_choice.*）
+# - 命名空间权限（07 §3）：包内旗标仅本包可写；global 白名单（rep/alignment/bond/inv/doom_clock/lore/tutorial.*/mode_choice.*/growth.*）
 #   任何包可写；global.entitlement.* 仅 system 可写；越权一律拒绝并发 board.denied 告警事件。
 # - 写入即钳位并产出 clamped 事件（07 §2 约束：不静默）。
 # - 每次写入必须携带溯源 provenance={event_id, node_id, pack_id}（07 §1、tech/01 §4.2）。
@@ -172,6 +172,8 @@ func _can_write(key: String, pack_id: String) -> bool:
 			return true
 		if key.begins_with("global.mode_choice."):
 			return true # 战役入口模式选择（09 §3；07 §3 v1.1 补登记）
+		if key.begins_with("global.growth."):
+			return true # 成长簿记（07 §2 白名单；tech/04 §8：任何包 xp 效果即汇入）
 		return false # global 白名单之外一律拒绝
 	return ns == pack_id # 包内旗标仅本包可写；跨包写禁止
 

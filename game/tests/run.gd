@@ -240,6 +240,8 @@ func test_conditions() -> void:
 	exec.apply_effects([{"xp": 50}], ectx)
 	var xp_evs := s4.query_by_type(EventTypes.XP_GAIN)
 	check(xp_evs.size() == 1 and int(xp_evs[0]["payload"]["amount"]) == 50, "effect xp 产出 xp.gain 事件")
+	check(int(b4.read("global.growth.xp", 0)) == 50,
+		"effect xp 落板 global.growth.xp（tech/04 §8 规则1：任何包汇入）")
 	exec.apply_effects([{"lore": "ink_rain"}], ectx)
 	check(b4.has_lore("ink_rain"), "effect lore 解锁后 global.lore 含条目（07 §2）")
 	exec.apply_effects([{"lore": "ink_rain"}], ectx)
@@ -251,8 +253,9 @@ func test_conditions() -> void:
 	check(lore_evs[0]["payload"].get("added", []) == ["ink_rain"]
 		and lore_evs[1]["payload"].get("added", []) == [], "lore.unlock 事件负载含新增条目（重复解锁 added 为空）")
 
-	# 效果全部进事件流（07 §6）
-	check(s4.query_by_type(EventTypes.FLAG_WRITE).size() == 1, "effect 写板事件进事件流（flag.write）")
+	# 效果全部进事件流（07 §6）；xp 汇入成长后 global.growth.xp 写板也产 flag.write（tech/04 §8）
+	check(s4.query_by_type(EventTypes.FLAG_WRITE).size() == 2,
+		"effect 写板事件进事件流（flag.write：旗标 + growth.xp 簿记）")
 	check(s4.query_by_type(EventTypes.CLOCK_TICK).size() == 2, "effect 写板事件进事件流（clock.tick）")
 	check(s4.query_by_type(EventTypes.ITEM_GAIN).size() == 1
 		and s4.query_by_type(EventTypes.ITEM_REMOVE).size() == 1, "effect 物品事件进事件流")
@@ -1219,7 +1222,7 @@ func test_save_system() -> void:
 	var loaded := SaveSystem.read("test_tp4")
 	check(bool(loaded["ok"]), "读档成功")
 	var mig := SaveSystem.migrate(loaded["snapshot"])
-	check(bool(mig["ok"]), "v1 迁移链直通（07 §4.3）")
+	check(bool(mig["ok"]), "v2 迁移链直通（07 §4.3）")
 	var board2 := Board.new(EventStream.new())
 	var rng2 := Rng.new(1)
 	SaveSystem.apply(mig["snapshot"], board2, rng2)
@@ -1232,6 +1235,45 @@ func test_save_system() -> void:
 	var future: Dictionary = snap.duplicate(true)
 	future["save_version"] = SaveSystem.SAVE_VERSION + 1
 	check(not bool(SaveSystem.migrate(future)["ok"]), "未来版本快照拒绝（07 §4.3 不降级读取）")
+	# ---- v1→v2 迁移器（tech/04 §8 规则4，07 §4.3 迁移链首用例）：旧包内成长键并入 global.growth.* ----
+	var v1 := {
+		"save_version": 1,
+		"board": {"data": {
+				"campaign01.xp_total": 350, "campaign01.level": 2, "campaign01.attr_points": 1,
+				"campaign01.attrs": {"might": 1}, "campaign01.attr_granted": 1,
+				"campaign01.seen_fading": true, "global.doom_clock": 2},
+			"provenance": {"campaign01.xp_total": {"event_id": 9, "node_id": "N1-8", "pack_id": "campaign01"}}},
+		"event_tail": 9, "bindings": {"packs": {"campaign01": 1}}, "rng_seed": {}, "meta": {}}
+	var m12 := SaveSystem.migrate(v1)
+	check(bool(m12["ok"]) and int((m12["snapshot"] as Dictionary)["save_version"]) == SaveSystem.SAVE_VERSION,
+		"v1 存档经迁移链升到当前版本")
+	var mdata: Dictionary = ((m12["snapshot"] as Dictionary)["board"] as Dictionary)["data"]
+	check(int(mdata.get("global.growth.xp", 0)) == 350 and int(mdata.get("global.growth.level", 1)) == 2
+		and int(mdata.get("global.growth.attr_points", 0)) == 1
+		and int(mdata.get("global.growth.attrs.might", 0)) == 1,
+		"迁移并入：xp/level/attr_points/attrs.<attr> → global.growth.*")
+	for old_key: String in ["campaign01.xp_total", "campaign01.level", "campaign01.attr_points",
+			"campaign01.attrs", "campaign01.attr_granted"]:
+		check(not mdata.has(old_key), "迁移清除旧键：%s" % old_key)
+	check(not (((m12["snapshot"] as Dictionary)["board"] as Dictionary)["provenance"] as Dictionary)
+			.has("campaign01.xp_total"), "迁移清除旧键溯源")
+	check(mdata.get("campaign01.seen_fading") == true and int(mdata.get("global.doom_clock", 0)) == 2,
+		"迁移不动其他键（旗标/时钟原样）")
+	# 旧档缺 level 键（从未结算过成长）：按门槛表重算等级并补发未发放的升级点
+	var v1b := {"save_version": 1,
+		"board": {"data": {"campaign01.xp_total": 700}, "provenance": {}},
+		"event_tail": 1, "bindings": {}, "rng_seed": {}, "meta": {}}
+	var m12b: Dictionary = SaveSystem.migrate(v1b)["snapshot"]
+	var mb: Dictionary = (m12b["board"] as Dictionary)["data"]
+	check(int(mb.get("global.growth.level", 1)) == 3
+		and int(mb.get("global.growth.attr_points", 0)) == 2,
+		"迁移兜底：缺 level 键按 700 XP 重算 Lv.3 并补发 2 点（11 §6）")
+	# 迁移后可直接应用并继续汇入（老存档兼容，迭代不破坏）
+	var board3 := Board.new(EventStream.new())
+	SaveSystem.apply(m12["snapshot"], board3, Rng.new(1))
+	Growth.new(board3).grant_xp(50, {"event_id": 10, "node_id": "N1-8", "pack_id": "campaign01"})
+	check(Growth.xp(board3) == 400 and Growth.attrs_total(board3, "might") == 1,
+		"迁移档应用后继续汇入成长（400 XP）且已分配属性保留")
 
 # ---------------------------------------------------------------- Loadout（09 §9.1 / tech-02 §2.4，TP4）
 
@@ -1281,6 +1323,54 @@ func test_growth() -> void:
 	check(LightV1.skill_slot_bonus(2) == 0 and LightV1.skill_slot_bonus(3) == 1,
 		"2→3 级技能槽 +1（11 §6）")
 	check(LightV1.ATTR_POINT_CAP == 3, "单项属性加点 +3 封顶（11 §6）")
+
+	# ---- Growth 系统（tech/04 §8 定稿）：簿记归框架全局键 global.growth.*（07 §2 白名单）----
+	var gs := EventStream.new()
+	var gb := Board.new(gs)
+	var growth := Growth.new(gb)
+	var prov := {"event_id": 1, "node_id": "N1-7", "pack_id": "arena"} # 子游戏命名空间同通道（§8 规则1）
+	check(Growth.xp(gb) == 0 and Growth.level(gb) == 1 and Growth.attr_points(gb) == 0,
+		"成长初始：xp 0 / Lv.1 / 属性点 0")
+	var r1: Dictionary = growth.grant_xp(299, prov)
+	check(int(r1["xp"]) == 299 and int(r1["leveled"]) == 0 and Growth.level(gb) == 1,
+		"汇入 299：写 global.growth.xp，未跨档不升级")
+	check(gs.query_by_type(EventTypes.XP_GAIN).size() == 1
+		and gs.query_by_type(EventTypes.LEVEL_UP).is_empty(), "xp.gain 事件产出，未升级无 level.up")
+	var r2: Dictionary = growth.grant_xp(1, prov)
+	check(int(r2["leveled"]) == 1 and Growth.level(gb) == 2 and Growth.attr_points(gb) == 1,
+		"跨档即升级：300 → Lv.2、属性点 +1（11 §6 门槛表归规则包）")
+	var lup := gs.query_by_type(EventTypes.LEVEL_UP)
+	check(lup.size() == 1 and int(lup[0]["payload"]["level"]) == 2
+		and int(lup[0]["payload"]["hp_bonus"]) == LightV1.LEVEL_HP_BONUS,
+		"level.up 事件：等级/HP 加值/属性点负载")
+	var r3: Dictionary = growth.grant_xp(900, prov) # 300→1200 连跨两档
+	check(int(r3["leveled"]) == 2 and Growth.level(gb) == 4 and Growth.attr_points(gb) == 3,
+		"连跨档：1200 → Lv.4、累计属性点 +3")
+	check(gs.query_by_type(EventTypes.LEVEL_UP).size() == 3, "连跨两档：每级一条 level.up")
+	# 分配（§8 规则3）：attrs.<attr> 平铺键 + attr.alloc 事件
+	check(growth.can_alloc("might"), "有点数可分配")
+	check(growth.alloc("might", prov) and Growth.attrs_total(gb, "might") == 1
+		and Growth.attr_points(gb) == 2, "分配：might +1、点数 -1")
+	var alloc_evs := gs.query_by_type(EventTypes.ATTR_ALLOC)
+	check(alloc_evs.size() == 1 and str(alloc_evs[0]["payload"]["attr"]) == "might"
+		and int(alloc_evs[0]["payload"]["points_left"]) == 2, "attr.alloc 事件（09 §9.1 分配时机）")
+	growth.alloc("might", prov)
+	growth.alloc("might", prov) # might 3 点满
+	check(Growth.attr_points(gb) == 0 and not growth.can_alloc("might"), "点数耗尽不可再分配")
+	var gb2 := Board.new(EventStream.new())
+	var g2 := Growth.new(gb2)
+	var prov2 := {"event_id": 1, "node_id": "", "pack_id": "campaign01"}
+	g2.grant_xp(1200, prov2) # 3 点全投同一项：验证 +3 封顶
+	check(g2.alloc("finesse", prov2) and g2.alloc("finesse", prov2) and g2.alloc("finesse", prov2),
+		"单项连续分配至 +3")
+	check(not g2.can_alloc("finesse") and not g2.alloc("finesse", prov2),
+		"单项 +3 封顶：第 4 点拒绝（11 §6）")
+	check(Growth.attrs_map(gb2)["finesse"] == 3, "attrs_map 读取已分配值（战斗修正源）")
+	var prog := Growth.xp_progress(gb2)
+	check(int(prog["level"]) == 4 and int(prog["next"]) == 0, "xp 进度：满级 next=0（⑦ 呈现「已满级」）")
+	# growth 键任何包可写（07 §3 白名单）：以上子游戏命名空间写入全程无 board.denied
+	check(gs.query_by_type(EventTypes.BOARD_DENIED).is_empty(),
+		"global.growth.* 白名单任何包可写（07 §3，无越权拒绝）")
 
 # ---------------------------------------------------------------- L3 事件运行时（tech/02 §5，TP4 接入 story_graph）
 
@@ -1727,11 +1817,13 @@ func test_subgame_arena() -> void:
 		check(issues.any(func(i: Dictionary) -> bool:
 			return i["v"] == v and i["level"] == PacklintCore.LEVEL_PASS), "arena packlint %s PASS" % v)
 	# ---- core 零改动（白皮书 §10.2 "子游戏不动框架" 的硬证据）----
+	# 钉版区间：M2 落地提交 ec946ef → M3 子游戏提交 ad46102（此后 core 的演进属后续里程碑，
+	# 如 tech/04 §8 成长系统是框架层能力升级，不削弱"子游戏落地当时不动框架"的证据）。
 	var git_out: Array = []
 	OS.execute("git", ["-C", ProjectSettings.globalize_path("res://.."), "diff", "--name-only",
-		"HEAD", "--", "game/core/"], git_out, true)
+		"ec946ef", "ad46102", "--", "game/core/"], git_out, true)
 	var diff_text := "".join(git_out).strip_edges()
-	check(diff_text.is_empty(), "core/ 目录 git diff 为空（子游戏不动框架）：%s" % diff_text)
+	check(diff_text.is_empty(), "M3 区间 core/ 目录 git diff 为空（子游戏不动框架）：%s" % diff_text)
 
 	# ---- 连战三场全胜流程（复用 EncounterSM ×3；奖励写板；战绩旗标）----
 	var stream := EventStream.new()
@@ -1775,6 +1867,8 @@ func test_subgame_arena() -> void:
 	for ev: Dictionary in stream.query_by_type(EventTypes.XP_GAIN):
 		xp_sum += int(ev["payload"]["amount"])
 	check(xp_sum == 250, "三场经验 50+80+120=250（encounters.xp 数据驱动）")
+	check(Growth.xp(board) == 250,
+		"子游戏经验喂养角色成长：胜利 xp 经同一 xp 效果汇入 global.growth.xp（tech/04 §8 规则1）")
 	var summary := runner.finish_run(&"victory")
 	check(int(summary["wins"]) == 3 and int(summary["gold"]) == 100 and int(summary["best"]) == 3,
 		"收场汇总：3 胜 / 100 金 / 最佳 3")
@@ -2243,12 +2337,15 @@ func test_ui_screens() -> void:
 	root.add_child(ch)
 	await process_frame
 	ch.bind([{"id": "pc", "name": "白页者", "hp": 14, "max_hp": 14, "attrs": {"might": 2, "finesse": 1, "wits": 0},
-		"skills": [{"name": "墨术飞矢"}]}], {"kelan": 10})
+		"skills": [{"name": "墨术飞矢"}]}], {"kelan": 10},
+		{"xp": 350, "level": 2, "floor": 300, "next": 700, "attr_points": 0, "attrs": {"might": 1}})
 	var ch_text := ""
 	for child: Node in ch.list_box.get_children():
 		if child is Label:
 			ch_text += (child as Label).text
 	check(ch_text.contains("白页者") and ch_text.contains("kelan 10/100"), "角色：队伍卡 + 羁绊只读（04 §⑦）")
+	check(ch_text.contains("Lv.2") and ch_text.contains("350/700") and ch_text.contains("力 +1"),
+		"角色⑦：成长区呈现等级 / XP 进度 / 已分配属性（tech/04 §8）")
 	ch.queue_free()
 	await process_frame
 
@@ -2476,9 +2573,10 @@ func test_main_flow() -> void:
 	lo2._on_confirm()
 	await create_timer(1.4).timeout
 	check(m._in_encounter, "主屏「继续」→ 再进遭遇（04 §① 继续进行中的战役）")
-	m.stream.emit(EventTypes.XP_GAIN, {"amount": 300,
-		"provenance": {"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"}},
-		&"core", "N1-7") # 模拟 EncounterSM 胜利经验（真实战斗由 TP2 通道已验）；序章 50 + 300 = 350 跨 300 档
+	# 模拟 EncounterSM 胜利经验（真实战斗由 TP2 通道已验；与 encounter_sm 同一 Growth 通道，
+	# tech/04 §8 规则1/2：汇入即写板 + 自动升级）；序章 50 + 300 = 350 跨 300 档
+	Growth.new(m.board).grant_xp(300,
+		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
 	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", "N1-7")
 	await create_timer(1.6).timeout
 	# ---- branch（N1-8）：独狼隐藏边按声望显隐 ----
@@ -2513,7 +2611,7 @@ func test_main_flow() -> void:
 	check(FileAccess.file_exists(save_path), "快照在结算落盘（07 §4.2 主快照点）")
 	var read_back := SaveSystem.read("slot1")
 	check(bool(read_back["ok"]) and bool(SaveSystem.migrate(read_back["snapshot"])["ok"]),
-		"结算快照可读可迁移（v1 直通）")
+		"结算快照可读可迁移（当前版本直通，07 §4.3）")
 	check(m.stream.query_by_type(EventTypes.QUEST_TRIGGER).any(
 		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "archive_quest"),
 		"branch 选择 → choice 触发 L3 事件（档案馆委托，tech/02 §5）")
@@ -2524,20 +2622,21 @@ func test_main_flow() -> void:
 	check(summary.contains("经验 +350") and summary.contains("声望：scriptorium +1")
 		and summary.contains("旗标：campaign01.seen_fading") and not summary.contains("campaign01.gold"),
 		"结算汇总：切片全程逐项念出（XP/声望/旗标；簿记键不念，04 §⑨）")
-	var points := int(m.board.read("campaign01.attr_points", 0))
-	check(points == 1 and int(m.board.read("campaign01.level", 1)) == 2,
-		"成长：350 XP 跨 300 档 → Lv.2、属性点 +1（11 §6 成长表）")
+	var points := Growth.attr_points(m.board)
+	check(points == 1 and Growth.level(m.board) == 2 and Growth.xp(m.board) == 350,
+		"成长：350 XP 跨 300 档 → Lv.2、属性点 +1（11 §6；簿记 global.growth.*，tech/04 §8）")
 	check(int((m._battle_def({})["party"] as Array)[0]["max_hp"]) == 16,
 		"成长：Lv.2 HP+2（14→16，11 §6）")
 	m._on_settle_allocate("might")
-	check(int(m.board.read("campaign01.attr_points", 0)) == points - 1
-		and int((m.board.read("campaign01.attrs", {}) as Dictionary).get("might", 0)) == 1,
-		"结算加点写板（属性点 -1，力 +1）")
+	check(Growth.attr_points(m.board) == points - 1 and Growth.attrs_total(m.board, "might") == 1,
+		"结算加点写板 global.growth.*（属性点 -1，力 +1）")
 	# 单项 +3 封顶（11 §6）
-	m.board.write("campaign01.attrs", {"might": 3, "finesse": 0, "wits": 0},
+	m.board.write("global.growth.attrs.might", 3,
 		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
-	check(not m._apply_attr_alloc({"might": 1}, 0), "单项 +3 封顶：力 +1 拒绝（11 §6）")
-	check(m._apply_attr_alloc({"finesse": 1}, 0), "未满项仍可分配（敏 +1）")
+	m.board.write("global.growth.attr_points", 2,
+		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
+	check(not m._apply_attr_alloc({"might": 1}), "单项 +3 封顶：力 +1 拒绝（11 §6）")
+	check(m._apply_attr_alloc({"finesse": 1}), "未满项仍可分配（敏 +1）")
 	# 结算 → 卷轴 → 回结算 → 回主屏（04 §5 双列检查）
 	(m.current_screen as ScreenSettle).go_history.emit()
 	await process_frame

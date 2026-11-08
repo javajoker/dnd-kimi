@@ -108,7 +108,8 @@ static func toast_text(ev: Dictionary, pack: Dictionary = {}) -> String:
 	match StringName(ev["type"]):
 		EventTypes.FLAG_WRITE:
 			var key := str(p.get("key", ""))
-			if key.begins_with("campaign01.attr") or key == "campaign01.xp_total" \
+			if key.begins_with("global.growth.") or key.begins_with("campaign01.attr") \
+					or key == "campaign01.xp_total" \
 					or key == "campaign01.level" or key == "campaign01.gold" \
 					or key.begins_with("campaign01.hp.") or key.begins_with("global.mode_choice."):
 				return ""

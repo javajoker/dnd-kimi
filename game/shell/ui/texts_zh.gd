@@ -175,6 +175,10 @@ const INV_CODEX := "图鉴"
 # ⑦ 角色（04 §⑦）
 const CHAR_TITLE := "角色"
 const CHAR_BOND := "羁绊"
+# 成长区（tech/04 §8）：等级 / XP 进度 / 已分配属性 / 未分配点数
+const CHAR_GROWTH := "成长：Lv.%d　经验 %d/%s"
+const CHAR_GROWTH_MAX := "成长：Lv.%d　经验 %d（已满级）"
+const CHAR_GROWTH_ATTRS := "已分配：力 %+d 敏 %+d 智 %+d　未分配点数：%d"
 
 # 帮助页 · 手势图鉴（12 §4：常驻，主动进入；§1~§2 全表摘要）
 const HELP_TITLE := "手势图鉴"

@@ -44,8 +44,10 @@ const QUEST_SETTLE := &"quest.settle"
 # 整备（09 §9.1 / tech/02 §2.4：整备选择写入事件流，历史卷轴可追溯"这局带了什么"）
 const LOADOUT_CONFIRM := &"loadout.confirm"
 
-# 成长 / 图鉴（tech/02 §4.6 效果词汇）
-const XP_GAIN := &"xp.gain"        # xp 在 07 无落板键，只进事件流（待裁决，属 tech/04 成长系统）
+# 成长 / 图鉴（tech/02 §4.6 效果词汇；tech/04 §8 成长系统定稿）
+const XP_GAIN := &"xp.gain"        # xp 效果即写 global.growth.xp（任何包汇入，tech/04 §8 规则1）
+const LEVEL_UP := &"level.up"      # 跨档升级（门槛表归规则包，11 §6；tech/04 §8 规则2）
+const ATTR_ALLOC := &"attr.alloc"  # 属性点分配（结算屏/整备界面，单项 ≤+3 封顶，tech/04 §8 规则3）
 const LORE_UNLOCK := &"lore.unlock"  # lore 落板 global.lore（07 §2 约束）时由 Board 产出
 
 # 框架告警（不静默原则，07 §2 约束）

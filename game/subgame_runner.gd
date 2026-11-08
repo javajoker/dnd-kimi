@@ -2,7 +2,8 @@
 # 引导层（与 main.gd 同层，非 core/shell）：复用 StoryGraph 走子游戏节点图 + EncounterSM 打每场战斗，
 # 全部行为数据驱动自内容包——节点/边/遭遇/敌人读 pack 各表；奖励与战绩键读 manifest.subgame 声明
 # （gold_reward 每场金币、stat_keys 战绩簿记键；tech/02 §2 subgame 变体块，待裁决登记见概念设计 §8）。
-# 写板一律经 Board 公共 API 带溯源（07 §1），与 main.gd 成长簿记（_grant_growth）同一先例；
+# 写板一律经 Board 公共 API 带溯源（07 §1）；经验随 EncounterSM 胜利结算经 Growth 汇入
+# global.growth.*（tech/04 §8 规则1：子游戏经验喂养角色成长，概念设计 §8 待裁决 3 随定稿消解）；
 # core/ 零改动——本类的存在本身即 §10.2"子游戏不动框架"的验证证据。
 class_name SubgameRunner
 extends RefCounted
@@ -117,5 +118,6 @@ func loadout_candidates() -> Dictionary:
 		if it.has("use") and board.has_item(iid):
 			items.append({"id": iid, "name": str(it.get("name", iid)), "count": board.item_count(iid)})
 	return {"skills": skill_pool, "items": items,
-		"attr_points": 0, "attrs": {}, # 子游戏不接入战役成长加点（概念设计 §8 待裁决 3）
+		# 成长簿记归框架全局键（tech/04 §8）：子游戏整备同口径分配（概念设计 §8 待裁决 3 结构消解）
+		"attr_points": Growth.attr_points(board), "attrs": Growth.attrs_map(board),
 		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0}}

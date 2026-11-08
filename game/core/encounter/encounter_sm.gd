@@ -547,8 +547,8 @@ func _finish(result: StringName) -> void:
 		for l: Variant in _loot:
 			board.give_item(str((l as Dictionary).get("item", "")), int((l as Dictionary).get("n", 1)), prov)
 		if _xp > 0:
-			stream.emit(EventTypes.XP_GAIN, {"amount": _xp, "provenance": prov.duplicate(true)},
-				&"core", node_id)
+			# 遭遇经验 = xp 效果同一通道：写 global.growth.xp 并自动结算升级（tech/04 §8 规则1/2）
+			Growth.new(board).grant_xp(_xp, prov)
 	# 11 §7.1：遭遇结束时 HP 写状态板（<ns>.hp.<char_id>），下次遭遇以此开局；
 	# 倒地同伴战后 1 HP 起身（上方 _revive 已落 hp=1）；非死亡单位至少 1 HP 落板（团灭=失败路分支，
 	# 不做永久团灭锁死），死亡单位写 0（组装层按 1 HP 抬升，11 §7.1 落地裁决见交付说明）。

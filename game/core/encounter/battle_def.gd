@@ -5,7 +5,7 @@
 #   普攻修正/伤害骰 = 角色 basic_attack 技能的 attr 属性值与 damage（tech/04 §2 basic_attack）；
 #   出战技能 = 整备选择 ∩（角色已习得 ∩ skills.json）（tech/04 §7）；
 #   道具 = 整备选择 ∩ 背包持有 ∩ items.json 含 use 块（tech/04 §4）；
-#   玩家模板叠加成长：属性点分配（11 §6，board <pack>.attrs）与每级 HP+2（LightV1.hp_bonus_for_xp）；
+#   玩家模板叠加成长：属性点分配与每级 HP+2（11 §6；簿记 global.growth.*，tech/04 §8）；
 #   首回合优势 = 遭遇 party_advantage 旗标声明（11 §3.1：来源由内容包声明）。
 # 纯数据组装，零引擎依赖；任何引用缺失/公式求值失败 → ok=false 并逐条报错（引导层 fail-fast）。
 class_name BattleDef
@@ -85,11 +85,11 @@ static func _build_character_unit(inst_id: String, ref: String, c: Dictionary, p
 	var hp_bonus := 0
 	var level := 1
 	if kind == "player_template":
-		# 成长叠加（11 §6）：属性点分配进最终属性；HP 加值只加 HP（11 §6 与属性点解耦）
-		alloc = board.read("%s.attrs" % pack_id, {})
-		var xp_total := int(board.read("%s.xp_total" % pack_id, 0))
-		level = LightV1.level_for_xp(xp_total)
-		hp_bonus = LightV1.hp_bonus_for_xp(xp_total)
+		# 成长叠加（11 §6；簿记归框架全局键 global.growth.*，tech/04 §8）：
+		# 属性点分配进最终属性；HP 加值只加 HP（11 §6 与属性点解耦）
+		alloc = Growth.attrs_map(board)
+		level = Growth.level(board)
+		hp_bonus = (level - 1) * LightV1.LEVEL_HP_BONUS
 	# hp/ac：公式以模板基础属性求值（属性点分配不影响 hp/ac 基值，11 §6 成长只走 hp_bonus）
 	var fvars := {"might": int(base_attrs.get("might", 0)), "finesse": int(base_attrs.get("finesse", 0)),
 		"wits": int(base_attrs.get("wits", 0)), "level": level}

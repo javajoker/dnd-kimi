@@ -39,10 +39,25 @@ func _build() -> void:
 	back_button.pressed.connect(func() -> void: back_requested.emit())
 	v.add_child(back_button)
 
-## party = 角色 def 数组（{id,name,attrs,skills}）；bonds = {npc_id: value}。
-func bind(party: Array, bonds: Dictionary) -> void:
+## party = 角色 def 数组（{id,name,attrs,skills}）；bonds = {npc_id: value}；
+## growth = Growth.xp_progress 快照（{xp,level,floor,next,attr_points,attrs}，tech/04 §8，可空）。
+func bind(party: Array, bonds: Dictionary, growth: Dictionary = {}) -> void:
 	for child: Node in list_box.get_children():
 		child.queue_free()
+	if not growth.is_empty():
+		var gl := Label.new()
+		var lv := int(growth.get("level", 1))
+		var xp := int(growth.get("xp", 0))
+		var next := int(growth.get("next", 0))
+		gl.text = TextsZh.CHAR_GROWTH_MAX % [lv, xp] if next <= 0 \
+			else TextsZh.CHAR_GROWTH % [lv, xp, str(next)]
+		list_box.add_child(gl)
+		var ga := Label.new()
+		var attrs: Dictionary = growth.get("attrs", {})
+		ga.text = TextsZh.CHAR_GROWTH_ATTRS % [int(attrs.get("might", 0)), int(attrs.get("finesse", 0)),
+			int(attrs.get("wits", 0)), int(growth.get("attr_points", 0))]
+		ga.add_theme_color_override("font_color", Color(0.75, 0.75, 0.8))
+		list_box.add_child(ga)
 	for u: Variant in party:
 		var d: Dictionary = u
 		var attrs: Dictionary = d.get("attrs", {})
