@@ -285,6 +285,9 @@ function showLoadout(node) {
     <div class="lo-card">
       <div class="lo-title">整备 · ${node.title}</div>
       <div class="lo-sub">战斗前选择携带方案（本战役配置：技能 ≤${cfg.skill_slots}，道具 ≤${cfg.item_slots}${cfg.respec ? "，可重洗属性" : ""}）</div>
+      <div class="lo-sec"><div class="lo-h">一键预设（09 §9.3）</div><div class="lo-chips">
+        ${(cfg.presets || []).map(p => `<button class="chip" onclick="applyPreset('${p.id}')">⚡ ${p.name}<span class="chip-sub">${p.skills.map(s => PACK.player.skills.find(x => x.id === s).name).join("+")}</span></button>`).join("")}
+      </div></div>
       <div class="lo-sec"><div class="lo-h">技能备选（${loSel.skills.size}/${cfg.skill_slots}）</div><div class="lo-chips">${skillChips}</div></div>
       <div class="lo-sec"><div class="lo-h">道具携带（${loSel.items.size}/${cfg.item_slots}）</div><div class="lo-chips" id="lo-items">${itemChips}</div></div>
       ${alloc}
@@ -309,6 +312,14 @@ function loToggleItem(id) {
 function refreshLoadout() {
   document.querySelector(".loadout")?.remove();
   showLoadout(PACK.nodes[runtime.node]);
+}
+function applyPreset(id) {
+  const p = PACK.loadout.presets.find(x => x.id === id);
+  if (!p) return;
+  loSel.skills = new Set(p.skills.filter(s => PACK.player.skills.some(x => x.id === s)));
+  loSel.items = new Set(p.items.filter(i => Board.inv.includes(i)));
+  toast(`已套用预设「${p.name}」——可继续微调`);
+  refreshLoadout();
 }
 function confirmLoadout(nodeId) {
   runtime.loadout = { skills: [...loSel.skills], items: [...loSel.items] };
@@ -418,6 +429,14 @@ function actionHTML(node) {
   return h;
 }
 function showRumor() { toast("传闻：" + PACK.nodes["N1-1"].rumor); }
+function toggleLogExpand() {
+  const btm = $("#ls-bottom");
+  btm.classList.toggle("open");
+  btm.innerHTML = btm.classList.contains("open")
+    ? logHTML()
+    : `📜 ${lastLogLine()} <span style="float:right;color:var(--gold-dim)">点击展开</span>`;
+  if (btm.classList.contains("open")) btm.scrollTop = btm.scrollHeight;
+}
 function doRest() {
   PACK.player.hp = PACK.player.maxhp;
   PACK.companions.forEach(c => c.hp = c.maxhp);
@@ -514,6 +533,7 @@ function startBattle(node) {
   runtime.battle = {
     spec, round: 1, busy: false, over: false, fled: false,
     moved: false, bonusUsed: false,
+    auto: false, autoSpeed: 1, lastAutoAct: 0,
     enemies: Array.from({ length: spec.count }, (_, i) => ({
       name: spec.name + (spec.count > 1 ? "·" + "甲乙"[i] : ""), hp: spec.hp, ac: spec.ac, atk: spec.atk, dmg: spec.dmg
     })),
@@ -556,12 +576,62 @@ function trayHTML() {
   }).join("");
   return skillChips + itemChips;
 }
+function autoButtonHTML() {
+  const b = runtime.battle;
+  if (!b || b.over) return "";
+  if (!b.auto) return `<button class="btn center" onclick="toggleAuto()">▶ 托管（代掷骰 · 按预设策略）</button>`;
+  return `<button class="btn center" onclick="toggleAuto()">⏸ 接管（托管中）</button>
+    <button class="btn center" onclick="toggleAutoSpeed()">⏩ 节拍 ${b.autoSpeed}×（≥${(PACK.auto.min_interval_ms / b.autoSpeed / 1000).toFixed(1)}s/动作）</button>`;
+}
 function battleActionsHTML() {
   const b = runtime.battle;
   if (!b || b.over) return `<button class="btn primary" onclick="winBattle()">战斗结束 → 结算</button>`;
+  if (b.auto) return `<div class="check-hint">🤖 托管中：代掷骰 · 按预设策略执行 · 随时接管</div>` + autoButtonHTML();
   if (b.busy) return `<div class="check-hint">敌方行动中……</div>`;
   return `<div class="check-hint">动作 + 附赠 + 移动　|　<b>快捷栏芯片</b>：点按=默认目标 · 拖到目标=指定使用</div>
-    <button class="btn center" onclick="endTurn()">⏭ 结束回合（双指点击战场同效）</button>`;
+    <button class="btn center" onclick="endTurn()">⏭ 结束回合（双指点击战场同效）</button>` + autoButtonHTML();
+}
+/* ---------- 托管代理（09 §9.3：与手操同一指令通道，节拍下限，随时接管） ---------- */
+function toggleAuto() {
+  const b = runtime.battle;
+  if (!b || b.over) return;
+  b.auto = !b.auto;
+  b.lastAutoAct = 0;
+  addLog(b.auto ? `<b>🤖 托管开启</b>：代理按预设策略执行（代掷骰，节拍 ≥${PACK.auto.min_interval_ms / b.autoSpeed / 1000}s/动作）。` : `<b>✋ 接管</b>：托管停止，回到手操。`);
+  emit("auto.toggle", { on: b.auto });
+  renderEncounter();
+}
+function toggleAutoSpeed() {
+  const b = runtime.battle;
+  b.autoSpeed = b.autoSpeed === 1 ? 2 : 1;
+  emit("auto.speed", { speed: b.autoSpeed });
+  renderEncounter();
+}
+setInterval(() => {                                   // 代理调度器：300ms 巡视，节拍下限约束实际动作
+  const b = runtime.battle;
+  if (runtime.screen !== "encounter" || !b || !b.auto || b.over || b.busy) return;
+  const minInterval = PACK.auto.min_interval_ms / b.autoSpeed;
+  if (Date.now() - b.lastAutoAct < minInterval) return;
+  b.lastAutoAct = Date.now();
+  autoAct(b);
+}, 300);
+function autoAct(b) {
+  // 策略 1：HP 低于阈值且有携带药水 → 附赠用药
+  if (!b.bonusUsed && PACK.player.hp <= PACK.player.maxhp * PACK.auto.potion_below) {
+    const potion = runtime.loadout.items.find(id => Board.inv.includes(id) && PACK.items[id].use);
+    if (potion) { addLog(`🤖 <b>托管</b>：血量过半失，使用药水。`); useItemInBattle(potion); return; }
+  }
+  // 策略 2：按整备顺序找第一个仍有次数的技能（代掷骰）
+  for (const id of runtime.loadout.skills) {
+    const s = PACK.player.skills.find(x => x.id === id);
+    if (!s) continue;
+    if (s.uses && (b.skillUses[s.id] || 0) >= s.uses) continue;
+    addLog(`🤖 <b>托管</b>：执行「${s.name}」（d20 代掷）。`);
+    attackSkill(s);
+    return;
+  }
+  // 策略 3：无可用动作 → 结束回合
+  endTurn();
 }
 function useItemInBattle(id) {
   const b = runtime.battle, it = PACK.items[id];
@@ -646,6 +716,7 @@ function winBattle() {
   const node = PACK.nodes[runtime.node];
   const fled = runtime.battle && runtime.battle.fled;
   PACK.player.ac = PACK.player.baseAc || 11;        // 战斗增益散场清除
+  runtime.battle.auto = false;                       // 遭遇结束托管自停（09 §9.3）
   const w = node.encounter && node.onWin || {};
   if (!fled) {
     if (w.xp) addXp(w.xp);
@@ -680,7 +751,7 @@ function renderEncounterLandscape() {
       <div id="ls-right">${lsDiceHTML()}</div>
     </div>
     ${inBattle ? `<div id="ls-tray">${trayHTML()}</div>` : ""}
-    <div id="ls-bottom" onclick="this.classList.toggle('open')" title="上滑/点击展开半屏日志">📜 ${lastLogLine()} <span style="float:right;color:var(--gold-dim)">点击展开</span></div>
+    <div id="ls-bottom" onclick="toggleLogExpand()" title="上滑/点击展开半屏日志">📜 ${lastLogLine()} <span style="float:right;color:var(--gold-dim)">点击展开</span></div>
   </div>`;
   const btm = $("#ls-bottom");
   if (btm.classList.contains("open")) btm.innerHTML = logHTML();
@@ -689,9 +760,10 @@ function renderEncounterLandscape() {
 function lsActionsHTML(node) {
   if (runtime.phase === "battle" && runtime.battle) {
     if (runtime.battle.over) return `<button class="btn primary act" onclick="winBattle()">结算 →</button>`;
+    if (runtime.battle.auto) return `<div class="check-hint" style="font-size:10px">🤖 托管中</div>` + autoButtonHTML();
     if (runtime.battle.busy) return `<div class="check-hint">敌方行动中…</div>`;
     return `<div class="check-hint" style="font-size:10px">快捷栏芯片：点按=默认 · 拖动=指定目标</div>
-      <button class="btn act" onclick="endTurn()">结束回合</button>`;
+      <button class="btn act" onclick="endTurn()">结束回合</button>` + autoButtonHTML();
   }
   if (node.type === "check" && !node._rolled) {
     const c = node.check;

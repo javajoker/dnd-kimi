@@ -5,7 +5,15 @@ const PACK = {
   id: "campaign01",
   name: "烬港残页",
   // 整备配置（09 §9.1 / tech02 §2.4）：限制由配置文件决定，框架只执行
-  loadout: { enabled: true, item_slots: 2, skill_slots: 2, respec: false },
+  loadout: { enabled: true, item_slots: 2, skill_slots: 2, respec: false,
+    // 系统预设（09 §9.3）：只是槽位选择记录，不含数值加成
+    presets: [
+      { id:"assault", name:"强攻", skills:["slash","inkbolt"],    items:["heal_potion"] },
+      { id:"guard",   name:"稳守", skills:["slash","inkshield"],  items:["heal_potion"] },
+      { id:"balance", name:"均衡", skills:["inkbolt","inkshield"],items:["heal_potion"] }
+    ] },
+  // 托管策略（09 §9.3）：代掷骰、技能优先级、道具阈值、节拍下限
+  auto: { potion_below: 0.5, min_interval_ms: 800, speeds: [1, 2] },
   acts: [
     { id: "SL-0", title: "序章 · 潮醒", mode: "forced_time" },
     { id: "SL-1", title: "幕一 · 褪色的街", mode: "choice" }
