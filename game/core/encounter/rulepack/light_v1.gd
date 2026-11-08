@@ -152,6 +152,25 @@ static func save_throw(rng: Rng, attr_mod: int, save_def: Dictionary, damage_exp
 		"total": r["total"], "dc": dc, "success": r["success"], "nat20": r["nat20"], "nat1": r["nat1"],
 		"on_success": on_success, "damage_full": full["total"], "damage_taken": taken}
 
+# ---------------------------------------------------------------- tech/04 §2 资源公式求值
+
+## hp/ac 公式白名单变量（tech/04 §2：attrs/level；熟练值预留，v1 未注册）。
+const FORMULA_VARS: Array[String] = ["might", "finesse", "wits", "level"]
+
+## 求值资源表字符串公式（如 "10 + 2*might"）。白名单外变量解析即失败；
+## 失败返回 null（调用方 fail-fast），成功返回 int。
+static func eval_formula(expr: String, vars: Dictionary) -> Variant:
+	var e := Expression.new()
+	if e.parse(expr, FORMULA_VARS) != OK:
+		return null
+	var inputs: Array = []
+	for v: String in FORMULA_VARS:
+		inputs.append(int(vars.get(v, 0)))
+	var r: Variant = e.execute(inputs)
+	if e.has_execute_failed() or not (r is float or r is int):
+		return null
+	return int(r)
+
 # ---------------------------------------------------------------- §7 死亡豁免
 
 ## 死亡豁免：d20 ≥ 10 记一胜，<10 记一负（三局两胜计数在 EncounterSM）。

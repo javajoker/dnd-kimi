@@ -1,0 +1,35 @@
+[
+  {
+    "id": "player_blank",
+    "name": "白页者",
+    "kind": "player_template",
+    "attrs": { "might": 2, "finesse": 1, "wits": 0 },
+    "hp_formula": "10 + 2*might",
+    "ac_formula": "10 + finesse",
+    "proficiencies": ["investigation", "athletics"],
+    "basic_attack": "slash",
+    "skills": ["inkbolt", "inkshield", "inklance"]
+  },
+  {
+    "id": "companion_kelan",
+    "name": "珂兰",
+    "kind": "companion",
+    "attrs": { "might": 0, "finesse": 1, "wits": 1 },
+    "hp_formula": "10 + might",
+    "ac_formula": "10 + finesse",
+    "proficiencies": ["history", "soothe"],
+    "basic_attack": "kelan_bolt",
+    "skills": ["kelan_bolt"]
+  },
+  {
+    "id": "companion_laofei",
+    "name": "老费",
+    "kind": "companion",
+    "attrs": { "might": 1, "finesse": 0, "wits": 1 },
+    "hp_formula": "11 + might",
+    "ac_formula": "11 + might",
+    "proficiencies": ["athletics", "perception"],
+    "basic_attack": "laofei_hook",
+    "skills": ["laofei_hook"]
+  }
+]

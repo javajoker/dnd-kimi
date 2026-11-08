@@ -2,7 +2,8 @@
   { "id": "half_tide_table", "name": "半页潮汐表",
     "roles": ["branch_key"],
     "source": "N1-1 商店 / N1-2 隐藏拾取",
-    "unlocks": ["N2G-2 密道 [物]"] },
+    "unlocks": ["N2G-2 密道 [物]"],
+    "price": 15 },
   { "id": "black_feather_token", "name": "黑羽令",
     "roles": ["branch_key"],
     "source": "N2U-2 完成（撕/不撕均给）",
@@ -22,5 +23,10 @@
   { "id": "ink_core", "name": "墨核",
     "roles": ["stat"],
     "source": "各 Boss 战利品（共 3 枚）",
-    "unlocks": [] }
+    "unlocks": [] },
+  { "id": "heal_potion", "name": "补给药水",
+    "roles": ["stat"],
+    "source": "序章带入 ×2（战役书 §4 SL-1）/ N1-1 商店",
+    "unlocks": [],
+    "use": { "timing": "bonus_action", "heal": "1d4+2", "consume": true } }
 ]

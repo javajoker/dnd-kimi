@@ -4,7 +4,8 @@
 # 存档时机（07 §4.2）：遭遇结算完成（主快照）+ 主屏闲置（兜底）+ 主屏手动"记录抄本"；
 # 遭遇进行中不存档——☰「保存并回主屏」= 恢复遭遇进入前快照（09 §7，战斗重打）。
 # 战役进度引导：序章 → N1-7 沿脚本化路径真实走 StoryGraph（L3 事件随节点触发/结算）；
-# 遭遇战斗数值与队伍名单仍以引导脚本承载（TP2 留白：正式落位 packs 的 characters/enemies.json）。
+# 遭遇战斗数值自 M2 起由 packs 资源表驱动（characters/skills/enemies/items + encounters，
+# tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast（TP2 留白已落位）。
 # 调试：`-- --tp4-shots` 自动推进并截图 /tmp/tp4_*.png（不提交）；`-- --mode=space|time` 预选形态。
 extends Node
 
@@ -27,15 +28,6 @@ const SCREEN_SCENES := {
 	&"inventory": "res://shell/ui/screen_inventory.tscn",
 	&"character": "res://shell/ui/screen_character.tscn",
 }
-## 整备备选技能池（TP2 留白承接：技能表正式落位 tech/04 skills.json 后由包数据供给）。
-const SKILL_POOL := [
-	{"id": "inkbolt", "name": "墨术飞矢", "kind": "attack", "attr": "wits",
-		"damage": "1d6", "uses": 2, "target": "enemy"},
-	{"id": "inkshield", "name": "墨盾格挡", "kind": "utility", "uses": 1, "target": "self",
-		"effect": {"attackers_disadvantage": true}},
-	{"id": "inklance", "name": "墨枪突刺", "kind": "attack", "attr": "might",
-		"damage": "1d8", "uses": 1, "target": "enemy"},
-]
 var stream: EventStream
 var board: Board
 var rng: Rng
@@ -195,7 +187,7 @@ func _enter_encounter() -> void:
 		cfg["skill_slots"] = int(cfg["skill_slots"]) \
 			+ LightV1.skill_slot_bonus(LightV1.level_for_xp(int(board.read("campaign01.xp_total", 0))))
 	if cfg.is_empty():
-		_begin_encounter({"skills": _default_skill_ids(), "items": ["heal_potion"], "attr_alloc": {}})
+		_begin_encounter({"skills": [], "items": ["heal_potion"], "attr_alloc": {}}) # 空选择 = BattleDef 缺省
 		return
 	var screen: ScreenLoadout = (load(SCREEN_SCENES[&"loadout"]) as PackedScene).instantiate()
 	_swap(screen)
@@ -203,18 +195,30 @@ func _enter_encounter() -> void:
 	screen.confirmed.connect(_on_loadout_confirmed.bind(cfg))
 	screen.back_requested.connect(_show_entry)
 
-func _default_skill_ids() -> Array:
-	return ["inkbolt", "inkshield"]
-
+## 整备备选 = 玩家模板已习得技能 ∩ skills.json（tech/04 §7）；道具 = 背包含 use 块条目（tech/04 §4）。
 func _loadout_candidates() -> Dictionary:
+	var skill_pool: Array = []
+	var skills: Dictionary = pack.get("skills", {})
+	for sid: Variant in _player_template().get("skills", []):
+		if skills.has(str(sid)):
+			skill_pool.append(BattleDef.runtime_skill(skills[str(sid)]))
 	var items: Array = []
-	if board.has_item("heal_potion"):
-		items.append({"id": "heal_potion", "name": "补给药水",
-			"count": board.item_count("heal_potion")})
-	return {"skills": SKILL_POOL, "items": items,
+	for iid: String in (pack.get("items", {}) as Dictionary).keys():
+		var it: Dictionary = pack["items"][iid]
+		if it.has("use") and board.has_item(iid):
+			items.append({"id": iid, "name": str(it.get("name", iid)), "count": board.item_count(iid)})
+	return {"skills": skill_pool, "items": items,
 		"attr_points": int(board.read("campaign01.attr_points", 0)),
 		"attrs": board.read("campaign01.attrs", {}), # 已分配值（单项 +3 封顶判定用，11 §6）
 		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0}}
+
+## 玩家模板条目（tech/04 §2 kind=player_template；找不到 = 包数据缺陷，返回空字典由组装层报错）。
+func _player_template() -> Dictionary:
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		if str(c.get("kind", "")) == "player_template":
+			return c
+	return {}
 
 func _on_loadout_confirmed(selection: Dictionary, cfg: Dictionary) -> void:
 	Loadout.confirm(stream, cfg, selection["skills"], selection["items"],
@@ -268,53 +272,20 @@ func _begin_encounter(selection: Dictionary) -> void:
 		&"core", BATTLE_NODE)
 	await get_tree().create_timer(1.0).timeout
 	if sm.state == EncounterSM.S_EXPLORE:
-		sm.begin_combat(_battle_def(selection))
+		var def := _battle_def(selection)
+		if def.is_empty():
+			return # fail-fast：包数据缺陷不进战斗（报错已由 _battle_def 输出）
+		sm.begin_combat(def)
 
+## 战斗定义 = pack 资源表组装（tech/04 §1~§4 / tech/02 §6；M2：TP2 硬编码留白落位）。
+## 引用缺失/公式失败 = 包数据缺陷：fail-fast 报错并返回空字典（不静默降级、不进战斗）。
 func _battle_def(selection: Dictionary) -> Dictionary:
-	var picked: Array = selection.get("skills", _default_skill_ids())
-	var skills: Array = []
-	for sk: Variant in SKILL_POOL:
-		if picked.has(str((sk as Dictionary)["id"])):
-			skills.append((sk as Dictionary).duplicate(true))
-	var attrs: Dictionary = board.read("campaign01.attrs", {})
-	var hp_bonus := LightV1.hp_bonus_for_xp(int(board.read("campaign01.xp_total", 0))) # 每级 HP+2（11 §6）
-	var pc_attrs := {"might": 2 + int(attrs.get("might", 0)),
-		"finesse": 1 + int(attrs.get("finesse", 0)), "wits": 0 + int(attrs.get("wits", 0))}
-	var items: Array = []
-	if (selection.get("items", []) as Array).has("heal_potion") and board.has_item("heal_potion"):
-		items.append({"id": "heal_potion", "name": "补给药水",
-			"count": board.item_count("heal_potion"),
-			"use": {"timing": "bonus_action", "heal": "1d4+2", "consume": true}})
-	return {
-		"party": [
-			{"id": "pc", "name": "白页者", "kind": "player", "hp": 14 + hp_bonus, "max_hp": 14 + hp_bonus,
-				"ac": 11,
-				"attrs": pc_attrs, "attack_mod": 2 + int(attrs.get("might", 0)), "damage": "1d6+2",
-				"skills": skills, "items": items},
-			{"id": "kelan", "name": "珂兰", "kind": "companion", "hp": 10, "max_hp": 10, "ac": 11,
-				"attrs": {"might": 0, "finesse": 1, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
-				"skills": [{"id": "kelan_bolt", "name": "墨矢", "kind": "attack", "attr": "finesse",
-					"damage": "1d6+1", "target": "enemy"}]},
-			{"id": "laofei", "name": "老费", "kind": "companion", "hp": 12, "max_hp": 12, "ac": 12,
-				"attrs": {"might": 1, "finesse": 0, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
-				"skills": [{"id": "laofei_hook", "name": "船钩", "kind": "attack", "attr": "might",
-					"damage": "1d6+1", "target": "enemy"}]},
-		],
-		"enemies": [
-			{"id": "boss", "name": "墨魈", "hp": 16, "max_hp": 16, "ac": 11,
-				"attrs": {"might": 1, "finesse": 1, "wits": 0}, "attack_mod": 3, "damage": "1d4+1",
-				"skills": [{"id": "ink_rain", "name": "墨雨溅射", "kind": "aoe", "damage": "1d6",
-					"uses": 2, "cooldown": 2,
-					"save": {"attr": "finesse", "dc": 11, "on_success": "half"}}]},
-			{"id": "imp1", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
-				"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
-			{"id": "imp2", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
-				"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
-		],
-		"party_advantage_rounds": 1 if bool(board.read("campaign01.witnessed_revocation")) else 0,
-		"loot": [{"item": "ink_core", "n": 1}],
-		"xp": 100,
-	}
+	var res := BattleDef.assemble(pack, BATTLE_NODE, selection, board)
+	if not bool(res["ok"]):
+		push_error("[main] 战斗定义组装失败（campaign01/%s）：%s"
+			% [BATTLE_NODE, ";".join(res["errors"] as Array)])
+		return {}
+	return res["def"]
 
 ## ☰「保存并回主屏」（09 §7）：遭遇进行中不存档，回到遭遇进入前快照（本局重打）。
 func _on_save_quit() -> void:

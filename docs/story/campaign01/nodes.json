@@ -49,7 +49,7 @@
       "summary": "Hub：休整 / 商店 / 传闻。商店出售「半页潮汐表」。",
       "encounter": "N1-1",
       "edges": [
-        { "type": "choice", "label": "购买半页潮汐表（商店，价格占位）", "to": "N1-2",
+        { "type": "choice", "label": "购买半页潮汐表（商店，价格 15 占位）", "to": "N1-2",
           "effects": [ { "give_item": "half_tide_table" } ] },
         { "type": "choice", "label": "前往褪色现场", "to": "N1-2" }
       ]

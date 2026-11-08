@@ -2,6 +2,8 @@
 # - 加载 manifest + 各表（nodes/events/encounters/items/flags/endings/lore，及 §1 预留的可选表）；
 # - 结构校验：manifest 必填字段、namespace == pack_id（§2 防呆冗余）、节点 act 须在 acts 登记、
 #   节点 id 包内唯一（§3）；可选字段缺省容错（§11 Schema 演进：新增字段一律可选）；
+# - 资源四表（tech/04 §1~§5）：characters/skills/effects/enemies 按 §Schema 做必填字段结构校验，
+#   合法值集合（kind/op/duration/stack 等）由 packlint V11~V13 按绑定规则包校验；
 # - 未知文件警告但不拒绝（§1 向前兼容预留）；缺必填文件 = 加载失败；
 # - 命名空间注册：加载成功后包内旗标解析到 manifest.namespace（Board 写权限由 07 §3 执行）。
 class_name PackLoader
@@ -24,14 +26,23 @@ const KNOWN_FILES := {
 }
 const NODE_TYPES := ["scene", "hub", "check", "battle", "dialog", "explore", "rest", "branch", "ending"]
 const EDGE_TYPES := ["choice", "check", "item", "doom_clock", "reputation"]
+## tech/04 Schema 必填字段（结构校验：存在性；合法值归 packlint V11~V13）。
+const REQUIRED_FIELDS := {
+	"characters.json": ["id", "name", "kind", "attrs", "hp_formula", "ac_formula"], # §2
+	"skills.json": ["id", "name", "kind", "target"],                                # §3
+	"effects.json": ["id", "name", "target_attr", "op", "value", "duration", "stack"], # §5.1
+	"enemies.json": ["id", "name", "hp", "ac", "attack_mod", "damage"],             # §1
+}
 
 ## 加载一个包目录。返回 { ok, errors[], warnings[], pack }；
-## pack = { pack_id, manifest, acts, nodes{id:node}, node_order[], events[], encounters{id}, items{id}, flags[], endings[], lore[] }。
+## pack = { pack_id, manifest, acts, nodes{id:node}, node_order[], events[], encounters{id}, items{id},
+## flags[], endings[], lore[], characters{id}, skills{id}, effects{id}, enemies{id} }（tech/04 §1）。
 static func load_pack(dir_path: String) -> Dictionary:
 	var errors: Array[String] = []
 	var warnings: Array[String] = []
 	var pack := {"pack_id": "", "manifest": {}, "acts": [], "nodes": {}, "node_order": [],
-		"events": [], "encounters": {}, "items": {}, "flags": [], "endings": [], "lore": []}
+		"events": [], "encounters": {}, "items": {}, "flags": [], "endings": [], "lore": [],
+		"characters": {}, "skills": {}, "effects": {}, "enemies": {}}
 
 	# 未知文件警告（§1：报警但不拒绝）
 	var dir := DirAccess.open(dir_path)
@@ -131,5 +142,23 @@ static func load_pack(dir_path: String) -> Dictionary:
 	pack["flags"] = tables.get("flags.json", [])
 	pack["endings"] = tables.get("endings.json", [])
 	pack["lore"] = tables.get("lore.json", [])
+
+	# 资源四表（tech/04 §1~§5：id 索引 + 必填字段结构校验）
+	for fname: String in REQUIRED_FIELDS.keys():
+		var table := {}
+		for entry: Variant in tables.get(fname, []):
+			var d: Dictionary = entry
+			var eid := str(d.get("id", ""))
+			if eid.is_empty():
+				errors.append("%s 存在缺 id 条目（tech/04）" % fname)
+				continue
+			if table.has(eid):
+				errors.append("%s 条目 id 重复：%s" % [fname, eid])
+				continue
+			for field: String in REQUIRED_FIELDS[fname]:
+				if not d.has(field):
+					errors.append("%s 条目 %s 缺必填字段 %s（tech/04 Schema）" % [fname, eid, field])
+			table[eid] = d
+		pack[fname.trim_suffix(".json")] = table
 
 	return {"ok": errors.is_empty(), "errors": errors, "warnings": warnings, "pack": pack}

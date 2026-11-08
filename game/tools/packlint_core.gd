@@ -1,7 +1,7 @@
 # packlint 校验核（docs/tech/02-内容包格式规范.md §12 V1~V10 + docs/tech/04-资源与效果系统.md §6 V11~V13）
 # 纯数据校验，零引擎依赖（RefCounted），供 tools/packlint.gd（CLI）与 tests/run.gd 复用。
 # 每条结论：{v, level, msg}；level ∈ PASS / WARN / FAIL / NA。
-# 不可数据化判定的项（V10 界面闭环、V13 consume 语义）输出 N/A 及原因。
+# V11~V13 自 M2 起实检资源四表（tech/04 §6）；仅 V10 界面闭环保留 N/A 及原因。
 class_name PacklintCore
 extends RefCounted
 
@@ -20,6 +20,20 @@ const EFFECT_KEYS := ["write", "value", "clock", "alignment", "give_item", "remo
 const COND_KEYS := ["clock", "alignment", "bond_max", "all", "any"]
 const EFFECT_PREFIXES := ["rep.", "bond.", "clock."]
 const COND_PREFIXES := ["flag.", "rep.", "item.", "bond.", "clock."]
+# ---- tech/04 合法值集合（V11~V13；规则包 light v1 注册的属性/枚举）----
+const ATTRS := ["might", "finesse", "wits"]                       # 11 文档 §1 三属性
+const MODIFIABLE_ATTRS := ["attack_damage", "ac", "hp_max"]       # tech/04 §5.1 规则包注册可修饰属性
+const EFFECT_OPS := ["add", "mul", "override", "clamp_max", "clamp_min"] # tech/04 §5.1
+const EFFECT_DURATIONS := ["encounter", "rest", "campaign", "permanent"] # tech/04 §5.1
+const EFFECT_STACKS := ["refresh", "stack", "unique"]             # tech/04 §5.1
+const SKILL_KINDS := ["attack", "check", "heal", "utility"]       # tech/04 §3
+const SKILL_TARGETS := ["enemy_single", "ally_single", "self"]    # tech/04 §3
+const GESTURES := ["tap", "path"]                                 # tech/04 §3（12 文档手势）
+const STATUS_KEYS := ["attackers_disadvantage", "ac_bonus", "duration_rounds"] # EncounterSM statuses 键
+const SAVE_KEYS := ["attr", "dc", "on_success"]                   # 11 文档 §5.1
+const SAVE_ON_SUCCESS := ["half", "none"]                         # 11 文档 §5.1
+const ITEM_USE_TIMINGS := ["action", "bonus_action", "out_of_combat"] # tech/04 §4
+const ITEM_USE_EFFECT_KEYS := ["heal"]                            # tech/04 §4 v1 落位（扁平键）
 
 static func lint(pack: Dictionary) -> Array:
 	var issues: Array = []
@@ -36,8 +50,7 @@ static func lint(pack: Dictionary) -> Array:
 		"msg": "界面闭环：九类界面入口/出口检查依赖 shell 界面实现（04 文档 §5），TP2/TP4 落地后方可数据化"})
 	issues.append_array(_v11_resource_refs(pack))
 	issues.append_array(_v12_legal_keys(pack))
-	issues.append({"v": "V13", "level": LEVEL_NA,
-		"msg": "次数制技能 uses≥1 / consume 道具不静默消失：本包无 skills.json 且 items.json 无 use 块（tech/04 §4），无语义可判"})
+	issues.append_array(_v13_uses_consume(pack))
 	return issues
 
 static func has_failures(issues: Array) -> bool:
@@ -495,10 +508,68 @@ static func _v11_resource_refs(pack: Dictionary) -> Array:
 			if not ITEM_ROLES.has(str(role)):
 				issues.append({"v": "V11", "level": LEVEL_FAIL,
 					"msg": "道具 %s 身份 '%s' 非法（tech/02 §7 四重身份）" % [iid, str(role)]})
-	if issues.is_empty():
+
+	# ---- tech/04 §6 资源引用闭环（M2 实检）----
+	var characters: Dictionary = pack.get("characters", {})
+	var skills: Dictionary = pack.get("skills", {})
+	var enemies: Dictionary = pack.get("enemies", {})
+	var effects: Dictionary = pack.get("effects", {})
+	# 角色 → 技能（skills[] 与 basic_attack 均须登记）；熟练 ∈ 规则包技能表（11 §2）
+	for cid: String in characters.keys():
+		var c: Dictionary = characters[cid]
+		for sid: Variant in c.get("skills", []):
+			if not skills.has(str(sid)):
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "角色 %s 引用未登记技能 '%s'（skills.json）" % [cid, str(sid)]})
+		var ba := str(c.get("basic_attack", ""))
+		if not ba.is_empty() and not skills.has(ba):
+			issues.append({"v": "V11", "level": LEVEL_FAIL,
+				"msg": "角色 %s basic_attack 引用未登记技能 '%s'（skills.json）" % [cid, ba]})
+		for prof: Variant in c.get("proficiencies", []):
+			if not LIGHT_SKILLS.has(str(prof)):
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "角色 %s 熟练 '%s' 未在绑定规则包 light v1 注册（11 §2）" % [cid, str(prof)]})
+	# 遭遇 → 敌人/角色/战利品道具（tech/02 §6）
+	for eid: String in encounters.keys():
+		var enc: Dictionary = encounters[eid]
+		for entry: Variant in enc.get("enemies", []):
+			if not enemies.has(str((entry as Dictionary).get("ref", ""))):
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "遭遇 %s enemies 引用未登记敌人 '%s'（enemies.json）"
+						% [eid, str((entry as Dictionary).get("ref", ""))]})
+		for entry: Variant in enc.get("party", []):
+			if not characters.has(str((entry as Dictionary).get("ref", ""))):
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "遭遇 %s party 引用未登记角色 '%s'（characters.json）"
+						% [eid, str((entry as Dictionary).get("ref", ""))]})
+		for l: Variant in enc.get("loot", []):
+			if not items.has(str((l as Dictionary).get("item", ""))):
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "遭遇 %s 战利品引用未登记道具 '%s'（items.json）"
+						% [eid, str((l as Dictionary).get("item", ""))]})
+		if str(enc.get("type", "")) == "battle" and (enc.get("enemies", []) as Array).is_empty():
+			issues.append({"v": "V11", "level": LEVEL_WARN,
+				"msg": "战斗遭遇 %s 未声明 enemies（tech/02 §6）：敌人阵容待内容定稿" % eid})
+	# 效果 → 规则包注册属性（tech/04 §5.1：target_attr 须在绑定规则包注册）
+	for eid: String in effects.keys():
+		var ta := str((effects[eid] as Dictionary).get("target_attr", ""))
+		if not _registered_attr(ta):
+			issues.append({"v": "V11", "level": LEVEL_FAIL,
+				"msg": "效果 %s target_attr '%s' 未在绑定规则包注册（tech/04 §5.1）" % [eid, ta]})
+	if not issues.any(func(i: Dictionary) -> bool: return i["level"] == LEVEL_FAIL):
 		issues.append({"v": "V11", "level": LEVEL_PASS,
-			"msg": "资源引用闭环：%d 道具 / %d 图鉴 / %d 遭遇 / %d 事件引用均可解析"  % [items.size(), lore_ids.size(), encounters.size(), (pack.get("events", []) as Array).size()]})
+			"msg": "资源引用闭环：%d 道具 / %d 图鉴 / %d 遭遇 / %d 事件 / %d 角色 / %d 技能 / %d 敌人引用均可解析"
+				% [items.size(), lore_ids.size(), encounters.size(), (pack.get("events", []) as Array).size(),
+					characters.size(), skills.size(), enemies.size()]})
 	return issues
+
+## target_attr 注册判定：基础可修饰属性（tech/04 §5.1）∪ check_mod.<规则包技能>。
+static func _registered_attr(ta: String) -> bool:
+	if MODIFIABLE_ATTRS.has(ta):
+		return true
+	if ta.begins_with("check_mod."):
+		return LIGHT_SKILLS.has(ta.trim_prefix("check_mod."))
+	return false
 
 static func _v11_check_cond(cond: Dictionary, where: String, items: Dictionary, issues: Array) -> void:
 	for key: Variant in cond.keys():
@@ -536,8 +607,136 @@ static func _v12_legal_keys(pack: Dictionary) -> Array:
 				if not LIGHT_SKILLS.has(skill):
 					issues.append({"v": "V12", "level": LEVEL_FAIL,
 						"msg": "%s 技能 '%s' 未在绑定规则包 light v1 注册（11 文档 §2）" % [where, skill]})
+	# ---- tech/04 §6 资源合法值（M2 实检）----
+	# 效果修饰器：op / duration / stack 合法值；stack=stack 需 max_stack（tech/04 §5.1）
+	for eid: String in (pack.get("effects", {}) as Dictionary).keys():
+		var fx: Dictionary = pack["effects"][eid]
+		if not EFFECT_OPS.has(str(fx.get("op", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "效果 %s op '%s' 非法（tech/04 §5.1：add/mul/override/clamp_max/clamp_min）"
+					% [eid, str(fx.get("op", ""))]})
+		if not EFFECT_DURATIONS.has(str(fx.get("duration", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "效果 %s duration '%s' 非法（tech/04 §5.1）" % [eid, str(fx.get("duration", ""))]})
+		if not EFFECT_STACKS.has(str(fx.get("stack", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "效果 %s stack '%s' 非法（tech/04 §5.1）" % [eid, str(fx.get("stack", ""))]})
+		elif str(fx.get("stack", "")) == "stack" and not fx.has("max_stack"):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "效果 %s stack=stack 缺 max_stack（tech/04 §5.1 叠层需上限）" % eid})
+	# 技能：kind/target/attr/gesture 合法值；effect 键与 save 块合法（tech/04 §3、11 §5.1）
+	for sid: String in (pack.get("skills", {}) as Dictionary).keys():
+		var sk: Dictionary = pack["skills"][sid]
+		var where := "skills.%s" % sid
+		if not SKILL_KINDS.has(str(sk.get("kind", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s kind '%s' 非法（tech/04 §3：attack/check/heal/utility）" % [where, str(sk.get("kind", ""))]})
+		if not SKILL_TARGETS.has(str(sk.get("target", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s target '%s' 非法（tech/04 §3）" % [where, str(sk.get("target", ""))]})
+		if sk.has("attr") and not ATTRS.has(str(sk["attr"])):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s attr '%s' 非法（11 §1 三属性）" % [where, str(sk["attr"])]})
+		if sk.has("gesture") and not GESTURES.has(str(sk["gesture"])):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s gesture '%s' 非法（tech/04 §3：tap/path）" % [where, str(sk["gesture"])]})
+		if str(sk.get("kind", "")) == "attack" and (not sk.has("attr") or not sk.has("damage")):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s attack 技能缺 attr/damage（tech/04 §3：走检定公式必填）" % where})
+		for key: Variant in (sk.get("effect", {}) as Dictionary).keys():
+			if not STATUS_KEYS.has(str(key)):
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s effect 含未登记状态键 '%s'（EncounterSM statuses）" % [where, str(key)]})
+		if sk.has("save"):
+			_check_save(sk["save"], where, issues)
+	# 敌人内联技能：save 块合法（11 §5.1）；uses/cooldown 为非负整数
+	for eid: String in (pack.get("enemies", {}) as Dictionary).keys():
+		for sk: Variant in (pack["enemies"][eid] as Dictionary).get("skills", []):
+			var s: Dictionary = sk
+			var where := "enemies.%s.%s" % [eid, str(s.get("id", "?"))]
+			if s.has("attr") and not ATTRS.has(str(s["attr"])):
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s attr '%s' 非法（11 §1 三属性）" % [where, str(s["attr"])]})
+			if s.has("save"):
+				_check_save(s["save"], where, issues)
+	# 道具 use 块：timing 合法值（tech/04 §4）
+	for iid: String in (pack.get("items", {}) as Dictionary).keys():
+		var it: Dictionary = pack["items"][iid]
+		if it.has("use") and not ITEM_USE_TIMINGS.has(str((it["use"] as Dictionary).get("timing", ""))):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "items.%s use.timing '%s' 非法（tech/04 §4：action/bonus_action/out_of_combat）"
+					% [iid, str((it["use"] as Dictionary).get("timing", ""))]})
 	if issues.is_empty():
-		issues.append({"v": "V12", "level": LEVEL_PASS, "msg": "效果键 / 条件键 / 检定技能与难度均为合法值"})
+		issues.append({"v": "V12", "level": LEVEL_PASS,
+			"msg": "效果键 / 条件键 / 检定技能与难度 / 资源枚举（op·duration·stack·save·timing）均为合法值"})
+	return issues
+
+## save 块校验（11 §5.1）：键集 ⊆ {attr,dc,on_success}，attr ∈ 三属性，on_success ∈ {half,none}，dc 为数值。
+static func _check_save(save: Variant, where: String, issues: Array) -> void:
+	if not save is Dictionary:
+		issues.append({"v": "V12", "level": LEVEL_FAIL, "msg": "%s save 块非对象（11 §5.1）" % where})
+		return
+	var sv: Dictionary = save
+	for key: Variant in sv.keys():
+		if not SAVE_KEYS.has(str(key)):
+			issues.append({"v": "V12", "level": LEVEL_FAIL,
+				"msg": "%s save 含未登记键 '%s'（11 §5.1：attr/dc/on_success）" % [where, str(key)]})
+	if sv.has("attr") and not ATTRS.has(str(sv["attr"])):
+		issues.append({"v": "V12", "level": LEVEL_FAIL,
+			"msg": "%s save.attr '%s' 非法（11 §1 三属性）" % [where, str(sv["attr"])]})
+	if sv.has("on_success") and not SAVE_ON_SUCCESS.has(str(sv["on_success"])):
+		issues.append({"v": "V12", "level": LEVEL_FAIL,
+			"msg": "%s save.on_success '%s' 非法（11 §5.1：half/none）" % [where, str(sv["on_success"])]})
+	if sv.has("dc") and not (sv["dc"] is float or sv["dc"] is int):
+		issues.append({"v": "V12", "level": LEVEL_FAIL,
+			"msg": "%s save.dc 非数值（11 §5.1）" % where})
+
+# ---------------------------------------------------------------- V13 次数制与 consume 语义（tech/04 §6，M2 实检）
+
+static func _v13_uses_consume(pack: Dictionary) -> Array:
+	var issues: Array = []
+	var checked := 0
+	# 次数制技能 uses ≥ 1（tech/04 §3 uses_per_encounter；null = 不限次不检）
+	for sid: String in (pack.get("skills", {}) as Dictionary).keys():
+		var sk: Dictionary = pack["skills"][sid]
+		if sk.get("uses_per_encounter") != null:
+			checked += 1
+			if int(sk["uses_per_encounter"]) < 1:
+				issues.append({"v": "V13", "level": LEVEL_FAIL,
+					"msg": "技能 %s uses_per_encounter=%d < 1（tech/04 §6 V13：次数制技能 uses≥1）"
+						% [sid, int(sk["uses_per_encounter"])]})
+	# 敌人内联次数制技能 uses ≥ 1
+	for eid: String in (pack.get("enemies", {}) as Dictionary).keys():
+		for sk: Variant in (pack["enemies"][eid] as Dictionary).get("skills", []):
+			var s: Dictionary = sk
+			if s.has("uses"):
+				checked += 1
+				if int(s["uses"]) < 1:
+					issues.append({"v": "V13", "level": LEVEL_FAIL,
+						"msg": "敌人 %s 技能 %s uses=%d < 1（tech/04 §6 V13）"
+							% [eid, str(s.get("id", "?")), int(s["uses"])]})
+	# consume 道具语义（tech/04 §4/§6：不得在遭遇外静默消失——数据侧可证部分）
+	for iid: String in (pack.get("items", {}) as Dictionary).keys():
+		var it: Dictionary = pack["items"][iid]
+		var use: Dictionary = it.get("use", {})
+		var declared_consume := bool(use.get("consume", false)) or bool(it.get("consume", false))
+		if declared_consume:
+			checked += 1
+			if use.is_empty():
+				issues.append({"v": "V13", "level": LEVEL_FAIL,
+					"msg": "道具 %s consume:true 但无 use 块（tech/04 §4：无使用效果即静默消失）" % iid})
+			elif use.get("timing") == null:
+				issues.append({"v": "V13", "level": LEVEL_FAIL,
+					"msg": "道具 %s consume:true 但 use 缺 timing（tech/04 §4：无行动经济落点）" % iid})
+			elif not ITEM_USE_EFFECT_KEYS.any(func(k: String) -> bool: return use.has(k)):
+				issues.append({"v": "V13", "level": LEVEL_FAIL,
+					"msg": "道具 %s consume:true 但 use 无效果键（%s，tech/04 §4 v1 扁平键）"
+						% [iid, "/".join(ITEM_USE_EFFECT_KEYS)]})
+		elif not use.is_empty():
+			checked += 1
+	if issues.is_empty():
+		issues.append({"v": "V13", "level": LEVEL_PASS,
+			"msg": "次数制技能 uses≥1、consume 道具均有 use 效果落点（%d 项实检）" % checked})
 	return issues
 
 static func _effect_key_legal(k: String) -> bool:

@@ -11,14 +11,16 @@
     "trigger": { "type": "auto", "node": "N1-2" },
     "objective": "抵达 N1-3",
     "node": "N1-3",
-    "settle": [ { "clock": 1 }, { "write": "witnessed_revocation", "value": true } ]
+    "settle_note": "时钟与旗标已由 N1-3 on_enter 承载（TP1 落位），L3 结算不重复写板（TP4 裁决）",
+    "settle": []
   },
   {
     "id": "three_callings", "name": "三方拜帖",
     "trigger": { "type": "auto", "node": "N1-3" },
     "objective": "完成 N1-4 / N1-5 / N1-6",
     "node": "N1-4",
-    "settle": [ { "rep.scriptorium": 1 }, { "rep.uninked": 1 }, { "rep.salvage": 1 } ]
+    "settle_note": "三方声望已由 N1-4 / N1-5 / N1-6 on_enter 分别承载（TP1 落位），L3 结算不重复写板（TP4 裁决）",
+    "settle": []
   },
   {
     "id": "ink_rain_raid", "name": "墨雨夜袭",

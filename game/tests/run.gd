@@ -29,6 +29,7 @@ func _init() -> void:
 	test_loadout()
 	test_growth()
 	test_quest_runtime()
+	test_battle_data_driven()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
@@ -270,7 +271,14 @@ func test_pack_loader() -> void:
 	check((pack["nodes"] as Dictionary).size() == 44, "节点表 44 节点")
 	check((pack["acts"] as Array).size() == 5, "五幕 acts")
 	check((pack["encounters"] as Dictionary).size() == 16, "遭遇表 16 场（TP1 裁决 3 补登 N2G-2c/R1）")
-	check((pack["items"] as Dictionary).size() == 6, "道具表 6 件")
+	check((pack["items"] as Dictionary).size() == 7, "道具表 7 件（M2 补登 heal_potion）")
+	check((pack["characters"] as Dictionary).size() == 3, "角色表 3 条（玩家模板+珂兰+老费，tech/04 §2）")
+	check((pack["skills"] as Dictionary).size() == 6, "技能表 6 条（tech/04 §3）")
+	check((pack["enemies"] as Dictionary).size() == 2, "敌人表 2 条（tech/04 §1）")
+	var n17: Dictionary = pack["encounters"]["N1-7"]
+	check((n17["party"] as Array).size() == 3 and (n17["enemies"] as Array).size() == 3
+		and n17.has("pos") and n17.has("party_advantage"),
+		"N1-7 遭遇登记 party/enemies/pos/party_advantage（tech/02 §6 扩展字段）")
 	check((pack["endings"] as Array).size() == 4, "结局表 E1~E4")
 	check((pack["flags"] as Array).size() == 8, "旗标台账 8 条")
 	check((pack["events"] as Array).size() == 10, "事件清单 10 条")
@@ -307,6 +315,10 @@ func test_packlint() -> void:
 		if not seen.has(v):
 			check(false, "packlint 覆盖 %s" % v)
 	check(true, "packlint 覆盖 V1~V13 全项（含 N/A 声明）")
+	# V11~V13 自 M2 起实检（tech/04 §6）：均有 PASS 结论（无 FAIL 时）
+	for v: String in ["V11", "V12", "V13"]:
+		check(issues.any(func(i: Dictionary) -> bool:
+			return i["v"] == v and i["level"] == PacklintCore.LEVEL_PASS), "%s 实检并 PASS（tech/04 §6）" % v)
 	# 图遍历无死路不可达（V1/V2 单项复核）
 	var graph_issues := PacklintCore.lint(pack).filter(func(i: Dictionary) -> bool: return ["V1", "V2"].has(i["v"]))
 	check(graph_issues.all(func(i: Dictionary) -> bool: return i["level"] == PacklintCore.LEVEL_PASS),
@@ -317,6 +329,45 @@ func test_packlint() -> void:
 	var broken_issues := PacklintCore.lint(broken)
 	check(broken_issues.any(func(i: Dictionary) -> bool:
 		return i["v"] == "V1" and i["level"] == PacklintCore.LEVEL_FAIL), "负例：制造死路 V1 必报 FAIL")
+	# ---- V11~V13 负例（tech/04 §6，M2 实检）----
+	var bad_skill_ref: Dictionary = pack.duplicate(true)
+	bad_skill_ref["characters"]["companion_kelan"]["skills"] = ["no_such_skill"]
+	check(PacklintCore.lint(bad_skill_ref).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V11" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：角色引用未登记技能 V11 必报 FAIL")
+	var bad_foe_ref: Dictionary = pack.duplicate(true)
+	bad_foe_ref["encounters"]["N1-7"]["enemies"] = [{"id": "boss", "ref": "ghost"}]
+	check(PacklintCore.lint(bad_foe_ref).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V11" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：遭遇引用未登记敌人 V11 必报 FAIL")
+	var bad_attr_ref: Dictionary = pack.duplicate(true)
+	bad_attr_ref["effects"] = {"e_bad": {"id": "e_bad", "name": "x", "target_attr": "luck",
+		"op": "add", "value": 1, "duration": "encounter", "stack": "refresh"}}
+	check(PacklintCore.lint(bad_attr_ref).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V11" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：效果 target_attr 未注册 V11 必报 FAIL")
+	var bad_op: Dictionary = pack.duplicate(true)
+	bad_op["effects"] = {"e_bad": {"id": "e_bad", "name": "x", "target_attr": "ac",
+		"op": "bogus", "value": 1, "duration": "encounter", "stack": "refresh"}}
+	check(PacklintCore.lint(bad_op).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V12" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：效果 op 非法 V12 必报 FAIL")
+	var bad_save: Dictionary = pack.duplicate(true)
+	bad_save["enemies"]["ink_fiend"]["skills"][0]["save"] = {"attr": "finesse", "dc": 11, "on_success": "quarter"}
+	check(PacklintCore.lint(bad_save).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V12" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：save.on_success 非法 V12 必报 FAIL")
+	var bad_uses: Dictionary = pack.duplicate(true)
+	bad_uses["skills"]["inkbolt"]["uses_per_encounter"] = 0
+	check(PacklintCore.lint(bad_uses).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V13" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：次数制技能 uses=0 V13 必报 FAIL")
+	var bad_consume: Dictionary = pack.duplicate(true)
+	(bad_consume["items"]["heal_potion"] as Dictionary).erase("use")
+	bad_consume["items"]["heal_potion"]["consume"] = true
+	check(PacklintCore.lint(bad_consume).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V13" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：consume 道具无 use 块（静默消失）V13 必报 FAIL")
 
 # ---------------------------------------------------------------- StoryGraph（tech/02 §3/§4/§9）
 
@@ -1303,6 +1354,69 @@ func test_quest_runtime() -> void:
 		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "lone_wolf"),
 		"hidden 触发：孤身入局（requires 三方声望 ≤0）")
 	check(not _edge_to(g2, "N2L-1").is_empty(), "hidden 触发后独狼声望边显形")
+
+# ---------------------------------------------------------------- 战斗数值数据驱动（tech/04 §1~§4 / tech/02 §6，M2）
+
+## 无壳整局：同种子 + AutoAgent 托管（同构 Command 通道，09 §9.3）打到底，导出事件流 JSON。
+func _run_headless_battle(def: Dictionary, seed: int) -> String:
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	# 序章带入（与 shell_diff/main 同一脚本化遭遇前置）
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true, {"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var sm := EncounterSM.new(board, stream, Rng.new(seed), "campaign01")
+	var agent := AutoAgent.new()
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(def)
+	var guard := 0
+	while not sm.is_over() and guard < 500:
+		guard += 1
+		var cmd := agent.next_command(sm)
+		if cmd.is_empty():
+			break
+		sm.submit_command(cmd)
+	return JSON.stringify(stream.all(), "", true, true)
+
+func test_battle_data_driven() -> void:
+	print("[battle_data_driven]")
+	var pack := _load_campaign01()
+	# 新表加载与结构校验（tech/04 §2：kind/熟练/公式字段）
+	var pt: Dictionary = pack["characters"]["player_blank"]
+	check(str(pt["kind"]) == "player_template" and int(pt["attrs"]["might"]) == 2
+		and (pt["proficiencies"] as Array) == ["investigation", "athletics"],
+		"玩家模板：kind=player_template、力2、熟练 调查/运动（11 §1 +2/+1/0）")
+	# 公式求值（tech/04 §2：规则包求值，白名单变量）
+	check(LightV1.eval_formula(str(pt["hp_formula"]), {"might": 2, "finesse": 1, "wits": 0, "level": 1}) == 14,
+		"hp_formula 求值 = 14（白页者，规则包求值）")
+	check(LightV1.eval_formula(str((pack["characters"]["companion_laofei"] as Dictionary)["ac_formula"]),
+			{"might": 1, "finesse": 0, "wits": 1, "level": 1}) == 12, "ac_formula 求值 = 12（老费）")
+	check(LightV1.eval_formula("10 + luck*2", {"might": 2}) == null, "白名单外变量求值失败返回 null（fail-fast 前提）")
+	# 组装 = 旧硬编码基准：结构与数值逐字节一致（数值转写搬运、无再创作硬证明①）
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true, {"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var res := BattleDef.assemble(pack, "N1-7", {"skills": ["inkbolt", "inkshield"], "items": ["heal_potion"]}, board)
+	check(bool(res["ok"]), "N1-7 战斗定义组装 ok：%s" % ";".join(res["errors"] as Array))
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var baseline: Dictionary = sd.battle_def()
+	check(JSON.stringify(res["def"], "", true, true) == JSON.stringify(baseline, "", true, true),
+		"数据驱动 def 与旧硬编码基准规范化序列化逐字节一致")
+	# 同种子同指令（托管通道）事件流一致（无再创作硬证明②）
+	var js_baseline := _run_headless_battle(baseline, 20261108)
+	var js_data := _run_headless_battle(res["def"], 20261108)
+	check(js_baseline == js_data, "同种子同指令事件流 JSON 逐字节一致（数据驱动 == 旧硬编码）")
+	check(JSON.parse_string(js_data).size() > 40, "对照局完整跑完（事件 >40 条）")
+	# fail-fast：引用缺失/公式失败报错不静默（引导层报错路径的数据前提）
+	var broken: Dictionary = pack.duplicate(true)
+	broken["encounters"]["N1-7"]["enemies"] = [{"id": "boss", "ref": "no_such_enemy"}]
+	var res2 := BattleDef.assemble(broken, "N1-7", {}, board)
+	check(not bool(res2["ok"]) and not (res2["errors"] as Array).is_empty(), "敌人引用缺失：组装 fail-fast 报错")
+	var broken2: Dictionary = pack.duplicate(true)
+	broken2["characters"]["player_blank"]["hp_formula"] = "10 + luck"
+	var res3 := BattleDef.assemble(broken2, "N1-7", {}, board)
+	check(not bool(res3["ok"]), "公式求值失败：组装 fail-fast 报错")
 
 # ---------------------------------------------------------------- 九类界面闭环（04 §2/§5，TP4 无头断言）
 
