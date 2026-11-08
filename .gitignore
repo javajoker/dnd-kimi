@@ -1,1 +1,25 @@
+# Godot 4+ specific ignores
+.godot/
+
+# Godot 3 specific ignores
+.import/
+
+# Imported translations (can be safely regenerated from CSV files)
+*.translation
+
+# Mono/C# specific ignores (if using the .NET version)
+.mono/
+data_*/
+mono_crash.*
+
+# Godot 4.2+ dynamic library artifacts
+~*.dll
+
+# General build & export outputs (optional but recommended)
+export_presets.cfg
+build/
+dist/
+
+# OS-specific folder overrides (Good practice)
 .DS_Store
+Thumbs.db

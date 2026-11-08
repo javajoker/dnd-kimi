@@ -1,6 +1,10 @@
-; Godot 4 project —— 抄本纪元《烬港残页》
-; 架构：core/ 逻辑核（RefCounted 零引擎依赖）+ shell/ 双壳渲染 + packs/ 内容包（PCK）
-; 规范入口：.kimi-code/skills/godot-dev/SKILL.md
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
