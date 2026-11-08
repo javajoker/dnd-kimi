@@ -17,7 +17,8 @@ const Board = {
   bond: { "珂兰": 20, "老费": 10 },
   alignment: 50,
   xp: 0,
-  level: 1
+  level: 1,
+  points: 0
 };
 
 /* ---------- 事件流（append-only） ---------- */
@@ -38,6 +39,7 @@ const runtime = {
   phase: "explore",      // 遭遇状态机当前态（驱动竖屏呼吸）
   tab: "action",         // 操作台 Tab
   battle: null,
+  loadout: { skills: ["slash", "inkbolt"], items: [] },  // 当前整备（09 §9.1）
   settleBuf: [],         // 本遭遇待结算清单（⑨ 结算界面念给玩家听）
   consoleReturn: null,   // 从功能界面返回何处
   sliceDone: false
@@ -79,21 +81,30 @@ function addXp(n) {
   emit("xp.gain", { n });
 }
 
-/* ---------- 成长（11 文档 §6：300/700/1200 经验门槛） ---------- */
+/* ---------- 成长（11 文档 §6：300/700/1200 经验门槛；升级得属性点，整备/结算时分配） ---------- */
 const XP_TABLE = [0, 300, 700, 1200];
 function levelTarget() {
   let l = 1;
   for (let i = 1; i < XP_TABLE.length; i++) if (Board.xp >= XP_TABLE[i]) l = i + 1;
   return l;
 }
-function doLevelUp(attr) {
-  if (Board.level >= levelTarget()) return;
-  Board.level++;
-  PACK.player.attrs[attr] = Math.min(3, PACK.player.attrs[attr] + 1);
-  PACK.player.maxhp += 2; PACK.player.hp += 2;
-  emit("level.up", { level: Board.level, attr });
-  toast(`等级提升！Lv${Board.level}　${attr}+1　HP上限+2`);
-  renderSettle();
+function gainLevels() {
+  while (Board.level < levelTarget()) {
+    Board.level++; Board.points++;
+    PACK.player.maxhp += 2; PACK.player.hp += 2;
+    emit("level.up", { level: Board.level });
+  }
+}
+function allocPoint(attr) {
+  if (Board.points < 1) return;
+  if (PACK.player.attrs[attr] >= 3) { toast("属性已达上限 +3"); return; }
+  Board.points--;
+  PACK.player.attrs[attr]++;
+  emit("attr.alloc", { attr, now: PACK.player.attrs[attr] });
+  toast(`${attr} +1 → ${PACK.player.attrs[attr]}`);
+  const lo = document.querySelector(".loadout");
+  render();
+  if (lo) refreshLoadout();
 }
 
 /* ---------- 轻规则包 v1：检定与战斗 ---------- */
@@ -244,8 +255,67 @@ function enterNode(id) {
     if (e.clock) tickClock(e.clock);
     if (e.xp) addXp(e.xp);
   });
-  if (node.type === "battle") startBattle(node);
+  if (node.type === "battle") {
+    if (PACK.loadout.enabled && !node._ready) { showLoadout(node); return; }
+    startBattle(node);
+  }
   else runtime.phase = node.type === "dialog" ? "dialog" : "explore";
+  runtime.tab = "action";
+  renderEncounter();
+}
+
+/* ---------- 整备（09 文档 §9.1：技能备选/道具携带/属性加点，配置驱动） ---------- */
+const loSel = { skills: new Set(["slash", "inkbolt"]), items: new Set() };
+function showLoadout(node) {
+  const cfg = PACK.loadout;
+  const skillChips = PACK.player.skills.map(s =>
+    `<button class="chip ${loSel.skills.has(s.id) ? "sel" : ""}" onclick="loToggleSkill('${s.id}')">
+      ⚔️ ${s.name}<span class="chip-sub">${s.dmg}${s.uses ? "·×" + s.uses : ""}</span></button>`).join("");
+  const usableItems = [...new Set(Board.inv)].filter(id => PACK.items[id].use);
+  const itemChips = usableItems.length ? usableItems.map(id =>
+    `<button class="chip ${loSel.items.has(id) ? "sel" : ""}" onclick="loToggleItem('${id}')">
+      🧪 ${PACK.items[id].name}<span class="chip-sub">${PACK.items[id].use.heal || ""}</span></button>`).join("")
+    : `<span class="chip-sub">背包中没有可使用道具（广场杂货铺有售）</span>`;
+  const alloc = Board.points > 0 ? `
+    <div class="lo-sec"><div class="lo-h">属性加点（可用 ${Board.points} 点）</div>
+      <div style="display:flex;gap:6px">${["力", "敏", "智"].map(a =>
+        `<button class="chip" onclick="allocPoint('${a}')">${a} ${PACK.player.attrs[a]} +1</button>`).join("")}</div></div>` : "";
+  device.insertAdjacentHTML("beforeend", `
+  <div class="loadout">
+    <div class="lo-card">
+      <div class="lo-title">整备 · ${node.title}</div>
+      <div class="lo-sub">战斗前选择携带方案（本战役配置：技能 ≤${cfg.skill_slots}，道具 ≤${cfg.item_slots}${cfg.respec ? "，可重洗属性" : ""}）</div>
+      <div class="lo-sec"><div class="lo-h">技能备选（${loSel.skills.size}/${cfg.skill_slots}）</div><div class="lo-chips">${skillChips}</div></div>
+      <div class="lo-sec"><div class="lo-h">道具携带（${loSel.items.size}/${cfg.item_slots}）</div><div class="lo-chips" id="lo-items">${itemChips}</div></div>
+      ${alloc}
+      <button class="btn primary center" id="lo-go" ${loSel.skills.size < 1 ? "disabled" : ""} onclick="confirmLoadout(runtime.node)">⚔️ 开战</button>
+    </div>
+  </div>`);
+}
+function loToggleSkill(id) {
+  const cfg = PACK.loadout;
+  loSel.skills.has(id) ? loSel.skills.delete(id)
+    : loSel.skills.size < cfg.skill_slots ? loSel.skills.add(id)
+    : toast(`技能槽已满（${cfg.skill_slots}）——配置见 manifest loadout`);
+  refreshLoadout();
+}
+function loToggleItem(id) {
+  const cfg = PACK.loadout;
+  loSel.items.has(id) ? loSel.items.delete(id)
+    : loSel.items.size < cfg.item_slots ? loSel.items.add(id)
+    : toast(`道具槽已满（${cfg.item_slots}）`);
+  refreshLoadout();
+}
+function refreshLoadout() {
+  document.querySelector(".loadout")?.remove();
+  showLoadout(PACK.nodes[runtime.node]);
+}
+function confirmLoadout(nodeId) {
+  runtime.loadout = { skills: [...loSel.skills], items: [...loSel.items] };
+  document.querySelector(".loadout")?.remove();
+  emit("loadout.confirm", { node: nodeId, skills: runtime.loadout.skills, items: runtime.loadout.items });
+  PACK.nodes[nodeId]._ready = true;
+  startBattle(PACK.nodes[nodeId]);
   runtime.tab = "action";
   renderEncounter();
 }
@@ -293,6 +363,7 @@ function renderEncounterPortrait() {
   <div id="enc-portrait" class="screen st-${runtime.phase === "battle" ? "battle" : runtime.phase === "dialog" ? "dialog" : runtime.phase === "settle" ? "settle" : "explore"}">
     <div id="room-track" title="房间序列推进条（下滑可回看已过房间）">${track}<button id="enc-menu" onclick="openEncMenu()" title="单局菜单">☰</button></div>
     <div id="vp-view" class="scrolly">${viewHTML(node)}</div>
+    ${runtime.phase === "battle" && runtime.battle ? `<div id="tray">${trayHTML()}</div>` : ""}
     <div id="vp-console">
       <div id="console-tabs">${["action", "dice", "log", "char"].map(t =>
         `<button class="tab ${runtime.tab === t ? "on" : ""}" onclick="setTab('${t}')">${{ action: "行动", dice: "骰子", log: "日志", char: "角色" }[t]}</button>`).join("")}
@@ -466,30 +537,31 @@ function battleViewHTML() {
       <div class="hp">HP ${PACK.player.hp}/${PACK.player.maxhp} · AC ${PACK.player.ac}</div></div></div>
   </div></div>`;
 }
+/* ---------- 快捷栏（09 文档 §9.2：芯片 = 整备选择 + 情境过滤；拖动/点按双通道） ---------- */
+function trayHTML() {
+  const b = runtime.battle;
+  if (!b || b.over) return "";
+  const skillChips = runtime.loadout.skills.map(id => {
+    const s = PACK.player.skills.find(x => x.id === id);
+    const left = s.uses ? s.uses - (b.skillUses[id] || 0) : Infinity;
+    const dis = b.busy || left <= 0;
+    return `<div class="chip ${dis ? "dis" : ""}" data-skill="${id}" title="点按=默认目标 · 拖动到敌人=指定目标">
+      ⚔️ ${s.name}<span class="chip-sub">${s.dmg}${s.uses ? "·余" + Math.max(0, left) : ""}</span></div>`;
+  }).join("");
+  const itemChips = runtime.loadout.items.filter(id => Board.inv.includes(id)).map(id => {
+    const it = PACK.items[id];
+    const dis = b.busy || b.bonusUsed;
+    return `<div class="chip item ${dis ? "dis" : ""}" data-item="${id}" title="点按=对自己使用 · 拖动到友方=指定目标">
+      🧪 ${it.name}<span class="chip-sub">附赠${b.bonusUsed ? "·已用" : ""}</span></div>`;
+  }).join("");
+  return skillChips + itemChips;
+}
 function battleActionsHTML() {
   const b = runtime.battle;
   if (!b || b.over) return `<button class="btn primary" onclick="winBattle()">战斗结束 → 结算</button>`;
   if (b.busy) return `<div class="check-hint">敌方行动中……</div>`;
-  let h = `<div class="check-hint">动作 + 附赠 + 移动　|　手势：拖动=移动 · 轨迹=施法 · 双指点击=结束回合 · 捏合=缩放</div>`;
-  PACK.player.skills.forEach((s, i) => {
-    const uses = s.uses ? (b.skillUses[s.id] || 0) : 0;
-    const left = s.uses ? s.uses - uses : Infinity;
-    h += `<button class="btn" ${left <= 0 ? "disabled" : ""} onclick="attack(${i})">⚔️ ${s.name}
-      <span class="badge">${s.dmg}${s.uses ? " · 余 " + (left) : ""}</span></button>`;
-  });
-  h += battleItemButtons();
-  h += `<button class="btn center" onclick="endTurn()">⏭ 结束回合（双指点击战场同效）</button>`;
-  return h;
-}
-function battleItemButtons() {
-  const b = runtime.battle;
-  const usable = [...new Set(Board.inv)].filter(id => PACK.items[id].use);
-  if (!usable.length) return "";
-  return usable.map(id => {
-    const it = PACK.items[id];
-    return `<button class="btn" ${b && b.bonusUsed ? "disabled" : ""} onclick="useItemInBattle('${id}')">🧪 ${it.name}
-      <span class="badge">附赠 · ${it.use.heal || ""}${b && b.bonusUsed ? " · 本回合已用附赠" : ""}</span></button>`;
-  }).join("");
+  return `<div class="check-hint">动作 + 附赠 + 移动　|　<b>快捷栏芯片</b>：点按=默认目标 · 拖到目标=指定使用</div>
+    <button class="btn center" onclick="endTurn()">⏭ 结束回合（双指点击战场同效）</button>`;
 }
 function useItemInBattle(id) {
   const b = runtime.battle, it = PACK.items[id];
@@ -510,8 +582,23 @@ function endTurn() {
   setTimeout(enemyTurn, 600);
 }
 function attack(i) {
-  const b = runtime.battle, s = PACK.player.skills[i];
+  const b = runtime.battle;
+  const s = PACK.player.skills.find(x => x.id === runtime.loadout.skills[i]) || PACK.player.skills[i];
+  attackSkill(s);
+}
+function attackSkill(s) {
+  const b = runtime.battle;
+  if (!b || b.busy || b.over) return;
+  if (s.uses && (b.skillUses[s.id] || 0) >= s.uses) { toast(`${s.name} 次数已尽`); return; }
   if (s.uses) b.skillUses[s.id] = (b.skillUses[s.id] || 0) + 1;
+  if (s.kind === "utility") {                       // 墨盾格挡等：无需目标
+    PACK.player.ac = (PACK.player.baseAc || 11) + 2;
+    addLog(`<b>${s.name}</b>：墨纹在臂上凝成盾面，本场 AC +2（→ ${PACK.player.ac}）`);
+    emit("battle.utility", { skill: s.id, ac: PACK.player.ac });
+    b.busy = true; renderEncounter();
+    setTimeout(enemyTurn, 700);
+    return;
+  }
   const target = b.enemies.find(e => e.hp > 0);
   const roll = d20(), mod = modOf(s.attr), total = roll + mod;
   const hit = roll === 20 || (roll !== 1 && total >= target.ac);
@@ -558,6 +645,7 @@ function deathSave() {
 function winBattle() {
   const node = PACK.nodes[runtime.node];
   const fled = runtime.battle && runtime.battle.fled;
+  PACK.player.ac = PACK.player.baseAc || 11;        // 战斗增益散场清除
   const w = node.encounter && node.onWin || {};
   if (!fled) {
     if (w.xp) addXp(w.xp);
@@ -591,6 +679,7 @@ function renderEncounterLandscape() {
       <div id="ls-center">${center}</div>
       <div id="ls-right">${lsDiceHTML()}</div>
     </div>
+    ${inBattle ? `<div id="ls-tray">${trayHTML()}</div>` : ""}
     <div id="ls-bottom" onclick="this.classList.toggle('open')" title="上滑/点击展开半屏日志">📜 ${lastLogLine()} <span style="float:right;color:var(--gold-dim)">点击展开</span></div>
   </div>`;
   const btm = $("#ls-bottom");
@@ -601,10 +690,8 @@ function lsActionsHTML(node) {
   if (runtime.phase === "battle" && runtime.battle) {
     if (runtime.battle.over) return `<button class="btn primary act" onclick="winBattle()">结算 →</button>`;
     if (runtime.battle.busy) return `<div class="check-hint">敌方行动中…</div>`;
-    return PACK.player.skills.map((s, i) => {
-      const left = s.uses ? s.uses - (runtime.battle.skillUses[s.id] || 0) : Infinity;
-      return `<button class="btn act" ${left <= 0 ? "disabled" : ""} onclick="attack(${i})">${s.name}<br><span style="font-size:10px;color:var(--dim)">${s.dmg}${s.uses ? " ·余" + left : ""}</span></button>`;
-    }).join("") + battleItemButtons() + `<button class="btn act" onclick="endTurn()">结束回合</button>`;
+    return `<div class="check-hint" style="font-size:10px">快捷栏芯片：点按=默认 · 拖动=指定目标</div>
+      <button class="btn act" onclick="endTurn()">结束回合</button>`;
   }
   if (node.type === "check" && !node._rolled) {
     const c = node.check;
@@ -767,8 +854,9 @@ function renderHistory() {
  * ⑨ 结算界面
  * ============================================================ */
 function renderSettle() {
+  gainLevels();
   const lines = runtime.settleBuf.length ? runtime.settleBuf : [{ k: "切片完成", v: "《烬港残页》序章+幕一" }];
-  const canLevel = Board.level < levelTarget();
+  const canLevel = Board.points > 0;
   host.innerHTML = `
   <div class="screen" id="settle-screen">
     <h2>结 算</h2>
@@ -780,10 +868,10 @@ function renderSettle() {
     </div>
     ${canLevel ? `
     <div class="card" style="width:100%;max-width:300px;border-color:var(--gold)">
-      <div class="t">⬆ 成长加点（经验 ${Board.xp}，可升至 Lv${Board.level + 1}）</div>
-      <div class="d" style="margin-bottom:6px">选择一项属性 +1（HP 上限 +2）：</div>
+      <div class="t">⬆ 成长加点（Lv${Board.level}，可用属性点 ×${Board.points}）</div>
+      <div class="d" style="margin-bottom:6px">选择一项属性 +1（也可留到战斗前整备时分配）：</div>
       <div style="display:flex;gap:6px">
-        ${["力", "敏", "智"].map(a => `<button class="btn center" style="margin:0" onclick="doLevelUp('${a}')">${a} ${PACK.player.attrs[a]}→${PACK.player.attrs[a] + 1}</button>`).join("")}
+        ${["力", "敏", "智"].map(a => `<button class="btn center" style="margin:0" onclick="allocPoint('${a}')">${a} ${PACK.player.attrs[a]}→${PACK.player.attrs[a] + 1}</button>`).join("")}
       </div>
     </div>` : ""}
     <div style="width:100%;max-width:300px">
@@ -797,7 +885,7 @@ function renderSettle() {
  * 手势层（framework/12）：拖动=移动 · 轨迹=施法 · 双指点击=结束回合
  * 捏合=缩放 · 长按=详情 · 横滑=切 Tab。按钮永远有等价路径。
  * ============================================================ */
-const gest = { down: null, line: null, pointers: new Map(), pinchD0: 0, zoom0: 1, twoTapT: 0, twoTapFired: false, pressTimer: null };
+const gest = { down: null, line: null, pointers: new Map(), pinchD0: 0, zoom0: 1, twoTapT: 0, twoTapFired: false, pressTimer: null, chip: null };
 
 function svgLine() {
   let svg = $("#gesture-svg");
@@ -822,6 +910,40 @@ function hidePath() { const l = svgLine(); l.style.display = "none"; }
 
 function attachGestures() {
   if (runtime.screen !== "encounter") return;
+  // —— 快捷栏芯片：点按=默认目标 · 拖到目标=指定使用（09 §9.2） ——
+  document.querySelectorAll("#tray .chip, #ls-tray .chip").forEach(chip => {
+    chip.addEventListener("pointerdown", e => {
+      if (chip.classList.contains("dis")) return;
+      e.preventDefault();
+      gest.chip = { el: chip, x0: e.clientX, y0: e.clientY, moved: false };
+      chip.setPointerCapture(e.pointerId);
+    });
+    chip.addEventListener("pointermove", e => {
+      const g = gest.chip;
+      if (!g || g.el !== chip) return;
+      if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > 10) {
+        g.moved = true;
+        drawPath({ x: g.x0 - device.getBoundingClientRect().left, y: g.y0 - device.getBoundingClientRect().top }, devicePos(e));
+      }
+    });
+    chip.addEventListener("pointerup", e => {
+      const g = gest.chip; gest.chip = null; hidePath();
+      if (!g || g.el !== chip) return;
+      const skillId = chip.dataset.skill, itemId = chip.dataset.item;
+      if (g.moved) {                                    // 拖动：按落点分流（12 §3.6）
+        const drop = document.elementFromPoint(e.clientX, e.clientY);
+        if (skillId && drop && drop.closest(".unit.enemy, .cell.enemy"))
+          attackSkill(PACK.player.skills.find(s => s.id === skillId));
+        else if (itemId && drop && drop.closest(".unit.active, .cell.ally"))
+          useItemInBattle(itemId);
+        else toast("已取消（拖到目标单位上使用）");
+      } else {                                          // 点按：默认目标（等价路径）
+        if (skillId) attackSkill(PACK.player.skills.find(s => s.id === skillId));
+        else if (itemId) useItemInBattle(itemId);
+      }
+    });
+    chip.addEventListener("pointercancel", () => { gest.chip = null; hidePath(); });
+  });
   const field = $("#ls-center") || $("#vp-battle");
   // —— 竖屏：操作台横滑切 Tab ——
   const console_ = $("#vp-console");
@@ -895,9 +1017,8 @@ function attachGestures() {
     const drop = document.elementFromPoint(e.clientX, e.clientY);
     const enemyEl = drop && drop.closest(".unit.enemy, .cell.enemy");
     if (enemyEl) {                                       // 轨迹终点=敌 → 施法
-      const idx = PACK.player.skills.findIndex(s => s.id === "inkbolt");
-      const left = PACK.player.skills[idx].uses - (b.skillUses.inkbolt || 0);
-      if (left > 0) attack(idx); else toast("墨术飞矢次数已尽");
+      if (!runtime.loadout.skills.includes("inkbolt")) { toast("墨术飞矢未带入本场（整备未选）"); return; }
+      attackSkill(PACK.player.skills.find(s => s.id === "inkbolt"));
       return;
     }
     if (b.moved) { toast("本回合移动段已用"); return; }

@@ -4,6 +4,8 @@
 const PACK = {
   id: "campaign01",
   name: "烬港残页",
+  // 整备配置（09 §9.1 / tech02 §2.4）：限制由配置文件决定，框架只执行
+  loadout: { enabled: true, item_slots: 2, skill_slots: 2, respec: false },
   acts: [
     { id: "SL-0", title: "序章 · 潮醒", mode: "forced_time" },
     { id: "SL-1", title: "幕一 · 褪色的街", mode: "choice" }
@@ -101,7 +103,8 @@ const PACK = {
     attrs:{ 力:2, 敏:1, 智:0 }, prof:["调查","运动"],
     skills:[
       { id:"slash",  name:"佩剑挥砍", kind:"attack", attr:"力", dmg:"1d6+2" },
-      { id:"inkbolt",name:"墨术飞矢", kind:"attack", attr:"智", dmg:"1d6", uses:2, note:"每场 2 次" }
+      { id:"inkbolt",name:"墨术飞矢", kind:"attack", attr:"智", dmg:"1d6", uses:2, note:"每场 2 次" },
+      { id:"inkshield",name:"墨盾格挡", kind:"utility", attr:"智", dmg:"AC+2", uses:1, note:"本场 AC+2" }
     ] },
   companions: [
     { name:"珂兰", hp:10, maxhp:10, bond:20, note:"被写下的过去：誊写庭抄经役" },

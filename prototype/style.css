@@ -265,3 +265,24 @@ button { font-family:inherit; cursor:pointer; }
 #ls-center { touch-action:none; }
 .unit, #grid-map .cell.ally { cursor:grab; }
 #grid-map .cell.drop-ok { outline:2px solid var(--gold); }
+
+/* ===== 快捷栏与整备（09 文档 §9） ===== */
+#tray, #ls-tray { display:flex; gap:6px; padding:6px 10px; background:var(--paper);
+  border-top:1px solid var(--line); overflow-x:auto; flex:none; }
+#ls-tray { border-top:1px solid var(--line); }
+.chip { flex:none; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-width:76px; padding:6px 10px; background:var(--paper2); border:1px solid var(--gold-dim);
+  border-radius:14px; font-size:12px; color:var(--text); cursor:grab; touch-action:none; }
+.chip .chip-sub { font-size:10px; color:var(--dim); }
+.chip.item { border-color:var(--green); }
+.chip.dis { opacity:.35; cursor:default; }
+.chip.sel { border-color:var(--gold); box-shadow:0 0 8px rgba(201,163,92,.35); color:var(--gold); }
+.loadout { position:absolute; inset:0; z-index:70; background:rgba(5,6,10,.82);
+  display:flex; align-items:center; justify-content:center; animation:fadein .25s; }
+.lo-card { width:86%; max-width:380px; max-height:92%; overflow-y:auto; background:var(--paper);
+  border:1px solid var(--gold-dim); border-radius:12px; padding:16px; }
+.lo-title { color:var(--gold); font-size:17px; letter-spacing:3px; }
+.lo-sub { font-size:11px; color:var(--dim); margin:6px 0 10px; line-height:1.7; }
+.lo-sec { margin-bottom:10px; }
+.lo-h { font-size:12px; color:var(--gold-dim); margin-bottom:6px; }
+.lo-chips { display:flex; flex-wrap:wrap; gap:6px; }
