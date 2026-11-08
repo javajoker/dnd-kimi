@@ -74,6 +74,11 @@ const COMMON_WIP := "（最小版：要素随内容接入补全）"
 # 节点流程（04 §3.1/§④.2/§④.3、09 §6、tech/02 §3/§5、战役书 §4 N1-1）
 const STORY_CONTINUE := "继续"
 const STORY_CHECK := "检定"
+const MAZE_TITLE := "%s · 探索 %d/%d"          # 迷宫探索序列标题（tech/02 §6 maze；04 §④.3 房间序列）
+const MAZE_AMBUSH_PREFIX := "伏击判定｜"        # 伏击拍按钮前缀（tech/02 §6 maze.beats）
+const MAZE_LOOT := "拾取：%s ×%d"              # 拾取拍按钮（04 §④.3 拾取房）
+const MAZE_BEAT_OK := "检定成功。"
+const MAZE_BEAT_FAIL := "检定失败……"
 const SKILL_NAMES := {
 	"athletics": "运动", "intimidate": "威吓", "stealth": "潜行", "thievery": "巧手",
 	"perception": "感知", "investigation": "调查", "history": "历史",

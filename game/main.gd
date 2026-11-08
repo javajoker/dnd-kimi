@@ -11,7 +11,9 @@
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
-const SLICE_ACTS: Array[String] = ["SL-0", "SL-1"] # 本切片范围：序章 + 幕一（出范围即切片终点）
+# 本切片范围：序章 + 幕一 + 幕二「三支笔」（S/U/G/L 四链真实可玩至收束点 N2-C；
+# 幕三 SL-3 未接入——N2-C 出边即切片终点结算，标注见交付说明）
+const SLICE_ACTS: Array[String] = ["SL-0", "SL-1", "SL-2"]
 const LANDSCAPE_SIZE := Vector2i(1280, 720)
 const PACK_DIR := "res://packs/campaign01"
 const SHELL_SCENES := {
@@ -58,6 +60,9 @@ var _encounter_id := ""                  # 当前战斗节点的遭遇 id（tech
 var _battle_title := ""
 var _battles_won := 0
 var _mode: StringName = &""
+# ---- 迷宫探索序列（tech/02 §6 maze；04 §④.3 房间类型序列化）----
+var _maze: MazeRunner = null      # 进行中的探索序列核（core 渐进执行，壳只呈现）
+var _maze_outcome := ""           # 上一拍结果摘要（拼进下一拍文本）
 var _history_origin: StringName = &"home"
 var _settle_lines: Array[String] = [] # 结算汇总缓存（卷轴往返 / 加点刷新复用）
 var _shots := false
@@ -91,6 +96,8 @@ func _ready() -> void:
 		_run_shots_m4()
 	if args.has("--growth-shots"):
 		_run_shots_growth()
+	if args.has("--act2-shots"):
+		_run_shots_act2()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -210,14 +217,22 @@ func _start_campaign() -> void:
 
 # ---------------------------------------------------------------- 节点流程（故事图驱动；UI 只消费 StoryVM + 事件流）
 
-## 呈现当前节点：battle → 整备/遭遇；出切片范围/结局 → 切片结算；其余 → 双壳故事态。
+## 呈现当前节点：battle → 整备/遭遇；explore（迷宫探索序列，tech/02 §6 maze）→ 逐拍呈现；
+## 出切片范围/结局 → 切片结算；其余 → 双壳故事态。
 func _present_node() -> void:
 	if graph.is_at_ending() or not SLICE_ACTS.has(str(graph.current().get("act", ""))):
 		_end_slice()
 		return
-	if str(graph.current().get("type", "")) == "battle":
+	var ntype := str(graph.current().get("type", ""))
+	if ntype == "battle":
 		_enter_encounter()
 		return
+	if ntype == "explore" and _maze_pending():
+		_enter_maze()
+		return
+	_present_story_node()
+
+func _present_story_node() -> void:
 	var vm := StoryVM.build(graph, board, pack)
 	_ensure_story_shell()
 	_story_show(vm)
@@ -246,7 +261,11 @@ func _ensure_story_shell() -> void:
 
 ## 玩家执行节点选项：check 边真实掷骰（11 §3，check.roll 事件驱动两级演出 09 §6）；
 ## dialog 选项回复进日志；边效果/on_enter 写板由 StoryGraph 落（07 §1 溯源）。
+## 探索序列进行中时，选项按钮 = 推进当前节拍（MazeRunner，tech/02 §6 maze）。
 func _on_story_edge(idx: int) -> void:
+	if _maze != null:
+		_on_maze_advance()
+		return
 	var edges := graph.available_edges()
 	if idx < 0 or idx >= edges.size():
 		return
@@ -294,6 +313,74 @@ func _end_slice() -> void:
 	_encounter_tail = _campaign_tail # 汇总区间 = 整个切片（逐项念给玩家听，04 §⑨）
 	_encounter_result = &"slice"
 	_show_settle()
+
+# ---------------------------------------------------------------- 迷宫探索序列（tech/02 §6 maze 块；04 §④.3）
+# 逐拍呈现：check/ambush 拍掷 d20+修正（与检定边同一公式，11 §2/§3），loot 拍写板拾取；
+# 节拍效果/进度全部由 MazeRunner 落 core（写板带溯源、进事件流），本层只转发与刷新。
+
+## 当前 explore 节点有待完成的探索序列（节拍进度簿记在状态板，中途离场续打不重效果）。
+func _maze_pending() -> bool:
+	var enc: Dictionary = (pack.get("encounters", {}) as Dictionary).get(
+		str(graph.current().get("encounter", graph.current_id)), {})
+	var beats: Array = (enc.get("maze", {}) as Dictionary).get("beats", [])
+	if beats.is_empty():
+		return false
+	var enc_id := str(enc.get("id", graph.current_id))
+	return int(board.read("%s.maze.%s.idx" % [pack["pack_id"], enc_id], 0)) < beats.size()
+
+func _enter_maze() -> void:
+	var enc_id := str(graph.current().get("encounter", graph.current_id))
+	var enc: Dictionary = (pack.get("encounters", {}) as Dictionary).get(enc_id, {})
+	_maze = MazeRunner.new(board, stream, rng, str(pack["pack_id"]))
+	_maze.begin(enc_id, (enc.get("maze", {}) as Dictionary).get("beats", []),
+		Callable(graph, "check_mod"), graph.current_id)
+	_maze_outcome = ""
+	_show_maze_beat()
+
+## 呈现当前节拍：复用双壳故事态（StoryVM 单源），选项按钮 = 推进本拍。
+func _show_maze_beat() -> void:
+	if _maze == null:
+		_present_node()
+		return
+	var beat := _maze.peek()
+	if beat.is_empty(): # 序列完成 → 回节点呈现出边（密道道具边按条件显形，tech/02 §4.3）
+		_maze = null
+		_maze_outcome = ""
+		_present_node()
+		return
+	var vm := StoryVM.build(graph, board, pack)
+	vm["type"] = "explore"
+	vm["title"] = TextsZh.MAZE_TITLE % [str(graph.current().get("title", graph.current_id)),
+		_maze.beat_index() + 1, _maze.beat_count()]
+	vm["text"] = _maze_outcome + str(beat.get("text", ""))
+	var label := TextsZh.STORY_CONTINUE
+	var btype := str(beat.get("type", ""))
+	if btype == "check" or btype == "ambush":
+		var skill := str(beat.get("skill", "perception"))
+		var diff := str(beat.get("difficulty", "medium"))
+		label = "%s：%s（%s DC %d · 修正 %+d）" % [TextsZh.STORY_CHECK,
+			str(TextsZh.SKILL_NAMES.get(skill, skill)), str(TextsZh.DIFF_NAMES.get(diff, diff)),
+			LightV1.dc_for(diff), graph.check_mod(skill)]
+		if btype == "ambush":
+			label = TextsZh.MAZE_AMBUSH_PREFIX + label
+	elif btype == "loot":
+		label = TextsZh.MAZE_LOOT % [_item_name(str(beat.get("item", ""))), int(beat.get("n", 1))]
+	vm["edges"] = [{"type": "choice", "label": label}]
+	_ensure_story_shell()
+	_story_show(vm)
+
+## 推进当前节拍：掷骰/写板在 core（check.roll、item.gain、效果 DSL 事件进事件流）；
+## 结果摘要拼入下一拍文本；等快掷落定再刷新（09 §6 普通检定 ≤0.5s 出结果）。
+func _on_maze_advance() -> void:
+	var res := _maze.resolve()
+	if str(res.get("type", "")) == "loot":
+		_maze_outcome = "%s\n\n" % TextsZh.MAZE_LOOT % [_item_name(str(res.get("item", ""))),
+			int(res.get("n", 1))]
+	else:
+		_maze_outcome = (TextsZh.MAZE_BEAT_OK if bool(res.get("success", false)) \
+			else TextsZh.MAZE_BEAT_FAIL) + "\n\n"
+	await get_tree().create_timer(0.8).timeout
+	_show_maze_beat()
 
 # ---------------------------------------------------------------- 整备（09 §9.1；tech/02 §2.4）
 
@@ -440,7 +527,23 @@ func _show_settle_deferred() -> void:
 	_in_encounter = false
 	if _encounter_result == &"victory":
 		_battles_won += 1
-		# 战斗是图内节点：胜利后走战后边回图（tech/02 §3 节点边结算）
+		# 战斗是图内节点：胜利后走战后边回图（tech/02 §3 节点边结算）；
+		# 多条出边（hybrid 战后抉择 N2U-2 撕/不撕、通缉战 N2L-1b 强制择链）
+		# → 呈现节点选项由玩家抉择（tech/02 §6 hybrid），单出边自动推进
+		var edges := graph.available_edges()
+		if edges.is_empty():
+			_end_slice()
+			return
+		if edges.size() == 1:
+			graph.take_edge(edges[0])
+			_present_node()
+		else:
+			# 多条出边（hybrid 战后抉择 N2U-2 撕/不撕、通缉战 N2L-1b 强制择链）：
+			# 呈现战斗节点的故事态选项由玩家抉择——不得再进 _present_node（type=battle 会重进遭遇）
+			_present_story_node()
+	elif _encounter_result == &"objective_failed":
+		# 护送目标失败：罚时等代价已按 escort.failure_effects 写板（core，tech/02 §6），
+		# 仍走节点唯一出边——罚时替代全灭（N2S-1 注记就近处理，08 §2 失败即分支）
 		var edges := graph.available_edges()
 		if edges.is_empty():
 			_end_slice()
@@ -472,6 +575,7 @@ func _show_settle() -> void:
 				if fkey.begins_with("global.growth.") or fkey.begins_with("campaign01.attr") \
 						or fkey == "campaign01.xp_total" \
 						or fkey == "campaign01.gold" or fkey.begins_with("campaign01.hp.") \
+						or fkey.begins_with("campaign01.maze.") \
 						or fkey.begins_with("global.mode_choice."):
 					continue
 				lines.append("旗标：%s" % fkey)
@@ -903,6 +1007,48 @@ func _run_shots_m3() -> void:
 		await get_tree().create_timer(2.0).timeout # 探索演出 1s + 战斗铺开
 	await _shot("/tmp/m3_battle.png") # 连战第一场（无休整，HP 持久 11 §7.1）
 	print("[shots] M3 两张完成：/tmp/m3_entry.png /tmp/m3_battle.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 幕二截图（护送战/迷宫序列/撕页抉择证据 /tmp，不提交）
+
+## `-- --act2-shots`：传送至幕二节点（仅截图证据，不走完整流程）——
+## 护送战 N2S-2（缮写士入队）、雾码头探索序列 N2G-2（伏击拍）、撕页行动战后抉择 N2U-2。
+func _run_shots_act2() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	# 1) 护送战：整备 → 遭遇（缮写士以 escort_npc 入队，tech/02 §6 escort 块）
+	graph._enter("N2S-2")
+	_present_node()
+	await get_tree().create_timer(0.3).timeout
+	(current_screen as ScreenLoadout)._on_confirm()
+	await get_tree().create_timer(1.8).timeout
+	await _shot("/tmp/act2_escort.png")
+	stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", "N2S-2")
+	await get_tree().create_timer(1.6).timeout
+	# 2) 迷宫探索序列：N2G-2 第 1 拍检定 → 推进 → 第 2 拍伏击判定
+	graph._enter("N2G-2")
+	_maze = null
+	_present_node()
+	await get_tree().create_timer(0.4).timeout
+	_on_story_edge(0) # 第 1 拍（检定）
+	await get_tree().create_timer(1.2).timeout
+	await _shot("/tmp/act2_maze.png") # 第 2 拍：伏击判定呈现
+	# 3) 撕页行动：战斗 → 模拟胜利 → 战后抉择（撕/不撕双出边，tech/02 §6 hybrid）
+	graph._enter("N2U-2")
+	_maze = null
+	_present_node()
+	await get_tree().create_timer(0.3).timeout
+	(current_screen as ScreenLoadout)._on_confirm()
+	await get_tree().create_timer(1.8).timeout
+	stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 2}, &"core", "N2U-2")
+	await get_tree().create_timer(1.8).timeout
+	await _shot("/tmp/act2_hybrid.png")
+	print("[shots] 幕二三张完成：/tmp/act2_escort.png /tmp/act2_maze.png /tmp/act2_hybrid.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）

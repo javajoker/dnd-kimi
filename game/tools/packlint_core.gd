@@ -142,6 +142,17 @@ static func _collect_effects(pack: Dictionary) -> Array:
 		var evd: Dictionary = ev
 		for effect: Variant in evd.get("settle", []):
 			out.append({"effect": effect, "where": "events.%s.settle" % str(evd.get("id", "?"))})
+	# 遭遇扩展块效果（tech/02 §6）：maze 节拍成败效果 + escort 目标失败效果，纳入同一校验闭环
+	for eid: String in (pack.get("encounters", {}) as Dictionary).keys():
+		var enc: Dictionary = pack["encounters"][eid]
+		for effect: Variant in (enc.get("escort", {}) as Dictionary).get("failure_effects", []):
+			out.append({"effect": effect, "where": "encounters.%s.escort.failure_effects" % eid})
+		var beats: Array = (enc.get("maze", {}) as Dictionary).get("beats", [])
+		for i: int in beats.size():
+			var beat: Dictionary = beats[i]
+			for field: String in ["success_effects", "failure_effects"]:
+				for effect: Variant in beat.get(field, []):
+					out.append({"effect": effect, "where": "encounters.%s.maze.beats[%d].%s" % [eid, i, field]})
 	return out
 
 ## 全包条件出处：[{cond, where}]（边 requires + endings.conditions + events trigger.requires）。
@@ -581,6 +592,33 @@ static func _v11_resource_refs(pack: Dictionary) -> Array:
 		if str(enc.get("type", "")) == "battle" and (enc.get("enemies", []) as Array).is_empty():
 			issues.append({"v": "V11", "level": LEVEL_WARN,
 				"msg": "战斗遭遇 %s 未声明 enemies（tech/02 §6）：敌人阵容待内容定稿" % eid})
+		# 护送/迷宫扩展块（tech/02 §6 escort/maze 字段）
+		if str(enc.get("type", "")) == "escort":
+			var esc: Dictionary = enc.get("escort", {})
+			if esc.is_empty():
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "护送遭遇 %s 缺 escort 块（tech/02 §6：escort 类型必填）" % eid})
+			elif (esc.get("unit", {}) as Dictionary).is_empty() or int(esc.get("survive_rounds", 0)) < 1:
+				issues.append({"v": "V11", "level": LEVEL_FAIL,
+					"msg": "护送遭遇 %s escort 块缺 unit 或 survive_rounds < 1（tech/02 §6）" % eid})
+		if str(enc.get("type", "")) == "maze":
+			var beats: Array = (enc.get("maze", {}) as Dictionary).get("beats", [])
+			if beats.is_empty():
+				issues.append({"v": "V11", "level": LEVEL_WARN,
+					"msg": "迷宫遭遇 %s 未声明 maze.beats（tech/02 §6）：探索序列待内容定稿" % eid})
+			for beat: Variant in beats:
+				var b: Dictionary = beat
+				var btype := str(b.get("type", ""))
+				if not ["check", "loot", "ambush"].has(btype):
+					issues.append({"v": "V11", "level": LEVEL_FAIL,
+						"msg": "遭遇 %s maze 节拍类型 '%s' 非法（tech/02 §6：check/loot/ambush）" % [eid, btype]})
+				if btype == "loot" and not items.has(str(b.get("item", ""))):
+					issues.append({"v": "V11", "level": LEVEL_FAIL,
+						"msg": "遭遇 %s maze 拾取节拍引用未登记道具 '%s'（items.json）" % [eid, str(b.get("item", ""))]})
+				if btype == "ambush" and str(b.get("enemy", "")) != "" \
+						and not enemies.has(str(b["enemy"])):
+					issues.append({"v": "V11", "level": LEVEL_FAIL,
+						"msg": "遭遇 %s maze 伏击节拍引用未登记敌人 '%s'（enemies.json）" % [eid, str(b["enemy"])]})
 	# 效果 → 规则包注册属性（tech/04 §5.1：target_attr 须在绑定规则包注册）
 	for eid: String in effects.keys():
 		var ta := str((effects[eid] as Dictionary).get("target_attr", ""))
@@ -690,6 +728,22 @@ static func _v12_legal_keys(pack: Dictionary) -> Array:
 					"msg": "%s attr '%s' 非法（11 §1 三属性）" % [where, str(s["attr"])]})
 			if s.has("save"):
 				_check_save(s["save"], where, issues)
+	# 迷宫节拍检定：技能名在绑定规则包注册 + 难度三档（与检定边同一硬规则，tech/02 §6 maze 块）
+	for eid: String in (pack.get("encounters", {}) as Dictionary).keys():
+		var beats: Array = ((pack["encounters"][eid] as Dictionary).get("maze", {}) as Dictionary).get("beats", [])
+		for i: int in beats.size():
+			var beat: Dictionary = beats[i]
+			if not ["check", "ambush"].has(str(beat.get("type", ""))):
+				continue
+			var where := "encounters.%s.maze.beats[%d]" % [eid, i]
+			if not DIFFICULTIES.has(str(beat.get("difficulty", ""))):
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s 难度 '%s' 非法（轻规则三档 easy/medium/hard，11 文档 §3）"
+						% [where, str(beat.get("difficulty", ""))]})
+			for skill: String in str(beat.get("skill", "")).split("_or_", false):
+				if not LIGHT_SKILLS.has(skill):
+					issues.append({"v": "V12", "level": LEVEL_FAIL,
+						"msg": "%s 技能 '%s' 未在绑定规则包 light v1 注册（11 文档 §2）" % [where, skill]})
 	# 道具 use 块：timing 合法值（tech/04 §4）
 	for iid: String in (pack.get("items", {}) as Dictionary).keys():
 		var it: Dictionary = pack["items"][iid]

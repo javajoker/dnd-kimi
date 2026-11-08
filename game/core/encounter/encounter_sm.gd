@@ -59,6 +59,10 @@ var _xp := 0
 var _over := false
 var _result: StringName = &""
 var _last_actor: String = ""
+# ---- 护送目标（11 §5「遭遇定义的目标达成」；tech/02 §6 escort 块）----
+var _escort_unit_id := ""          # 护送对象实例 id（kind=escort_npc：不占行动轮、不可指令、HP 不持久化）
+var _escort_survive_rounds := 0    # 存活满 N 个完整回合即胜；0 = 非护送遭遇
+var _escort_failure_effects: Array = [] # 目标失败写板（罚时替代全灭，08 §2 失败即分支）
 
 func _init(p_board: Board, p_stream: EventStream, p_rng: Rng, p_pack_id: String = "system") -> void:
 	board = p_board
@@ -105,6 +109,11 @@ func begin_combat(def: Dictionary) -> bool:
 	_party_adv_rounds = int(def.get("party_advantage_rounds", 0))
 	_loot = (def.get("loot", []) as Array).duplicate(true)
 	_xp = int(def.get("xp", 0))
+	# 护送目标声明（tech/02 §6 escort 块；胜负条件 = 11 §5 目标达成）
+	var esc: Dictionary = def.get("escort", {})
+	_escort_unit_id = str(esc.get("unit_id", ""))
+	_escort_survive_rounds = int(esc.get("survive_rounds", 0))
+	_escort_failure_effects = (esc.get("failure_effects", []) as Array).duplicate(true)
 	_over = false
 	_result = &""
 	# 先攻 = d20 + 敏修正，降序，平局玩家优先（11 §5）
@@ -166,7 +175,8 @@ func _begin_party_phase() -> void:
 	_party_pending.clear()
 	for id: String in _order:
 		var u: Dictionary = _units[id]
-		if u["side"] == &"party" and not bool(u["dead"]):
+		if u["side"] == &"party" and not bool(u["dead"]) and u["kind"] != &"escort_npc":
+			# 护送对象不占行动轮、不可被指令（tech/02 §6 escort 块）
 			u["action_used"] = false
 			u["bonus_used"] = false
 			_party_pending.append(id)
@@ -236,6 +246,10 @@ func _run_enemy_phase() -> void:
 			return
 	_round += 1
 	_party_adv_rounds = maxi(0, _party_adv_rounds - 1)
+	# 护送目标：存活满 survive_rounds 个完整回合即胜（11 §5 目标达成，tech/02 §6 escort 块）
+	if _escort_survive_rounds > 0 and _round > _escort_survive_rounds and _escort_alive():
+		_finish(&"victory")
+		return
 	_begin_party_phase()
 
 ## 敌方行动：与玩家走同一结算路径（同一事件流，tech/01 §6.2），source=&"enemy"。
@@ -269,7 +283,10 @@ func _enemy_act(u: Dictionary) -> void:
 			if _over:
 				return
 		return
+	# 近战意图优先指向护送对象（打断仪式，tech/02 §6 escort 块）；范围效果照常覆盖全队
 	var target_id := first_alive_party()
+	if _escort_alive():
+		target_id = _escort_unit_id
 	if target_id == "":
 		_check_battle_end()
 		return
@@ -513,6 +530,10 @@ func _emit_damage_outcome(t: Dictionary) -> void:
 		stream.emit(EventTypes.BATTLE_DEAD, {"unit": t["id"], "name": t["name"]}, &"core", node_id)
 	elif t["side"] == &"party" and bool(t["downed"]):
 		stream.emit(EventTypes.BATTLE_DOWN, {"unit": t["id"], "name": t["name"]}, &"core", node_id)
+		# 护送对象 HP 归 0 = 目标失败（objective_failed，罚时替代全灭，tech/02 §6 escort 块）
+		if str(t["id"]) == _escort_unit_id:
+			_finish(&"objective_failed")
+			return
 	_check_battle_end()
 
 func _revive(u: Dictionary, reason: StringName) -> void:
@@ -529,8 +550,25 @@ func _check_battle_end() -> void:
 		return
 	if first_alive_enemy() == "":
 		_finish(&"victory")
-	elif first_alive_party() == "":
-		_finish(&"defeat") # 全员倒地 = 团灭（11 §5.2）→ 失败路
+	elif _first_alive_fighter() == "":
+		# 全员（玩家+同伴）倒地 = 团灭（11 §5.2）→ 失败路；护送对象不计入战斗员
+		_finish(&"defeat")
+
+## 护送对象存活（未倒未死）；无护送声明恒 false。
+func _escort_alive() -> bool:
+	if _escort_unit_id.is_empty() or not _units.has(_escort_unit_id):
+		return false
+	var u: Dictionary = _units[_escort_unit_id]
+	return not bool(u["dead"]) and not bool(u["downed"])
+
+## 首个可行动的存活战斗员（玩家/同伴；护送 NPC 不算战斗员，tech/02 §6）。
+func _first_alive_fighter() -> String:
+	for id: String in _order:
+		var u: Dictionary = _units[id]
+		if u["side"] == &"party" and u["kind"] != &"escort_npc" \
+				and not bool(u["dead"]) and not bool(u["downed"]):
+			return id
+	return ""
 
 func _finish(result: StringName) -> void:
 	_over = true
@@ -549,12 +587,19 @@ func _finish(result: StringName) -> void:
 		if _xp > 0:
 			# 遭遇经验 = xp 效果同一通道：写 global.growth.xp 并自动结算升级（tech/04 §8 规则1/2）
 			Growth.new(board).grant_xp(_xp, prov)
+	elif result == &"objective_failed":
+		# 护送目标失败：无战利品/经验，按声明写板罚时等代价（08 §2 失败即分支；
+		# 效果 DSL 同一通道，tech/02 §4.6）——之后仍走节点唯一出边（由引导层推进）
+		if not _escort_failure_effects.is_empty():
+			Conditions.new(board).apply_effects(_escort_failure_effects, {
+				"pack_id": pack_id, "node_id": node_id, "event_id": ev["id"], "source": "core"})
 	# 11 §7.1：遭遇结束时 HP 写状态板（<ns>.hp.<char_id>），下次遭遇以此开局；
 	# 倒地同伴战后 1 HP 起身（上方 _revive 已落 hp=1）；非死亡单位至少 1 HP 落板（团灭=失败路分支，
 	# 不做永久团灭锁死），死亡单位写 0（组装层按 1 HP 抬升，11 §7.1 落地裁决见交付说明）。
 	for id: String in _order:
 		var u: Dictionary = _units[id]
-		if u["side"] == &"party":
+		if u["side"] == &"party" and u["kind"] != &"escort_npc":
+			# 护送 NPC 非 characters.json 条目：HP 不跨遭遇持久化（tech/02 §6 escort 块）
 			var char_id := str(u.get("ref", u["id"]))
 			var hp_write := 0 if bool(u["dead"]) else maxi(int(u["hp"]), 1)
 			board.write("%s.hp.%s" % [pack_id, char_id], hp_write, prov)

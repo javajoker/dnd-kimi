@@ -111,7 +111,8 @@ static func toast_text(ev: Dictionary, pack: Dictionary = {}) -> String:
 			if key.begins_with("global.growth.") or key.begins_with("campaign01.attr") \
 					or key == "campaign01.xp_total" \
 					or key == "campaign01.level" or key == "campaign01.gold" \
-					or key.begins_with("campaign01.hp.") or key.begins_with("global.mode_choice."):
+					or key.begins_with("campaign01.hp.") or key.begins_with("campaign01.maze.") \
+					or key.begins_with("global.mode_choice."):
 				return ""
 			return "旗标更新：%s" % key
 		EventTypes.REP_CHANGE:

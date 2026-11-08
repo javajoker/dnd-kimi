@@ -31,6 +31,9 @@ func _init() -> void:
 	test_quest_runtime()
 	test_battle_data_driven()
 	test_hp_persistence()
+	test_escort_sm()
+	test_maze_runner()
+	test_act2_chains()
 	test_story_runtime()
 	test_story_vm()
 	test_subgame_arena()
@@ -46,6 +49,7 @@ func _async_shell_tests() -> void:
 	await test_ui_screens()
 	await test_subgame_flow()
 	await test_entitlement_flow()
+	await test_act2_hybrid_flow()
 	await test_main_flow()
 	if failures == 0:
 		print("== 全部通过 ==")
@@ -286,7 +290,8 @@ func test_pack_loader() -> void:
 	check((pack["items"] as Dictionary).size() == 7, "道具表 7 件（M2 补登 heal_potion）")
 	check((pack["characters"] as Dictionary).size() == 3, "角色表 3 条（玩家模板+珂兰+老费，tech/04 §2）")
 	check((pack["skills"] as Dictionary).size() == 6, "技能表 6 条（tech/04 §3）")
-	check((pack["enemies"] as Dictionary).size() == 2, "敌人表 2 条（tech/04 §1）")
+	check((pack["enemies"] as Dictionary).size() == 7,
+		"敌人表 7 条（幕二阵容补登：墨魈群/黑羽卫/税吏卫队/雾码头伏击者/三方佣兵，tech/04 §1）")
 	var n17: Dictionary = pack["encounters"]["N1-7"]
 	check((n17["party"] as Array).size() == 3 and (n17["enemies"] as Array).size() == 3
 		and n17.has("pos") and n17.has("party_advantage"),
@@ -380,6 +385,22 @@ func test_packlint() -> void:
 	check(PacklintCore.lint(bad_consume).any(func(i: Dictionary) -> bool:
 		return i["v"] == "V13" and i["level"] == PacklintCore.LEVEL_FAIL),
 		"负例：consume 道具无 use 块（静默消失）V13 必报 FAIL")
+	# ---- escort/maze 扩展块负例（tech/02 §6，幕二接入）----
+	var bad_escort: Dictionary = pack.duplicate(true)
+	(bad_escort["encounters"]["N2S-2"] as Dictionary).erase("escort")
+	check(PacklintCore.lint(bad_escort).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V11" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：护送遭遇缺 escort 块 V11 必报 FAIL")
+	var bad_beat_skill: Dictionary = pack.duplicate(true)
+	((bad_beat_skill["encounters"]["N2G-2"] as Dictionary)["maze"]["beats"][0] as Dictionary)["skill"] = "no_such_skill"
+	check(PacklintCore.lint(bad_beat_skill).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V12" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：迷宫节拍技能未注册 V12 必报 FAIL")
+	var bad_beat_foe: Dictionary = pack.duplicate(true)
+	((bad_beat_foe["encounters"]["N2G-2"] as Dictionary)["maze"]["beats"][1] as Dictionary)["enemy"] = "ghost"
+	check(PacklintCore.lint(bad_beat_foe).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V11" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：伏击节拍引用未登记敌人 V11 必报 FAIL")
 
 # ---------------------------------------------------------------- StoryGraph（tech/02 §3/§4/§9）
 
@@ -481,8 +502,13 @@ func test_story_bot() -> void:
 	var clock_ok := true
 	var lone_wolf_hit := false
 	var ngplus_bond60 := false
+	var chain_hits := {} # 幕二三委托链收束点覆盖
+	var detour_hit := false # 幕二绕行路（N2G-2c）
 	for i: int in 24:
-		var r := StoryBot.run(pack, 1000 + i * 7919, i % 2 == 1, i % 4 == 2)
+		var lone := i % 4 == 2
+		var ngp := i % 2 == 1
+		var detour := i % 12 == 4 and not lone and not ngp # 绕行探针（i=4,16，确定性覆盖 N2G-2c）
+		var r := StoryBot.run(pack, 1000 + i * 7919, ngp, lone, detour)
 		if not r["ok"]:
 			all_ok = false
 			continue
@@ -490,6 +516,11 @@ func test_story_bot() -> void:
 		endings[ending] = true
 		if (r["visited"] as Dictionary).has("N2L-1") or (r["visited"] as Dictionary).has("N2L-1b"):
 			lone_wolf_hit = true
+		if (r["visited"] as Dictionary).has("N2G-2c"):
+			detour_hit = true
+		for cn: String in ["N2S-3", "N2U-3", "N2G-3"]:
+			if (r["visited"] as Dictionary).has(cn):
+				chain_hits[cn] = true
 		if r["ngplus"] and int(r["bond_max"]) >= 60:
 			ngplus_bond60 = true
 		if int(r["clock_min"]) < 0 or int(r["clock_max"]) > 10:
@@ -499,6 +530,9 @@ func test_story_bot() -> void:
 			all_ok = false
 	check(all_ok, "24 局全部必达结局且图边结局与结局表一致")
 	check(clock_ok, "全部路径 clock ∈ 0~10（07 §2 钳位 + V5 有界）")
+	check(chain_hits.has("N2S-3") and chain_hits.has("N2U-3") and chain_hits.has("N2G-3"),
+		"幕二三委托链收束点仿真全覆盖（S/U/G，幕二接入验收）")
+	check(detour_hit, "幕二绕行路 N2G-2c 仿真命中（绕行探针确定性覆盖，tech/02 §4.3 fallback）")
 	check(endings.has("E1") and endings.has("E2"), "alignment 修复后 E1/E2 可达（±10 投放）")
 	check(endings.has("E3"), "二周目配置 E3 可达（残简继承 ×1 + 密道/R2/R5 ×3 + 图内投放羁绊继承）")
 	check(endings.has("E4"), "E4 兜底可达（tech/02 §9 default）")
@@ -1587,6 +1621,367 @@ func test_hp_persistence() -> void:
 			break
 	check(down_done, "seed 空间内找到倒地同伴 1 HP 起身样本")
 
+# ---------------------------------------------------------------- 护送战（11 §5「遭遇定义的目标达成」；tech/02 §6 escort 块，幕二 N2S-2）
+
+func _escort_def() -> Dictionary:
+	return {"party": [
+			{"id": "pc", "name": "白页者", "kind": "player", "hp": 14, "max_hp": 14, "ac": 11,
+				"attrs": {"might": 2, "finesse": 1, "wits": 0}, "attack_mod": 2, "damage": "1d6+2"},
+			{"id": "scribe", "name": "缮写士", "kind": "escort_npc", "hp": 50, "max_hp": 50, "ac": 12,
+				"attrs": {"might": 0, "finesse": 1, "wits": 1}, "attack_mod": 0, "damage": "1d4"}],
+		"enemies": [{"id": "e1", "name": "墨魈群", "hp": 200, "max_hp": 200, "ac": 10,
+			"attrs": {"might": 1, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"}],
+		"escort": {"unit_id": "scribe", "survive_rounds": 2, "failure_effects": [{"clock": 1}]}}
+
+func test_escort_sm() -> void:
+	print("[escort_sm]")
+	# ---- 存活 N 回合即胜（11 §5 目标达成）：敌人高 HP 不可全歼，pc 全程结束回合 ----
+	var sm := _sm_with(5, _escort_def())
+	var saw_scribe_turn := false
+	var guard := 0
+	while not sm.is_over() and guard < 30:
+		guard += 1
+		var actor := sm.current_actor_id()
+		if actor == "scribe":
+			saw_scribe_turn = true
+			break
+		if actor == "":
+			break
+		sm.submit_command(_cmd(EncounterSM.CMD_END_TURN, actor))
+	check(sm.is_over() and sm.result() == &"victory", "护送对象存活满 2 回合 → 胜利（11 §5 目标达成）")
+	check(sm.first_alive_enemy() != "", "敌人未被全歼：胜利来自存活回合数（非全灭路径）")
+	check(not bool(sm.get_unit("scribe")["downed"]), "缮写士全程存活")
+	check(not saw_scribe_turn, "护送对象不占行动轮、不可被指令（escort_npc，tech/02 §6）")
+	# 敌方近战意图优先指向护送对象（打断仪式，tech/02 §6 escort 块）
+	var atks := sm.stream.query_by_type(EventTypes.BATTLE_ATTACK).filter(
+		func(ev: Dictionary) -> bool: return ev["payload"]["source"] == &"enemy")
+	check(not atks.is_empty() and atks.all(func(ev: Dictionary) -> bool:
+		return str(ev["payload"]["target"]) == "scribe"), "敌方近战全部指向护送对象（打断仪式）")
+	# ---- 护送对象 HP 归 0 = 目标失败（罚时替代全灭）----
+	var fail_done := false
+	for seed: int in range(1, 60):
+		var def := _escort_def()
+		(def["party"][1] as Dictionary)["hp"] = 14 # 缮写士脆血
+		((def["enemies"][0] as Dictionary))["attack_mod"] = 30
+		(def["enemies"][0] as Dictionary)["damage"] = "30d6"
+		var smf := _sm_with(seed, def)
+		var g2 := 0
+		while not smf.is_over() and g2 < 40:
+			g2 += 1
+			var a := smf.current_actor_id()
+			if a == "":
+				break
+			smf.submit_command(_cmd(EncounterSM.CMD_END_TURN, a))
+		if not (smf.is_over() and smf.result() == &"objective_failed"):
+			continue
+		fail_done = true
+		check(int(smf.board.get_doom_clock()) == 1, "目标失败按 failure_effects 写板：时间钟 +1（罚时替代全灭）")
+		check(smf.stream.query_by_type(EventTypes.XP_GAIN).is_empty(), "目标失败无经验/战利品")
+		check(smf.stream.query_by_type(EventTypes.COMBAT_END).back()["payload"]["result"] == &"objective_failed",
+			"combat.end(objective_failed) 事件")
+		check(not smf.board.has("campaign01.hp.scribe"), "护送 NPC HP 不跨遭遇持久化（非 characters.json 条目）")
+		check(smf.board.has("campaign01.hp.pc"), "战斗员 HP 照常写板（11 §7.1）")
+		break
+	check(fail_done, "seed 空间内找到护送目标失败样本")
+	# ---- 全歼敌人亦胜 + 数据驱动组装（N2S-2，tech/02 §6 / tech/04 §1~§4）----
+	var pack := _load_campaign01()
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var res := BattleDef.assemble(pack, "N2S-2", {}, board)
+	check(bool(res["ok"]), "N2S-2 护送遭遇组装 ok：%s" % ";".join(res["errors"] as Array))
+	var def: Dictionary = res["def"]
+	check(str((def["escort"] as Dictionary)["unit_id"]) == "scribe"
+		and int((def["escort"] as Dictionary)["survive_rounds"]) == 3
+		and int((((def["escort"] as Dictionary)["failure_effects"] as Array)[0] as Dictionary)["clock"]) == 1,
+		"组装含 escort 块：unit/survive_rounds/failure_effects（tech/02 §6）")
+	check((def["party"] as Array).any(func(u: Variant) -> bool:
+		return str((u as Dictionary)["kind"]) == "escort_npc" and str((u as Dictionary)["name"]) == "缮写士"),
+		"缮写士以 escort_npc 实例入队")
+	for u: Variant in def["party"]:
+		if str((u as Dictionary)["kind"]) == "escort_npc":
+			continue
+		(u as Dictionary)["attack_mod"] = 30
+		(u as Dictionary)["damage"] = "30d6"
+		(u as Dictionary).erase("skills") # 托管优先技能：清技能确保重骰普攻速胜（流程夹具）
+		(u as Dictionary).erase("items")
+	var smw := EncounterSM.new(board, stream, Rng.new(7), "campaign01")
+	var agent := AutoAgent.new()
+	smw.enter("N2S-2")
+	smw.transition(EncounterSM.S_EXPLORE)
+	smw.begin_combat(def)
+	var g3 := 0
+	while not smw.is_over() and g3 < 200:
+		g3 += 1
+		var cmd := agent.next_command(smw)
+		if cmd.is_empty():
+			break
+		smw.submit_command(cmd)
+	check(smw.result() == &"victory" and smw.first_alive_enemy() == "", "全歼墨魈群 → 护送胜利")
+	check(not smw.board.has("campaign01.hp.scribe"), "全歼路：护送 NPC 亦不落 HP 簿记")
+	check(Growth.xp(board) == 120, "护送胜利经验 120 汇入成长（tech/04 §8 规则1）")
+
+# ---------------------------------------------------------------- 迷宫探索序列（tech/02 §6 maze 块；04 §④.3 房间类型，幕二 N2G-2/2b/2c）
+
+func test_maze_runner() -> void:
+	print("[maze_runner]")
+	var pack := _load_campaign01()
+	var beats: Array = ((pack["encounters"]["N2G-2"] as Dictionary)["maze"] as Dictionary)["beats"]
+	# ---- 检定拍：成功 xp / 失败罚时（效果 DSL 写板，tech/02 §4.6）----
+	var got_succ := false
+	var got_fail := false
+	for seed: int in range(1, 200):
+		if got_succ and got_fail:
+			break
+		var stream := EventStream.new()
+		var board := Board.new(stream)
+		var graph := StoryGraph.new(board, Rng.new(1), pack)
+		var mr := MazeRunner.new(board, stream, Rng.new(seed), "campaign01")
+		mr.begin("N2G-2", beats, Callable(graph, "check_mod"), "N2G-2")
+		var res := mr.resolve()
+		if bool(res["success"]) and not got_succ:
+			got_succ = true
+			check(Growth.xp(board) == 30, "检定拍成功：success_effects xp +30 汇入成长")
+			check(stream.query_by_type(EventTypes.CHECK_ROLL).back()["payload"]["kind"] == "maze_check",
+				"检定拍产出 check.roll（kind=maze_check）")
+		elif not bool(res["success"]) and not got_fail:
+			got_fail = true
+			check(int(board.get_doom_clock()) == 1, "检定拍失败：failure_effects 时间钟 +1")
+	check(got_succ and got_fail, "seed 空间内迷宫检定成败双样本")
+	# ---- 完整序列：3 拍（检定/伏击判定/检定）+ 伏击拍事件型别 + 进度簿记 ----
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var graph := StoryGraph.new(board, Rng.new(1), pack)
+	var mr := MazeRunner.new(board, stream, Rng.new(42), "campaign01")
+	mr.begin("N2G-2", beats, Callable(graph, "check_mod"), "N2G-2")
+	check(mr.beat_count() == 3 and not mr.is_done(), "雾码头探索序列 3 拍")
+	var kinds: Array = []
+	while not mr.is_done():
+		mr.resolve()
+	for ev: Dictionary in stream.query_by_type(EventTypes.CHECK_ROLL):
+		kinds.append(str(ev["payload"]["kind"]))
+	check(kinds == ["maze_check", "maze_ambush", "maze_check"], "节拍序列：检定 → 伏击判定 → 检定（事件型别）")
+	check(int(board.read("campaign01.maze.N2G-2.idx", 0)) == 3, "节拍进度簿记 <pack>.maze.<enc>.idx（07 §2）")
+	# 完成后恢复 = 幂等：新 Runner 读进度直接完成，不重打效果（07 §4.2 中途离场续打）
+	var clock_after := int(board.get_doom_clock())
+	var mr2 := MazeRunner.new(board, stream, Rng.new(42), "campaign01")
+	mr2.begin("N2G-2", beats, Callable(graph, "check_mod"), "N2G-2")
+	check(mr2.is_done() and mr2.peek().is_empty(), "已完成序列恢复：直接完成不重打（幂等）")
+	check(int(board.get_doom_clock()) == clock_after, "恢复后无重复效果写板")
+	# ---- 拾取拍（04 §④.3 拾取房）+ 中途恢复续打 ----
+	var stream2 := EventStream.new()
+	var board2 := Board.new(stream2)
+	var graph2 := StoryGraph.new(board2, Rng.new(1), pack)
+	var beats_b: Array = ((pack["encounters"]["N2G-2b"] as Dictionary)["maze"] as Dictionary)["beats"]
+	var mb := MazeRunner.new(board2, stream2, Rng.new(9), "campaign01")
+	mb.begin("N2G-2b", beats_b, Callable(graph2, "check_mod"), "N2G-2b")
+	var res_loot := mb.resolve()
+	check(str(res_loot["type"]) == "loot" and board2.item_count("ink_core") == 1,
+		"拾取拍：墨核 ×1 经 give_item 写板（07 §1 溯源）")
+	check(stream2.query_by_type(EventTypes.ITEM_GAIN).size() == 1, "拾取拍产出 item.gain 事件")
+	# 中途离场 → 恢复：新 Runner 从第 2 拍续打（第 1 拍拾取不重复）
+	var mb2 := MazeRunner.new(board2, stream2, Rng.new(9), "campaign01")
+	mb2.begin("N2G-2b", beats_b, Callable(graph2, "check_mod"), "N2G-2b")
+	check(mb2.beat_index() == 1 and not mb2.is_done(), "中途恢复：从下一拍续打")
+	mb2.resolve()
+	check(board2.item_count("ink_core") == 1, "恢复续打：拾取不重复（仍 ×1）")
+	# ---- 绕行路 N2G-2c：双伏击拍（多 2 场遭遇以节拍呈现）----
+	var beats_c: Array = ((pack["encounters"]["N2G-2c"] as Dictionary)["maze"] as Dictionary)["beats"]
+	check(beats_c.size() == 2 and beats_c.all(func(b: Variant) -> bool:
+		return str((b as Dictionary)["type"]) == "ambush"), "绕行路 = 双伏击拍（多 2 场遭遇，战役书幕二 G 链）")
+
+# ---------------------------------------------------------------- 幕二四链接入（战役书幕二；tech/02 §3/§4；11 §5）
+
+## 托管打胜一场已登记遭遇（高修正重骰夹具：流程验证，非数值平衡验证）。
+func _win_pack_battle(pack: Dictionary, enc_id: String, board: Board, stream: EventStream) -> EncounterSM:
+	var res := BattleDef.assemble(pack, enc_id, {}, board)
+	check(bool(res["ok"]), "遭遇 %s 组装 ok：%s" % [enc_id, ";".join(res["errors"] as Array)])
+	var def: Dictionary = res["def"]
+	for u: Variant in def["party"]:
+		if str((u as Dictionary)["kind"]) == "escort_npc":
+			continue
+		(u as Dictionary)["attack_mod"] = 30
+		(u as Dictionary)["damage"] = "30d6"
+		(u as Dictionary).erase("skills")
+		(u as Dictionary).erase("items")
+	var sm := EncounterSM.new(board, stream, Rng.new(7), "campaign01")
+	var agent := AutoAgent.new()
+	sm.enter(enc_id)
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(def)
+	var guard := 0
+	while not sm.is_over() and guard < 200:
+		guard += 1
+		var cmd := agent.next_command(sm)
+		if cmd.is_empty():
+			break
+		sm.submit_command(cmd)
+	return sm
+
+## 推进至 N1-8（婉拒所有邀约：三方声望 0，独狼边显形前提）。
+## N1-1 → N1-2 走无效果的「前往褪色现场」边（购买边会给潮汐表，干扰 G 链绕行断言）。
+func _reach_n18(g: StoryGraph) -> void:
+	g.start()
+	g.take_edge(_edge_to(g, "N0-2"))
+	g.resolve_check(g.available_edges()[0], true)
+	g.take_edge(_edge_to(g, "N0-4"))
+	g.take_edge(_edge_to(g, "N1-1"))
+	var e_plain := {}
+	for e: Variant in g.available_edges():
+		if str((e as Dictionary).get("to", "")) == "N1-2" \
+				and ((e as Dictionary).get("effects", []) as Array).is_empty():
+			e_plain = e
+	g.take_edge(e_plain)
+	g.resolve_check(g.available_edges()[0], true) # → N1-3
+	g.take_edge(_edge_to(g, "N1-8")) # 婉拒所有邀约
+
+## 跑完当前 explore 节点的迷宫探索序列（MazeRunner，tech/02 §6 maze）。
+func _run_maze(g: StoryGraph, pack: Dictionary, board: Board, stream: EventStream) -> void:
+	var enc_id := str(g.current().get("encounter", g.current_id))
+	var enc: Dictionary = (pack["encounters"] as Dictionary)[enc_id]
+	var mr := MazeRunner.new(board, stream, Rng.new(11), "campaign01")
+	mr.begin(enc_id, (enc.get("maze", {}) as Dictionary).get("beats", []),
+		Callable(g, "check_mod"), g.current_id)
+	var guard := 0
+	while not mr.is_done() and guard < 10:
+		guard += 1
+		mr.resolve()
+
+func test_act2_chains() -> void:
+	print("[act2_chains]")
+	var pack := _load_campaign01()
+	# ================= S 链：誊写庭（护送战 → 金墨的代价）=================
+	var ss := EventStream.new()
+	var sb := Board.new(ss)
+	var gs := StoryGraph.new(sb, Rng.new(42), pack)
+	_reach_n18(gs)
+	gs.take_edge(_edge_to(gs, "N2S-1"))
+	gs.resolve_check(gs.available_edges()[0], true) # 档案馆试炼 → N2S-2
+	check(gs.current_id == "N2S-2", "S 链：N2S-1 → N2S-2（修复仪式护送战）")
+	var sm_s := _win_pack_battle(pack, "N2S-2", sb, ss)
+	check(sm_s.result() == &"victory", "S 链：护送战胜利")
+	gs.take_edge(_edge_to(gs, "N2S-3"))
+	check(not sb.has_item("scriptorium_signet"), "S 链：on_complete 未离开不结算")
+	gs.take_edge(gs.available_edges()[0]) # 献出一段自己的记忆
+	check(gs.current_id == "N2-C", "S 链收束：N2S-3 → N2-C")
+	check(sb.read("campaign01.blank_memory") == true, "S 链写板：空白记忆旗标")
+	check(int(sb.get_alignment()) == 60, "S 链写板：墨守 +10（50→60）")
+	check(int(sb.get_bond("kelan")) == 15, "S 链写板：羁绊 +15")
+	check(int(sb.get_doom_clock()) == 0, "S 链写板：时钟 -2 钳位（1→0）")
+	check(sb.has_item("scriptorium_signet"), "S 链：离开 N2S-3 结算誊写庭印戒（tech/02 §3）")
+	# ================= U 链：断墨会（hybrid 撕/不撕双抉择）=================
+	for tear: int in 2:
+		var us := EventStream.new()
+		var ub := Board.new(us)
+		var gu := StoryGraph.new(ub, Rng.new(42), pack)
+		_reach_n18(gu)
+		gu.take_edge(_edge_to(gu, "N2U-1"))
+		gu.resolve_check(gu.available_edges()[0], true) # 黑羽集会 → N2U-2
+		check(gu.current_id == "N2U-2", "U 链：N2U-1 → N2U-2（撕页行动 hybrid）")
+		var sm_u := _win_pack_battle(pack, "N2U-2", ub, us)
+		check(sm_u.result() == &"victory", "U 链：税吏卫队战胜利")
+		var u_edges := gu.available_edges()
+		check(u_edges.size() == 2, "U 链：战后双抉择边（撕/不撕，tech/02 §6 hybrid）")
+		gu.take_edge(u_edges[tear]) # 0=撕 / 1=不撕
+		# 声望 = 边效果 + 黑羽行动委托 settle +1（tech/02 §5：N2U-1 完成时结算）
+		if tear == 0:
+			check(ub.read("campaign01.page_tearer") == true and int(ub.get_rep("uninked")) == 3,
+				"U 链写板：撕页 → 撕页者旗标 + 断墨会声望 +2（含委托 settle +1 = 3）")
+		else:
+			check(ub.read("campaign01.mercy_shown") == true and int(ub.get_rep("uninked")) == 2,
+				"U 链写板：不撕 → 手下留情旗标 + 声望 +1（含委托 settle +1 = 2）")
+		check(ub.has_item("black_feather_token") and int(ub.get_alignment()) == 40,
+			"U 链写板：黑羽令（撕/不撕均给）+ 留白 -10（50→40）")
+		check(gu.current_id == "N2U-3" and int(ub.get_bond("kelan")) == 15
+			and int(ub.get_doom_clock()) == 2, "U 链：N2U-3 演出（时钟 +1、羁绊 +15）")
+		gu.take_edge(_edge_to(gu, "N2-C"))
+		check(gu.current_id == "N2-C", "U 链收束：N2U-3 → N2-C")
+	# U 链失败路：N2U-1 潜行失败 → 暴露战 → N2U-2
+	var us2 := EventStream.new()
+	var ub2 := Board.new(us2)
+	var gu2 := StoryGraph.new(ub2, Rng.new(42), pack)
+	_reach_n18(gu2)
+	gu2.take_edge(_edge_to(gu2, "N2U-1"))
+	gu2.resolve_check(gu2.available_edges()[0], false)
+	check(gu2.current_id == "N2U-1b", "U 链失败路：潜行失败 → 暴露战（N2U-1b）")
+	check(_win_pack_battle(pack, "N2U-1b", ub2, us2).result() == &"victory", "U 链失败路：暴露战胜利")
+	gu2.take_edge(_edge_to(gu2, "N2U-2"))
+	check(gu2.current_id == "N2U-2", "U 链失败路：以武力赢得入场券 → N2U-2")
+	# ================= G 链：拾遗行会（迷宫密道 vs 绕行）=================
+	var fs := EventStream.new()
+	var fb := Board.new(fs)
+	var gf := StoryGraph.new(fb, Rng.new(42), pack)
+	gf.start()
+	gf.take_edge(_edge_to(gf, "N0-2"))
+	gf.resolve_check(gf.available_edges()[0], true)
+	gf.take_edge(_edge_to(gf, "N0-4"))
+	gf.take_edge(_edge_to(gf, "N1-1"))
+	var e_buy := _edge_to(gf, "N1-2")
+	for e: Variant in gf.available_edges():
+		for fx: Variant in (e as Dictionary).get("effects", []):
+			if (fx as Dictionary).get("give_item", "") == "half_tide_table":
+				e_buy = e
+	gf.take_edge(e_buy) # 购买半页潮汐表 → N1-2
+	gf.resolve_check(gf.available_edges()[0], true)
+	gf.take_edge(_edge_to(gf, "N1-8"))
+	gf.take_edge(_edge_to(gf, "N2G-1"))
+	gf.resolve_check(gf.available_edges()[0], true) # 残篇拍卖 → N2G-2
+	check(gf.current_id == "N2G-2" and fb.has_item("half_tide_table"), "G 链：N2G-1 → N2G-2（持潮汐表）")
+	_run_maze(gf, pack, fb, fs) # 雾码头探索序列 3 拍
+	var e_secret := _edge_to(gf, "N2G-2b")
+	check(not e_secret.is_empty() and not bool(e_secret.get("via_fallback", false)),
+		"G 链密道：持半页潮汐表 → item 边主路显形（tech/02 §4.3）")
+	gf.take_edge(e_secret)
+	check(gf.current_id == "N2G-2b" and fb.item_count("codex_fragment") == 1,
+		"G 链密道：直达沉书阁 + 织命者残简 ×1（on_enter）")
+	_run_maze(gf, pack, fb, fs) # 沉书阁拾取拍
+	check(fb.item_count("ink_core") == 1, "G 链密道：沉书阁额外战利品（墨核 ×1，拾取拍）")
+	gf.take_edge(_edge_to(gf, "N2G-3"))
+	check(fb.read("campaign01.insider") == true and int(fb.get_bond("kelan")) == 15,
+		"G 链写板：知情人旗标 + 羁绊 +15")
+	gf.take_edge(_edge_to(gf, "N2-C"))
+	check(gf.current_id == "N2-C", "G 链收束：N2G-3 → N2-C")
+	# 绕行（无潮汐表）：item 边 fallback → N2G-2c
+	var ds := EventStream.new()
+	var db := Board.new(ds)
+	var gd := StoryGraph.new(db, Rng.new(42), pack)
+	_reach_n18(gd)
+	gd.take_edge(_edge_to(gd, "N2G-1"))
+	gd.resolve_check(gd.available_edges()[0], true)
+	var e_detour := _edge_to(gd, "N2G-2c")
+	check(not e_detour.is_empty() and bool(e_detour.get("via_fallback", false)),
+		"G 链绕行：无潮汐表 → item 边 fallback 变体（tech/02 §4.3）")
+	gd.take_edge(e_detour)
+	check(gd.current_id == "N2G-2c", "G 链绕行 → N2G-2c")
+	_run_maze(gd, pack, db, ds) # 双伏击拍（多 2 场遭遇）
+	gd.take_edge(_edge_to(gd, "N2G-3"))
+	check(db.read("campaign01.insider") == true, "G 链绕行亦达 N2G-3（失败即分支，08 §2）")
+	# ================= L 链：独狼（难检定跳链 / 通缉战强制择链）=================
+	var ls := EventStream.new()
+	var lb := Board.new(ls)
+	var gl := StoryGraph.new(lb, Rng.new(42), pack)
+	_reach_n18(gl)
+	var e_lone := _edge_to(gl, "N2L-1")
+	check(not e_lone.is_empty(), "L 链：三方声望 0 → 独狼隐藏边显形（tech/02 §4.5）")
+	gl.take_edge(e_lone)
+	gl.resolve_check(gl.available_edges()[0], true) # 难检定成功 → 跳链直达收束
+	check(gl.current_id == "N2-C", "L 链：N2L-1 成功 → 直抵 N2-C（跳链，战役书幕二独狼）")
+	check(int(lb.get_doom_clock()) == 0, "L 链写板：独狼捷径时钟 -1（1→0）")
+	# 失败路：通缉战（声望 -1 ×3）→ 强制择一链
+	var ls2 := EventStream.new()
+	var lb2 := Board.new(ls2)
+	var gl2 := StoryGraph.new(lb2, Rng.new(42), pack)
+	_reach_n18(gl2)
+	gl2.take_edge(_edge_to(gl2, "N2L-1"))
+	gl2.resolve_check(gl2.available_edges()[0], false)
+	check(gl2.current_id == "N2L-1b", "L 链失败路：N2L-1 失败 → 通缉战")
+	check(int(lb2.get_rep("scriptorium")) == -1 and int(lb2.get_rep("uninked")) == -1
+		and int(lb2.get_rep("salvage")) == -1, "L 链失败路：三方声望 -1（on_enter 惩罚）")
+	check(_win_pack_battle(pack, "N2L-1b", lb2, ls2).result() == &"victory", "L 链失败路：通缉战胜利（难）")
+	var l_edges := gl2.available_edges()
+	check(l_edges.size() == 3, "L 链失败路：战后强制择一链（三出边）")
+	gl2.take_edge(_edge_to(gl2, "N2G-1"))
+	check(gl2.current_id == "N2G-1", "L 链失败路：择拾遗行会链 → N2G-1")
+
 # ---------------------------------------------------------------- 节点流程运行时（11 §2/§3；09 §6；04 §3.1；战役书 §4 N1-1）
 
 func test_story_runtime() -> void:
@@ -2079,6 +2474,43 @@ func test_subgame_flow() -> void:
 	(m.current_screen as ScreenSettle).go_home.emit()
 	await process_frame
 	check(m.current_screen is ScreenHome and not m._sub_active, "结算 → 回主屏（离场闭环，不新增导航项）")
+	m.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 幕二 hybrid 战后抉择流程（tech/02 §6 hybrid；N2U-2 撕页行动）
+# 回归点：多边战斗节点胜利后必须呈现故事态抉择，不得按 type=battle 重进遭遇（无限循环）。
+
+func test_act2_hybrid_flow() -> void:
+	print("[act2_hybrid_flow]")
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	m._on_home_navigate(&"entry")
+	await process_frame
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_TIME)
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	m.graph._enter("N2U-2") # 传送至撕页行动（流程测试，不走完整前置链）
+	m._present_node()
+	await process_frame
+	check(m.current_screen is ScreenLoadout, "撕页行动 → 整备界面（09 §9.1）")
+	(m.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.4).timeout
+	check(m._in_encounter, "撕页行动战斗开始（税吏卫队）")
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 2}, &"core", "N2U-2")
+	await create_timer(1.6).timeout
+	var sh := m.shell as EncounterPortrait
+	var opts := " ".join(sh.story_option_texts())
+	check(m.graph.current_id == "N2U-2" and not m._in_encounter
+		and opts.contains("撕掉税吏的命运页") and opts.contains("不撕"),
+		"hybrid 胜利 → 战后抉择双出边呈现（不重进遭遇，tech/02 §6 hybrid）")
+	m._on_story_edge(1) # 不撕
+	await process_frame
+	check(m.graph.current_id == "N2U-3" and m.board.read("campaign01.mercy_shown") == true
+		and m.board.has_item("black_feather_token"),
+		"抉择「不撕」→ 手下留情 + 黑羽令写板 → N2U-3（边效果，tech/02 §3）")
 	m.queue_free()
 	await process_frame
 
@@ -2604,10 +3036,34 @@ func test_main_flow() -> void:
 	for e: Variant in lone_vm["edges"]:
 		lone_labels += str((e as Dictionary)["label"]) + "|"
 	check(lone_labels.contains("我谁都不信"), "独狼隐藏边：三方声望 0 → 显形（tech/02 §4.5）")
-	# ---- 切片终点：branch 选择 → 出幕一 → 结算屏 + 快照落盘 ----
-	m._on_story_edge(0) # 誊写庭委托 → N2S-1（SL-2 出切片范围）
+	# ---- 幕二「三支笔」S 链：护送战 → N2-C 收束 → 切片终点（幕三未接入标注）----
+	m._on_story_edge(0) # 誊写庭委托 → N2S-1（幕二在切片内：SLICE_ACTS 含 SL-2）
 	await process_frame
-	check(m.current_screen is ScreenSettle, "到达 N1-8 选择 → 切片终点 → ⑨结算屏（04 §⑨）")
+	check(m.graph.current_id == "N2S-1" and not (m.current_screen is ScreenSettle),
+		"幕二接入：N1-8 委托 → N2S-1（切片延伸至 SL-2，战役书幕二）")
+	m._on_story_edge(0) # N2S-1 档案馆试炼掷检定（成败均至 N2S-2，失败路罚时 +1）
+	await create_timer(1.0).timeout
+	check(m.current_screen is ScreenLoadout, "N2S-1 → N2S-2 护送战整备（09 §9.1）")
+	var lo3 := m.current_screen as ScreenLoadout
+	lo3._toggle_skill("inkbolt")
+	lo3._toggle_skill("inkshield")
+	lo3._on_confirm()
+	await create_timer(1.4).timeout
+	check(m._in_encounter, "护送战开始（修复仪式，tech/02 §6 escort）")
+	check((m._battle_def({})["party"] as Array).any(func(u: Variant) -> bool:
+		return str((u as Dictionary)["kind"]) == "escort_npc" and str((u as Dictionary)["id"]) == "scribe"),
+		"护送对象缮写士以 escort_npc 入队（tech/02 §6 escort 块）")
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", "N2S-2")
+	await create_timer(1.6).timeout
+	check(m.graph.current_id == "N2S-3", "护送胜利 → 战后边 → N2S-3（金墨的代价）")
+	m._on_story_edge(0) # 献出一段自己的记忆 → N2-C
+	await process_frame
+	check(m.graph.current_id == "N2-C", "S 链收束 → N2-C（三方情报拼合，战役书幕二收束）")
+	check(m.board.read("campaign01.blank_memory") == true, "献出记忆写板 blank_memory（N2S-3 边效果）")
+	check(m.board.has_item("scriptorium_signet"), "离开 N2S-3 结算 on_complete（誊写庭印戒，tech/02 §3）")
+	m._on_story_edge(0) # N2-C → N3-1：幕三未接入 → 切片终点
+	await process_frame
+	check(m.current_screen is ScreenSettle, "N2-C → 幕三未接入 → ⑨结算屏（幕二收束点切片终点，04 §⑨）")
 	check(FileAccess.file_exists(save_path), "快照在结算落盘（07 §4.2 主快照点）")
 	var read_back := SaveSystem.read("slot1")
 	check(bool(read_back["ok"]) and bool(SaveSystem.migrate(read_back["snapshot"])["ok"]),

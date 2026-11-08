@@ -21,6 +21,8 @@ func _init() -> void:
 	var endings := {} # ending_id -> count
 	var coverage := {} # node_id -> 到达局数
 	var lone_wolf_hits := 0
+	var chain_hits := {} # 幕二四链收束点覆盖：N2S-3/N2U-3/N2G-3/N2L-1|N2L-1b
+	var detour_hits := 0 # 幕二绕行路（N2G-2c，无潮汐表 fallback）
 	var total_checks := 0
 	var total_check_success := 0
 	for i: int in seed_count:
@@ -29,13 +31,20 @@ func _init() -> void:
 		var seed := 1000 + i * 7919
 		var ngplus := i % 2 == 1 # 半数二周目（多周目继承配置）
 		var lone_wolf := i % 4 == 2 # 1/4 一周目局为独狼探针（TP1 验收裁决 1 可达性验证）
-		var r := StoryBot.run(pack, seed, ngplus, lone_wolf)
+		# 幕二绕行探针：确定性覆盖 N2G-2c（一周目、非独狼局；不买潮汐表且优先拾遗行会链）
+		var detour := i % 12 == 4 and not lone_wolf and not ngplus
+		var r := StoryBot.run(pack, seed, ngplus, lone_wolf, detour)
 		if not r["ok"]:
 			failures += 1
 			push_error("  FAIL seed=%d ngplus=%s：%s" % [seed, ngplus, r["reason"]])
 			continue
 		if (r["visited"] as Dictionary).has("N2L-1") or (r["visited"] as Dictionary).has("N2L-1b"):
 			lone_wolf_hits += 1
+		if (r["visited"] as Dictionary).has("N2G-2c"):
+			detour_hits += 1
+		for chain_node: String in ["N2S-3", "N2U-3", "N2G-3"]:
+			if (r["visited"] as Dictionary).has(chain_node):
+				chain_hits[chain_node] = true
 		var ending := str(r["ending"])
 		# 图边结局与结局表求值互证（tech/02 §9）
 		if str(r["ending_by_table"]) != "" and str(r["ending_by_table"]) != ending:
@@ -68,6 +77,17 @@ func _init() -> void:
 		push_error("  FAIL 独狼路径（N2L-1/N2L-1b）在 %d 局中零命中" % seed_count)
 	else:
 		print("  独狼路径命中：%d 局（TP1 验收裁决 1 ✓）" % lone_wolf_hits)
+
+	# 幕二四链覆盖（幕二接入验收）：三委托链收束点 + 独狼链（上）+ 绕行路确定性覆盖
+	for chain_node: String in ["N2S-3", "N2U-3", "N2G-3"]:
+		if not chain_hits.has(chain_node):
+			failures += 1
+			push_error("  FAIL 幕二链收束点 %s 在 %d 局中零命中" % [chain_node, seed_count])
+	if detour_hits == 0:
+		failures += 1
+		push_error("  FAIL 幕二绕行路 N2G-2c 在 %d 局中零命中（绕行探针应确定性覆盖）" % seed_count)
+	else:
+		print("  幕二覆盖：S/U/G 链收束点全命中，绕行路 N2G-2c 命中 %d 局（探针 ✓）" % detour_hits)
 
 	# 覆盖率报告（目标 ≥95%）
 	var order: Array = pack["node_order"]

@@ -23,5 +23,55 @@
         "save": { "attr": "finesse", "dc": 11, "on_success": "half" },
         "note": "every_other_round（cooldown 2 = 隔一回合并用，11 §5.1 豁免范围效果）" }
     ]
+  },
+  {
+    "id": "ink_swarm",
+    "name": "墨魈群",
+    "hp": 10,
+    "ac": 10,
+    "attrs": { "might": 1, "finesse": 0, "wits": 0 },
+    "attack_mod": 2,
+    "damage": "1d4+1",
+    "note": "幕二护送战（N2S-2）袭扰缮写士的墨魈小群；数值待定稿"
+  },
+  {
+    "id": "uninked_guard",
+    "name": "黑羽卫",
+    "hp": 12,
+    "ac": 12,
+    "attrs": { "might": 1, "finesse": 1, "wits": 0 },
+    "attack_mod": 3,
+    "damage": "1d6",
+    "note": "断墨会暗桩卫队（N2U-1b 暴露战）；数值待定稿"
+  },
+  {
+    "id": "tax_guard",
+    "name": "税吏卫队",
+    "hp": 11,
+    "ac": 11,
+    "attrs": { "might": 1, "finesse": 0, "wits": 0 },
+    "attack_mod": 2,
+    "damage": "1d6",
+    "note": "撕页行动（N2U-2）护税吏的卫队；数值待定稿"
+  },
+  {
+    "id": "dock_ambusher",
+    "name": "雾码头伏击者",
+    "hp": 9,
+    "ac": 11,
+    "attrs": { "might": 0, "finesse": 2, "wits": 0 },
+    "attack_mod": 3,
+    "damage": "1d4+1",
+    "note": "雾码头打捞（N2G-2/2c）伏击判定的演出引用；数值待定稿"
+  },
+  {
+    "id": "mercenary",
+    "name": "三方佣兵",
+    "hp": 14,
+    "ac": 12,
+    "attrs": { "might": 2, "finesse": 1, "wits": 0 },
+    "attack_mod": 4,
+    "damage": "1d6+1",
+    "note": "独狼失败路通缉战（N2L-1b，难）：三方共同雇佣的追兵；数值待定稿"
   }
 ]

@@ -47,8 +47,8 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 	# ---- 敌方（tech/02 §6 enemies 实例 → tech/04 §1 敌人条目）----
 	var foes: Array = []
 	var enemy_entries: Array = enc.get("enemies", [])
-	if str(enc.get("type", "")) == "battle" and enemy_entries.is_empty():
-		errors.append("战斗遭遇 %s 未声明 enemies（tech/02 §6）" % encounter_id)
+	if ["battle", "escort", "hybrid"].has(str(enc.get("type", ""))) and enemy_entries.is_empty():
+		errors.append("战斗/护送/混合遭遇 %s 未声明 enemies（tech/02 §6）" % encounter_id)
 	for entry: Variant in enemy_entries:
 		var e: Dictionary = entry
 		var ref := str(e.get("ref", ""))
@@ -56,6 +56,26 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 			errors.append("遭遇 %s enemies 引用未登记敌人 '%s'（enemies.json）" % [encounter_id, ref])
 			continue
 		foes.append(_build_enemy_unit(str(e.get("id", ref)), enemies[ref], encounter_id, errors))
+
+	# ---- 护送目标（tech/02 §6 escort 块 → 11 §5「遭遇定义的目标达成」）----
+	var escort_def := {}
+	if str(enc.get("type", "")) == "escort":
+		var esc: Dictionary = enc.get("escort", {})
+		var npc: Dictionary = esc.get("unit", {})
+		if npc.is_empty():
+			errors.append("护送遭遇 %s 缺 escort.unit（护送对象内联条目，tech/02 §6）" % encounter_id)
+		elif int(esc.get("survive_rounds", 0)) < 1:
+			errors.append("护送遭遇 %s escort.survive_rounds < 1（tech/02 §6）" % encounter_id)
+		else:
+			var npc_id := str(npc.get("id", "escort_npc"))
+			# 护送对象以 kind=escort_npc 入队：不占行动轮、不可被指令、HP 不持久化（tech/02 §6）
+			party.append({"id": npc_id, "name": str(npc.get("name", npc_id)), "kind": "escort_npc",
+				"hp": int(npc.get("hp", 1)), "max_hp": int(npc.get("hp", 1)),
+				"ac": int(npc.get("ac", 10)),
+				"attrs": (npc.get("attrs", {"might": 0, "finesse": 0, "wits": 0}) as Dictionary).duplicate(),
+				"attack_mod": int(npc.get("attack_mod", 0)), "damage": str(npc.get("damage", "1d4"))})
+			escort_def = {"unit_id": npc_id, "survive_rounds": int(esc["survive_rounds"]),
+				"failure_effects": (esc.get("failure_effects", []) as Array).duplicate(true)}
 
 	# ---- 首回合优势（11 §3.1 内容包声明来源）----
 	var adv_rounds := 0
@@ -72,6 +92,8 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 		loot.append({"item": str((l as Dictionary).get("item", "")), "n": int((l as Dictionary).get("n", 1))})
 	var def := {"party": party, "enemies": foes, "party_advantage_rounds": adv_rounds,
 		"loot": loot, "xp": int(enc.get("xp", 0))}
+	if not escort_def.is_empty():
+		def["escort"] = escort_def
 	return {"ok": errors.is_empty(), "errors": errors, "def": def}
 
 # ---------------------------------------------------------------- 单位组装
