@@ -30,11 +30,15 @@ func d_n(n: int) -> int:
 func range_int(a: int, b: int) -> int:
 	return _rng.randi_range(a, b)
 
-## 存档快照：种子 + 内部状态（恢复后续掷与中断前完全一致）。
+## 存档快照：种子 + 内部状态（恢复后续掷与中断前完全一致，07 §4.1）。
+## state 以十进制字符串存储：PCG 内部状态是 64 位无符号整数，常态 >2^53，
+## JSON 数值（float64）往返会丢尾数导致读档后骰序偏离（M2 审计 G2）。
 func save_state() -> Dictionary:
-	return {"seed": _seed, "state": _rng.state}
+	return {"seed": _seed, "state": str(_rng.state)}
 
+## 兼容旧档：v≤2 快照的 state 是 JSON 数值（int 或已丢精度的 float），按 int 截断接收
+##（旧档 float 的精度损失无法挽回，但不报错、不拒绝读档）；新格式 = 十进制字符串。
 func load_state(snapshot: Dictionary) -> void:
 	_seed = int(snapshot.get("seed", 0))
 	_rng.seed = _seed
-	_rng.state = int(snapshot.get("state", 0))
+	_rng.state = int(snapshot.get("state", 0)) # String/int/float 均可：int() 统一收敛

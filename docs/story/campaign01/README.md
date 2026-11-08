@@ -46,6 +46,7 @@
 - **结局旗标与尾声写板（终章接入）**：E1~E4 on_enter 分别写 `ending_e1`~`ending_e4`；E3 附写 `unlock_scribe_identity`（"执笔者"开局身份解锁占位）、E4 附写 `ngplus_memory_view`（二周目"追忆"视角占位）——多周目继承清单平衡仍属战役书 §11 开放项，占位旗标先行。`last_page` 事件 settle 落点由 N4-1 移至 N4-2（免战/强攻两路均在结局前写 `campaign01_cleared`，与"尾声结算"语义对齐）。
 - **幕三模式锁定（终章接入）**：manifest.presentation 补 `forced_except: { "SL-3": ["N3-7"] }`（tech/02 §2.1 v0.4 登记）——SL-3 幕强制竖屏，N3-7 空白广场起恢复玩家所选形态（战役书幕三"此处起解锁横屏"）。
 - **R1/R2 图鉴投放对齐（幕三接入）**：`revoked_registry_01`（褪色民居的门牌）移至 R1 on_enter、`revoked_registry_02`（空教室的花名册）留 R2 on_enter，与 lore.json source 逐条对应（原并置于 R2，事件 `revoked_zone` settle 幂等补集不变）。
+- **金币占位确认（M2 审计 X1 裁决）**：`campaign01.gold` 落包命名空间计数型旗标——07 §2 货币条款（v1.7 补记）已覆盖，包内计数合规，撤销"待文档裁决"状态；初始金 `GOLD_START := 30` 为占位确认值（战役书未定初始金，定稿时按战役书修订一行数据）。
 
 ## 状态
 

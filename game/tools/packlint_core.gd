@@ -282,6 +282,16 @@ static func _v4_flag_closure(pack: Dictionary) -> Array:
 	var read := {}
 	for rec: Dictionary in _collect_conditions(pack):
 		_collect_flag_reads(rec["cond"], str(rec["where"]), read)
+	# 遭遇层读取亦算图内消费（tech/02 §6：party_advantage/enemy_weaken 旗标声明，M2 审计 G5 误报修复）
+	for enc_id: String in (pack.get("encounters", {}) as Dictionary).keys():
+		var enc: Dictionary = pack["encounters"][enc_id]
+		for field: String in ["party_advantage", "enemy_weaken"]:
+			var fid := str((enc.get(field, {}) as Dictionary).get("flag", ""))
+			if fid.is_empty() or "." in fid:
+				continue
+			if not read.has(fid):
+				read[fid] = []
+			read[fid].append("encounters.%s.%s" % [enc_id, field])
 	# 台账比对
 	var declared := {}
 	for f: Variant in pack.get("flags", []):

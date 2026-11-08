@@ -55,6 +55,7 @@ func _async_shell_tests() -> void:
 	await test_act2_hybrid_flow()
 	await test_act3_forced_mode()
 	await test_main_flow()
+	await test_character_nav()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -93,6 +94,27 @@ func test_rng() -> void:
 	var next1 := a.d20()
 	a.load_state(st)
 	check(a.d20() == next1, "状态快照恢复后续掷一致")
+	# M2 审计 G2：state 常态 >2^53，JSON 数值往返曾丢尾数致读档后骰序偏离——
+	# 修复后 state 以十进制字符串存储，经 JSON 序列化往返（等价于写盘读回）骰序逐位一致。
+	var big := Rng.new(20261109)
+	for i: int in 3:
+		big.range_int(1, 20) # PCG 状态数步即超 2^53
+	var st2: Dictionary = big.save_state()
+	check(st2["state"] is String and int(st2["state"]) > 0, "存档 state 以十进制字符串存储（G2）")
+	var roundtrip: Dictionary = JSON.parse_string(JSON.stringify(st2))
+	check(int(roundtrip["state"]) == int(st2["state"]), "大 state（>2^53）JSON 往返无精度损失（G2）")
+	var big2 := Rng.new(1)
+	big2.load_state(roundtrip)
+	var seq_orig: Array = []
+	var seq_rest: Array = []
+	for i: int in 10:
+		seq_orig.append(big.range_int(1, 20))
+		seq_rest.append(big2.range_int(1, 20))
+	check(seq_orig == seq_rest, "JSON 往返恢复后骰序逐位一致 ×10（G2，07 §4.1）")
+	# 旧档兼容：v≤2 数值型 state（含已丢精度 float）不报错接收
+	var legacy := Rng.new(7)
+	legacy.load_state({"seed": 20261109, "state": 3619339438595917312.0})
+	check(legacy.range_int(1, 20) >= 1, "旧档数值型 state 兼容读取（G2 迁移不炸档）")
 
 # ---------------------------------------------------------------- EventStream（tech/01 §5）
 
@@ -3479,5 +3501,58 @@ func test_main_flow() -> void:
 	check(Growth.xp(m.board) == 0 and m.board.get_doom_clock() == 0
 		and m.board.get_alignment() == 50 and not m.board.has_item("ink_core"),
 		"NG+：其余状态重置（成长/时钟/倾向/战利品）")
+	m.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 角色界面真实导航回归（M2 审计 G1）
+# 主屏 → ⑦角色 不得再走战斗定义组装（非战斗上下文无当前遭遇）；
+# 覆盖两类非战斗态：战役未开始（graph.current_id 为空）+ 战役中场景节点（current_id 为 scene）。
+
+func test_character_nav() -> void:
+	print("[character_nav]")
+	# ---- 路径 1：战役未开始的主屏（审计 G1 原始崩点）----
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	check(m.current_screen is ScreenHome, "开局在主屏（G1 回归前提）")
+	m._on_home_navigate(&"character") # 与玩家点按同一通道（screen_home.navigate → _on_home_navigate）
+	await process_frame
+	check(m.current_screen is ScreenCharacter, "主屏→角色：界面呈现（G1：曾 SCRIPT ERROR 崩溃）")
+	var ch := m.current_screen as ScreenCharacter
+	var text := ""
+	for c: Node in ch.list_box.get_children():
+		if c is Label:
+			text += (c as Label).text + "\n"
+	check(text.contains("白页者") and text.contains("珂兰") and text.contains("老费"),
+		"角色卡名册渲染：player + 双同伴（StoryGraph.party_roster，与 BattleDef 解耦）")
+	check(text.contains("技能：") and not text.contains("技能：—"),
+		"角色卡技能列非空（characters.json 已习得 ∪ basic_attack 查名 skills.json）")
+	ch.back_button.pressed.emit() # 玩家点"返回"同一通道
+	await process_frame
+	check(m.current_screen is ScreenHome, "角色→返回→主屏（G1：曾信号未连接软锁）")
+	# ---- 路径 2：战役中场景节点 → ☰ 回主屏 → 角色（graph.current_id 为 scene 非战斗节点）----
+	m._on_home_navigate(&"entry")
+	await process_frame
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_TIME)
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	check(m.graph.current_id == "N0-1", "战役开始于入口场景节点（非战斗上下文）")
+	m._on_save_quit() # 故事态 ☰：落档回主屏（07 §4.2）
+	await process_frame
+	check(m.current_screen is ScreenHome, "战役中 ☰ 回主屏")
+	m._on_home_navigate(&"character")
+	await process_frame
+	check(m.current_screen is ScreenCharacter, "战役中（scene 节点）→角色：界面呈现（G1 第二崩点）")
+	var ch2 := m.current_screen as ScreenCharacter
+	var text2 := ""
+	for c: Node in ch2.list_box.get_children():
+		if c is Label:
+			text2 += (c as Label).text + "\n"
+	check(text2.contains("白页者"), "战役中角色卡名册渲染")
+	ch2.back_button.pressed.emit()
+	await process_frame
+	check(m.current_screen is ScreenHome, "战役中角色→返回→主屏")
 	m.queue_free()
 	await process_frame

@@ -63,7 +63,7 @@ const SETTLE_RETREAT := "撤退"
 const SETTLE_QUIT := "退出"
 const SETTLE_HOME := "回主屏"
 const SETTLE_HISTORY := "查看卷轴"
-const SETTLE_SAVED := "抄本已记录（结算快照，07 §4.2）"
+const SETTLE_SAVED := "抄本已记录。" # 07 §4.2 结算快照（溯源在代码注释，条款号不上屏，M2 审计 G7）
 const SETTLE_ATTR_TITLE := "成长加点（属性点可留到下次整备）"
 const SETTLE_ATTR_KEEP := "留到下次整备"
 
@@ -83,12 +83,14 @@ const SKILL_NAMES := {
 	"athletics": "运动", "intimidate": "威吓", "stealth": "潜行", "thievery": "巧手",
 	"perception": "感知", "investigation": "调查", "history": "历史",
 	"persuasion": "交涉", "soothe": "安抚",
+	# a_or_b 复合键（11 §2 取高）：显示层映射（M2 审计 G6：复合键不得原样上屏）
+	"history_or_perception": "历史/感知",
 }
 const DIFF_NAMES := {"easy": "易", "medium": "中", "hard": "难"}
 const FACTION_NAMES := {"scriptorium": "誊写庭", "uninked": "断墨会", "salvage": "拾遗行会"}
 const STORY_CLOCK := "时钟 %d 格"
 const STORY_CLOCK_NEXT := "▸ %s %d格"
-const STORY_FORECAST_TITLE := "时间边预告（04 §3.1）"
+const STORY_FORECAST_TITLE := "时间边预告" # 04 §3.1（条款号不上屏，M2 审计 G7）
 const STORY_FORECAST_EMPTY := "暂无逼近的时间边。"
 const STORY_QUEST_BADGE := "事件 %d"
 const STORY_SLICE_END := "幕一 · 切片终点"
@@ -100,7 +102,7 @@ const ENDING_TITLE := "【结局】%s"
 const ENDING_HOOK := "多周目钩子：%s"
 const ENDING_NGPLUS := "开始二周目"
 const ENDING_HOME := "回主屏"
-const ENDING_SAVED := "抄本已记录（结局快照，07 §4.2）"
+const ENDING_SAVED := "抄本已记录。" # 07 §4.2 结局快照（同上）
 const ENDING_PLAYTHROUGH := "—— 第 %d 周目 完 ——"
 const NGPLUS_TOAST := "你带着抄本残页回到潮醒之前。织命者残简 ×1 随行，图鉴与权利如故。"
 # Hub（战役书 §4 N1-1：休整 / 商店 / 传闻；04 §3.3 半屏弹层）
@@ -140,7 +142,7 @@ const ENTRY_MODE_SPACE := "横屏空间战役"
 const ENTRY_MODE_SPACE_DESC := "战术格 · 站位 · 大战场——以全局视野摊开每一幕"
 const ENTRY_MODE_TIME := "竖屏时间战役"
 const ENTRY_MODE_TIME_DESC := "多房间 · 叙事流 · 单手节奏——一段记忆按自己的节奏展开"
-const ENTRY_MODE_PICK := "选择这一程的讲述方式（整场战役锁定，09 §3）"
+const ENTRY_MODE_PICK := "选择这一程的讲述方式（整场战役锁定）" # 09 §3（同上）
 const ENTRY_MODE_CHOSEN := "已选："
 const ENTRY_COLLECT := "分支收集度"
 const ENTRY_PLAYED := "已玩模式："
@@ -195,14 +197,15 @@ const CHAR_GROWTH := "成长：Lv.%d　经验 %d/%s"
 const CHAR_GROWTH_MAX := "成长：Lv.%d　经验 %d（已满级）"
 const CHAR_GROWTH_ATTRS := "已分配：力 %+d 敏 %+d 智 %+d　未分配点数：%d"
 
-# 帮助页 · 手势图鉴（12 §4：常驻，主动进入；§1~§2 全表摘要）
+# 帮助页 · 手势图鉴（12 §4：常驻，主动进入）
+# 一期只列已实现手势（点按系；M2 审计 G3：宣称未实现手势 = 虚假承诺）；
+# 12 §1/§2 全表（拖动/横滑/双指/捏合/长按）为后续版本手势层，落地前不得上屏。
 const HELP_TITLE := "手势图鉴"
 const HELP_LINES: Array[String] = [
-	"点按 = 选择 / 默认目标使用（芯片、轮盘、单位）",
-	"长按 = 查看详情（单位信息、道具详情）",
-	"横滑 = 切换页签（操作台四 Tab）",
-	"双指点击 = 快掷 / 结束回合",
-	"双指捏合 = 缩放战场（横屏）",
-	"拖动芯片到目标 = 指定目标使用",
-	"（教程可跳过、可重学、跳过不丢信息，12 §4）",
+	"点按 = 选择 / 确认（选项、按钮、目标）",
+	"点按芯片 / 轮盘 = 对默认目标使用",
+	"点按敌方 = 指定目标（横屏可点敌格）",
+	"点按日志带 = 展开详情（横屏）",
+	"拖动 / 横滑 / 双指 / 长按等手势将在后续版本开放",
+	"（教程可跳过、可重学、跳过不丢信息）",
 ]

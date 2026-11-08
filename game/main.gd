@@ -727,12 +727,15 @@ func _show_inventory() -> void:
 func _show_character() -> void:
 	var screen: ScreenCharacter = (load(SCREEN_SCENES[&"character"]) as PackedScene).instantiate()
 	_swap(screen)
+	# 返回连接先于数据绑定（M2 审计 G1：绑定路径任何早期返回都不得带走出口）
+	screen.back_requested.connect(_show_home)
 	var bonds := {}
 	for key: String in board.keys_with_prefix("global.bond."):
 		bonds[key.trim_prefix("global.bond.")] = board.read(key)
+	# 队伍卡 = 名册直组（StoryGraph.party_roster，04 §⑦），与战斗定义解耦——
+	# 主屏/非战斗上下文无当前遭遇，不得走 _battle_def（M2 审计 G1：组装失败曾致脚本错误+软锁）。
 	# 成长区（tech/04 §8）：等级 / XP 进度 / 已分配属性 / 未分配点数
-	screen.bind(_battle_def({})["party"], bonds, Growth.xp_progress(board))
-	screen.back_requested.connect(_show_home)
+	screen.bind(graph.party_roster(), bonds, Growth.xp_progress(board))
 
 ## ⑧ 历史卷轴：从主屏 / 结算进入，返回来源界面（04 §5 出口列）。
 func _show_history() -> void:

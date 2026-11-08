@@ -2,14 +2,14 @@
   {
     "id": "dock_tales", "name": "码头异闻",
     "trigger": { "type": "auto", "node": "N0-2" },
-    "objective": "完成 N0-2 检定",
+    "objective": "在雨夜码头听清船工的说法",
     "node": "N0-2",
     "settle": [ { "xp": 50 } ]
   },
   {
     "id": "fading_street", "name": "消逝之街",
     "trigger": { "type": "auto", "node": "N1-2" },
-    "objective": "抵达 N1-3",
+    "objective": "穿过正在消逝的街，抵达巷口",
     "node": "N1-3",
     "settle_note": "时钟与旗标已由 N1-3 on_enter 承载（TP1 落位），L3 结算不重复写板（TP4 裁决）",
     "settle": []
@@ -17,7 +17,7 @@
   {
     "id": "three_callings", "name": "三方拜帖",
     "trigger": { "type": "auto", "node": "N1-3" },
-    "objective": "完成 N1-4 / N1-5 / N1-6",
+    "objective": "见过誊写庭、断墨会与拾遗行会的使者",
     "node": "N1-4",
     "settle_note": "三方声望已由 N1-4 / N1-5 / N1-6 on_enter 分别承载（TP1 落位），L3 结算不重复写板（TP4 裁决）",
     "settle": []
@@ -25,28 +25,28 @@
   {
     "id": "ink_rain_raid", "name": "墨雨夜袭",
     "trigger": { "type": "doom_clock", "at": 2 },
-    "objective": "赢得 N1-7 午夜墨雨",
+    "objective": "在午夜墨雨中击退墨魈",
     "node": "N1-7",
     "settle": [ { "xp": 200 }, { "give_item": "ink_core" } ]
   },
   {
     "id": "archive_quest", "name": "档案馆委托",
     "trigger": { "type": "choice", "node": "N1-8", "label": "誊写庭委托" },
-    "objective": "完成 N2S-1 ~ N2S-3",
+    "objective": "替档案馆送完那三封信",
     "node": "N2S-1",
     "settle": [ { "rep.scriptorium": 1 } ]
   },
   {
     "id": "black_feather_op", "name": "黑羽行动",
     "trigger": { "type": "choice", "node": "N1-8", "label": "断墨会委托" },
-    "objective": "完成 N2U-1 ~ N2U-3",
+    "objective": "替断墨会完成黑羽行动",
     "node": "N2U-1",
     "settle": [ { "rep.uninked": 1 } ]
   },
   {
     "id": "salvage_contract", "name": "打捞契约",
     "trigger": { "type": "choice", "node": "N1-8", "label": "拾遗行会委托" },
-    "objective": "完成 N2G-1 ~ N2G-3",
+    "objective": "替拾遗行会履行打捞契约",
     "node": "N2G-1",
     "settle": [ { "rep.salvage": 1 } ]
   },
@@ -58,14 +58,14 @@
         "rep.uninked": { "<=": 0 },
         "rep.salvage": { "<=": 0 }
       } },
-    "objective": "完成 N2L-1",
+    "objective": "不与任何一方结盟，独自走完幕二",
     "node": "N2L-1",
     "settle": [ { "xp": 300 } ]
   },
   {
     "id": "revoked_zone", "name": "撤销区探索",
     "trigger": { "type": "auto", "node": "N2-C" },
-    "objective": "通过 R1 ~ R5",
+    "objective": "穿过撤销区的五重房间",
     "node": "N3-1",
     "settle": [ { "lore": "revoked_registry_01" }, { "lore": "revoked_registry_02" } ]
   },

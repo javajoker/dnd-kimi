@@ -303,7 +303,7 @@ func _build_menu() -> void:
 	var b_help := Button.new()
 	b_help.text = TextsZh.MENU_HELP
 	b_help.pressed.connect(func() -> void:
-		_log_line("手势帮助：点按轮盘=默认目标执行；点按敌格选目标；点击日志带展开（12 §4）"))
+		_log_line("手势帮助：点按轮盘=默认目标执行；点按敌格选目标；点击日志带展开（一期=点按系，12 §4）"))
 	v.add_child(b_help)
 	add_child(menu_popup)
 

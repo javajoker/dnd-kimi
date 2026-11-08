@@ -263,7 +263,7 @@ func _build_menu() -> void:
 	var b_help := Button.new()
 	b_help.text = TextsZh.MENU_HELP
 	b_help.pressed.connect(func() -> void:
-		_log_line("手势帮助：点按芯片=默认目标使用；横滑切 Tab；长按单位看信息（12 §4）"))
+		_log_line("手势帮助：点按芯片=默认目标使用；点按选项/按钮=确认（一期=点按系，12 §4）"))
 	v.add_child(b_help)
 	add_child(menu_popup)
 

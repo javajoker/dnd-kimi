@@ -157,8 +157,11 @@ func clock_forecasts() -> Array:
 		var at := int(edge.get("at", 0))
 		var key := "%s/%d" % [str(rec["node_id"]), int(rec["idx"])]
 		if at > now and not _fired_triggers.has(key):
+			# objective 上屏文本取节点标题（节点 id 是内部寻址，不上屏——M2 审计 G7）
+			var node_title := str((pack["nodes"] as Dictionary).get(
+				str(rec["node_id"]), {}).get("title", ""))
 			out.append({"id": "", "name": str(edge.get("label", "时间边")),
-				"at": at, "objective": str(rec["node_id"])})
+				"at": at, "objective": node_title})
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["at"]) < int(b["at"]))
 	return out
 
@@ -168,10 +171,10 @@ func next_clock_trigger() -> Dictionary:
 	return f[0] if not f.is_empty() else {}
 
 # ---------------------------------------------------------------- Hub 动作（战役书 §4 N1-1：休整 / 商店 / 传闻）
-# 金币：07 六类变量无货币——按"计数型旗标"（07 §2 约束3）落包命名空间 <pack>.gold，待文档裁决（见交付说明）。
+# 金币：包命名空间计数型旗标 <pack>.gold（07 §2 货币条款，v1.7 补记；M2 审计 X1 裁决：合规）。
 
-const GOLD_KEY := "campaign01.gold" ## 计数型旗标（包命名空间，07 §2 约束3；待裁决：07 无货币变量）
-const GOLD_START := 30              ## 开局金币占位（待裁决：战役书未定初始金）
+const GOLD_KEY := "campaign01.gold" ## 计数型旗标（包命名空间，07 §2）
+const GOLD_START := 30              ## 开局金币占位确认值（战役书未定初始金，campaign01 README 决策记录）
 
 func _hub_prov() -> Dictionary:
 	return {"event_id": board.stream.tail(), "node_id": current_id, "pack_id": pack_id}
@@ -250,6 +253,44 @@ func party_status() -> Array:
 		var max_hp := int(LightV1.eval_formula(str(c.get("hp_formula", "10")), attrs)) + hp_bonus
 		out.append({"id": cid, "name": str(c.get("name", cid)),
 			"hp": mini(int(board.read("%s.hp.%s" % [pack_id, cid], max_hp)), max_hp), "max_hp": max_hp})
+	return out
+
+## ⑦ 角色界面名册（04 §⑦ 只读队伍卡数据源）：characters.json + 成长簿记 + HP 持久化直接组装，
+## 与战斗定义（BattleDef）解耦——主屏/非战斗上下文同样可用（M2 审计 G1 修复）；
+## 数值口径与 BattleDef._build_character_unit 一致（11 §6：成长只叠加玩家模板，hp 公式吃基础属性）。
+func party_roster() -> Array:
+	var alloc := Growth.attrs_map(board)
+	var level := Growth.level(board)
+	var hp_bonus := (level - 1) * LightV1.LEVEL_HP_BONUS
+	var skills: Dictionary = pack.get("skills", {})
+	var out: Array = []
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		var kind := str(c.get("kind", ""))
+		if not ["player_template", "companion"].has(kind):
+			continue
+		var base_attrs: Dictionary = c.get("attrs", {})
+		var final_attrs := {}
+		for a: String in ["might", "finesse", "wits"]:
+			final_attrs[a] = int(base_attrs.get(a, 0)) + (int(alloc.get(a, 0)) if kind == "player_template" else 0)
+		var fvars := {"might": int(base_attrs.get("might", 0)), "finesse": int(base_attrs.get("finesse", 0)),
+			"wits": int(base_attrs.get("wits", 0)), "level": level if kind == "player_template" else 1}
+		var hp: Variant = LightV1.eval_formula(str(c.get("hp_formula", "10")), fvars)
+		var max_hp := int(hp) + (hp_bonus if kind == "player_template" else 0)
+		var hp_now := max_hp
+		var hp_key := "%s.hp.%s" % [pack_id, cid]
+		if board.has(hp_key):
+			hp_now = clampi(int(board.read(hp_key)), 1, max_hp) # 11 §7.1 持久化；0 抬 1 同 BattleDef
+		var skill_entries: Array = []
+		var learned: Array = (c.get("skills", []) as Array).duplicate()
+		var ba := str(c.get("basic_attack", ""))
+		if not ba.is_empty() and not learned.has(ba):
+			learned.push_front(ba) # 普攻列首（tech/04 §2 basic_attack 亦属已习得）
+		for sid: Variant in learned:
+			var sd: Dictionary = skills.get(str(sid), {})
+			skill_entries.append({"id": str(sid), "name": str(sd.get("name", sid))})
+		out.append({"id": cid, "name": str(c.get("name", cid)),
+			"hp": hp_now, "max_hp": max_hp, "attrs": final_attrs, "skills": skill_entries})
 	return out
 
 ## 传闻（战役书 §4：未择路线以传闻形式提及）：已注册但尚未触发的 choice/hidden 触发事件。
