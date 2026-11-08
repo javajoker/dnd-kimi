@@ -1,0 +1,33 @@
+[
+  {
+    "id": "E1", "title": "重墨",
+    "hidden": false, "default": false,
+    "conditions": { "alignment": { "ink_gt": 50 } },
+    "content": "港城被重新书写，但献身者永为空白。",
+    "ngplus_hook": "解锁缮写圣城传闻"
+  },
+  {
+    "id": "E2", "title": "自由灰",
+    "hidden": false, "default": false,
+    "conditions": { "alignment": { "blank_gt": 50 } },
+    "content": "烬港脱离织卷，自由而缓慢崩解。",
+    "ngplus_hook": "解锁裂页荒原传闻"
+  },
+  {
+    "id": "E3", "title": "新篇",
+    "hidden": true, "default": false,
+    "conditions": { "all": [
+      { "item.codex_fragment": { ">=": 4 } },
+      { "bond_max": { ">=": 60 } }
+    ] },
+    "content": "白页者成为新执笔者。",
+    "ngplus_hook": "解锁「执笔者」开局身份"
+  },
+  {
+    "id": "E4", "title": "褪墨吞港",
+    "hidden": false, "default": true,
+    "conditions": {},
+    "content": "港城被撤销，你带着抄本残页离开。失败非终局：全部收集与图鉴进度保留。",
+    "ngplus_hook": "继承残页，二周目自带「追忆」视角"
+  }
+]

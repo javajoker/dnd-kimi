@@ -1,0 +1,18 @@
+{
+  "pack_id": "campaign01",
+  "name": "烬港残页",
+  "pack_type": "campaign",
+  "pack_version": 1,
+  "min_framework_version": "1.0.0",
+  "rule_pack": { "id": "light", "min_version": 1 },
+  "presentation": {
+    "mode": "choice",
+    "forced": { "SL-0": "time", "SL-3": "time" },
+    "recommend": { "N4-1": "space" }
+  },
+  "namespace": "campaign01",
+  "recommended_level": [1, 4],
+  "estimated_hours": "6-9",
+  "node_budget": 35,
+  "source_doc": "docs/story/02-战役书-烬港残页.md"
+}

@@ -1,0 +1,16 @@
+[
+  { "id": "weaver_fragment_01", "series": "weaver_fragments", "title": "残简·其一",
+    "source": "N2G-2b 沉书阁", "text_ref": "texts/zh-CN.json#weaver_fragment_01" },
+  { "id": "weaver_fragment_02", "series": "weaver_fragments", "title": "残简·其二",
+    "source": "R2 空教室隐藏拾取", "text_ref": "texts/zh-CN.json#weaver_fragment_02" },
+  { "id": "weaver_fragment_03", "series": "weaver_fragments", "title": "残简·其三",
+    "source": "R5 守页人战利品", "text_ref": "texts/zh-CN.json#weaver_fragment_03" },
+  { "id": "weaver_fragment_04", "series": "weaver_fragments", "title": "残简·其四",
+    "source": "多周目继承", "text_ref": "texts/zh-CN.json#weaver_fragment_04" },
+  { "id": "revoked_registry_01", "series": "revoked_registry", "title": "褪色民居的门牌",
+    "source": "R1 褪色民居", "text_ref": "texts/zh-CN.json#revoked_registry_01" },
+  { "id": "revoked_registry_02", "series": "revoked_registry", "title": "空教室的花名册",
+    "source": "R2 空教室", "text_ref": "texts/zh-CN.json#revoked_registry_02" },
+  { "id": "ashenport_local_01", "series": "ashenport_local", "title": "烬港风物志·雾码头",
+    "source": "N2G-2", "text_ref": "texts/zh-CN.json#ashenport_local_01" }
+]

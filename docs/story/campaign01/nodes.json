@@ -1,0 +1,374 @@
+{
+  "acts": [
+    { "id": "SL-0", "title": "潮醒", "mode": "forced_time", "role": "教学" },
+    { "id": "SL-1", "title": "褪色的街", "mode": "choice", "role": "调查+三方接触" },
+    { "id": "SL-2", "title": "三支笔", "mode": "choice", "role": "三方支线择路" },
+    { "id": "SL-3", "title": "撤销区", "mode": "forced_time", "role": "房间序列追忆" },
+    { "id": "SL-4", "title": "港口的最后一页", "mode": "choice", "role": "Boss+抉择+结局" }
+  ],
+  "nodes": [
+    {
+      "id": "N0-1", "act": "SL-0", "type": "scene",
+      "title": "潮醒",
+      "summary": "你在烬港的潮声中醒来，怀里没有抄本。",
+      "edges": [ { "type": "choice", "label": "起身", "to": "N0-2" } ]
+    },
+    {
+      "id": "N0-2", "act": "SL-0", "type": "check",
+      "title": "消失的码头名",
+      "summary": "检定教学：辨认正在褪去的码头名。",
+      "edges": [ {
+        "type": "check", "skill": "perception", "difficulty": "easy",
+        "success": "N0-3a", "failure": "N0-3b"
+      } ]
+    },
+    {
+      "id": "N0-3a", "act": "SL-0", "type": "scene",
+      "title": "你看见墨迹正在褪",
+      "summary": "字迹在你面前消散——你亲眼所见。",
+      "on_enter": [ { "write": "seen_fading", "value": true } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N0-4" } ]
+    },
+    {
+      "id": "N0-3b", "act": "SL-0", "type": "scene",
+      "title": "路人惊恐的讲述",
+      "summary": "你没看清，但路人的惊恐说明了一切。",
+      "on_enter": [ { "xp": 50 } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N0-4" } ]
+    },
+    {
+      "id": "N0-4", "act": "SL-0", "type": "scene",
+      "title": "三方注视",
+      "summary": "三道目光落在你身上。",
+      "edges": [ { "type": "choice", "label": "进入烬港", "to": "N1-1" } ]
+    },
+
+    {
+      "id": "N1-1", "act": "SL-1", "type": "hub",
+      "title": "自由市广场",
+      "summary": "Hub：休整 / 商店 / 传闻。商店出售「半页潮汐表」。",
+      "encounter": "N1-1",
+      "edges": [ { "type": "choice", "label": "前往褪色现场", "to": "N1-2" } ]
+    },
+    {
+      "id": "N1-2", "act": "SL-1", "type": "check",
+      "title": "褪色现场调查",
+      "summary": "调查街区褪色的痕迹。",
+      "edges": [ {
+        "type": "check", "skill": "investigation", "difficulty": "medium",
+        "success": "N1-3", "failure": "N1-2b"
+      } ]
+    },
+    {
+      "id": "N1-2b", "act": "SL-1", "type": "battle",
+      "title": "误入封锁巷",
+      "summary": "调查失败路：惊动封锁巡逻，且因此迟到。",
+      "encounter": "N1-2b",
+      "edges": [ {
+        "type": "choice", "label": "赶往褪色现场（迟到）", "to": "N1-3",
+        "effects": [ { "clock": 1 } ]
+      } ]
+    },
+    {
+      "id": "N1-3", "act": "SL-1", "type": "scene",
+      "title": "见证撤销",
+      "summary": "一条街在眼前消失。",
+      "on_enter": [ { "clock": 1 }, { "write": "witnessed_revocation", "value": true } ],
+      "edges": [
+        { "type": "choice", "label": "接触誊写庭", "to": "N1-4" },
+        { "type": "choice", "label": "接触断墨会", "to": "N1-5" },
+        { "type": "choice", "label": "接触拾遗行会", "to": "N1-6" }
+      ]
+    },
+    {
+      "id": "N1-4", "act": "SL-1", "type": "dialog",
+      "title": "誊写庭接触",
+      "summary": "灰衣修士的试探。",
+      "on_enter": [ { "rep.scriptorium": 1 } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N1-7" } ]
+    },
+    {
+      "id": "N1-5", "act": "SL-1", "type": "dialog",
+      "title": "断墨会接触",
+      "summary": "黑羽传信。",
+      "on_enter": [ { "rep.uninked": 1 } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N1-7" } ]
+    },
+    {
+      "id": "N1-6", "act": "SL-1", "type": "dialog",
+      "title": "拾遗行会接触",
+      "summary": "拍卖行请柬。",
+      "on_enter": [ { "rep.salvage": 1 } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N1-7" } ]
+    },
+    {
+      "id": "N1-7", "act": "SL-1", "type": "battle",
+      "title": "午夜墨雨",
+      "summary": "教学 Boss 战：墨魈——褪墨中诞生的扭曲文本。",
+      "encounter": "N1-7",
+      "edges": [ { "type": "choice", "label": "战后", "to": "N1-8" } ]
+    },
+    {
+      "id": "N1-8", "act": "SL-1", "type": "branch",
+      "title": "三份邀约",
+      "summary": "三方委托同时摆在你面前。",
+      "edges": [
+        { "type": "choice", "label": "誊写庭委托", "to": "N2S-1" },
+        { "type": "choice", "label": "断墨会委托", "to": "N2U-1" },
+        { "type": "choice", "label": "拾遗行会委托", "to": "N2G-1" },
+        { "type": "reputation", "label": "我谁都不信", "to": "N2L-1",
+          "requires": {
+            "rep.scriptorium": { "<=": 0 },
+            "rep.uninked": { "<=": 0 },
+            "rep.salvage": { "<=": 0 }
+          } }
+      ]
+    },
+
+    {
+      "id": "N2S-1", "act": "SL-2", "type": "check",
+      "title": "档案馆试炼",
+      "summary": "誊写庭链：历史与感知的试炼。",
+      "edges": [ {
+        "type": "check", "skill": "history_or_perception", "difficulty": "medium",
+        "success": "N2S-2", "failure": "N2S-2",
+        "failure_effects": [ { "clock": 1 } ]
+      } ]
+    },
+    {
+      "id": "N2S-2", "act": "SL-2", "type": "battle",
+      "title": "修复仪式",
+      "summary": "护送战：保护缮写士完成局部重墨。",
+      "encounter": "N2S-2",
+      "edges": [ { "type": "choice", "label": "仪式之后", "to": "N2S-3" } ]
+    },
+    {
+      "id": "N2S-3", "act": "SL-2", "type": "branch",
+      "title": "金墨的代价",
+      "summary": "誊写庭要求一段记忆作为重墨的代价。",
+      "edges": [
+        { "type": "choice", "label": "献出一段自己的记忆", "to": "N2-C",
+          "effects": [ { "clock": -2 }, { "write": "blank_memory", "value": true } ] },
+        { "type": "choice", "label": "拒绝", "to": "N2-C",
+          "effects": [ { "rep.scriptorium": 1 }, { "clock": -1 } ] }
+      ],
+      "on_complete": [ { "give_item": "scriptorium_signet" } ]
+    },
+    {
+      "id": "N2U-1", "act": "SL-2", "type": "check",
+      "title": "黑羽集会",
+      "summary": "断墨会链：潜入旁听。",
+      "edges": [ {
+        "type": "check", "skill": "stealth", "difficulty": "medium",
+        "success": "N2U-2", "failure": "N2U-1b"
+      } ]
+    },
+    {
+      "id": "N2U-1b", "act": "SL-2", "type": "battle",
+      "title": "暴露战",
+      "summary": "潜行失败路：以武力赢得入场券。",
+      "encounter": "N2U-1b",
+      "edges": [ { "type": "choice", "label": "继续", "to": "N2U-2" } ]
+    },
+    {
+      "id": "N2U-2", "act": "SL-2", "type": "battle",
+      "title": "撕页行动",
+      "summary": "战斗 + 抉择：是否撕掉税吏的命运页。",
+      "encounter": "N2U-2",
+      "edges": [
+        { "type": "choice", "label": "撕掉税吏的命运页", "to": "N2U-3",
+          "effects": [ { "rep.uninked": 2 }, { "write": "page_tearer", "value": true }, { "give_item": "black_feather_token" } ] },
+        { "type": "choice", "label": "不撕", "to": "N2U-3",
+          "effects": [ { "rep.uninked": 1 }, { "write": "mercy_shown", "value": true }, { "give_item": "black_feather_token" } ] }
+      ]
+    },
+    {
+      "id": "N2U-3", "act": "SL-2", "type": "scene",
+      "title": "自由的灰烬",
+      "summary": "撕页的后果显现。",
+      "on_enter": [ { "clock": 1 } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N2-C" } ]
+    },
+    {
+      "id": "N2G-1", "act": "SL-2", "type": "check",
+      "title": "残篇拍卖",
+      "summary": "拾遗行会链：交涉或支付金币。",
+      "edges": [ {
+        "type": "check", "skill": "persuasion", "difficulty": "medium",
+        "success": "N2G-2", "failure": "N2G-2",
+        "alt_pass": { "pay_gold": 200 }
+      } ]
+    },
+    {
+      "id": "N2G-2", "act": "SL-2", "type": "explore",
+      "title": "雾码头打捞",
+      "summary": "迷宫探索遭遇。",
+      "encounter": "N2G-2",
+      "edges": [
+        { "type": "item", "item": "half_tide_table", "to": "N2G-2b", "fallback": "N2G-2c" }
+      ]
+    },
+    {
+      "id": "N2G-2b", "act": "SL-2", "type": "explore",
+      "title": "沉书阁",
+      "summary": "密道直达：额外战利品 + 织命者残简 ×1。",
+      "encounter": "N2G-2b",
+      "on_enter": [ { "give_item": "codex_fragment" } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N2G-3" } ]
+    },
+    {
+      "id": "N2G-2c", "act": "SL-2", "type": "explore",
+      "title": "绕行路线",
+      "summary": "无潮汐表的失败路：多 2 场遭遇。",
+      "edges": [ { "type": "choice", "label": "继续", "to": "N2G-3" } ]
+    },
+    {
+      "id": "N2G-3", "act": "SL-2", "type": "scene",
+      "title": "账本的真相",
+      "summary": "行会早知褪墨将至。",
+      "on_enter": [ { "write": "insider", "value": true } ],
+      "edges": [ { "type": "choice", "label": "继续", "to": "N2-C" } ]
+    },
+    {
+      "id": "N2L-1", "act": "SL-2", "type": "check",
+      "title": "独自调查",
+      "summary": "独狼捷径：高风险高回报。",
+      "edges": [ {
+        "type": "check", "skill": "investigation", "difficulty": "hard",
+        "success": "N2-C", "failure": "N2L-1b",
+        "success_effects": [ { "clock": -1 } ]
+      } ]
+    },
+    {
+      "id": "N2L-1b", "act": "SL-2", "type": "battle",
+      "title": "通缉战",
+      "summary": "惩罚遭遇：被三方同时通缉，战后强制择一链。",
+      "encounter": "N2L-1b",
+      "on_enter": [
+        { "rep.scriptorium": -1 }, { "rep.uninked": -1 }, { "rep.salvage": -1 }
+      ],
+      "edges": [
+        { "type": "choice", "label": "投誊写庭", "to": "N2S-1" },
+        { "type": "choice", "label": "投断墨会", "to": "N2U-1" },
+        { "type": "choice", "label": "投拾遗行会", "to": "N2G-1" }
+      ]
+    },
+    {
+      "id": "N2-C", "act": "SL-2", "type": "scene",
+      "title": "三方情报拼合",
+      "summary": "收束节点：任一链完成（或 N2L-1 成功）后进入。",
+      "edges": [ { "type": "choice", "label": "进入撤销区", "to": "N3-1" } ]
+    },
+
+    {
+      "id": "N3-1", "act": "SL-3", "type": "scene",
+      "title": "进入撤销区",
+      "summary": "模式锁定演出：被撤销的旧城区只剩残篇，只能逐房回放。",
+      "edges": [ { "type": "choice", "label": "推开第一扇门", "to": "R1" } ]
+    },
+    {
+      "id": "R1", "act": "SL-3", "type": "explore",
+      "title": "褪色民居",
+      "summary": "拾取/检定房：被撤销者的生活痕迹。",
+      "edges": [ { "type": "choice", "label": "下一间", "to": "R2" } ]
+    },
+    {
+      "id": "R2", "act": "SL-3", "type": "dialog",
+      "title": "空教室",
+      "summary": "对话房：还记得自己名字的孩子。隐藏拾取：织命者残简 ×1。",
+      "on_enter": [ { "lore": "revoked_registry_01" }, { "lore": "revoked_registry_02" } ],
+      "edges": [ {
+        "type": "check", "skill": "soothe", "difficulty": "medium",
+        "success": "R3", "failure": "R3",
+        "success_effects": [ { "give_item": "codex_fragment" } ],
+        "failure_effects": [ { "write": "failed_to_hold", "value": true } ]
+      } ]
+    },
+    {
+      "id": "R3", "act": "SL-3", "type": "battle",
+      "title": "墨魈巢穴",
+      "summary": "战斗房。",
+      "encounter": "R3",
+      "edges": [ { "type": "choice", "label": "下一间", "to": "R4" } ]
+    },
+    {
+      "id": "R4", "act": "SL-3", "type": "branch",
+      "title": "分叉回廊",
+      "summary": "分支门：黑羽令开左路捷径。",
+      "edges": [
+        { "type": "item", "item": "black_feather_token", "to": "R5", "fallback": "R4-r" }
+      ]
+    },
+    {
+      "id": "R4-r", "act": "SL-3", "type": "battle",
+      "title": "回廊右路",
+      "summary": "右路两场战斗。",
+      "encounter": "R4-r",
+      "edges": [ { "type": "choice", "label": "继续", "to": "R5" } ]
+    },
+    {
+      "id": "R5", "act": "SL-3", "type": "battle",
+      "title": "守页人",
+      "summary": "Boss 战：誊写庭留下的自动缮写傀儡。战利品：织命者残简 ×1。",
+      "encounter": "R5",
+      "edges": [ { "type": "choice", "label": "走向空白广场", "to": "N3-7",
+        "effects": [ { "give_item": "codex_fragment" }, { "give_item": "ink_core" } ] } ]
+    },
+    {
+      "id": "N3-7", "act": "SL-3", "type": "rest",
+      "title": "空白广场",
+      "summary": "休整 + 演出；此处起解锁横屏（终章入口）。",
+      "encounter": "N3-7",
+      "edges": [ { "type": "choice", "label": "登潮汐塔", "to": "N4-1" } ]
+    },
+
+    {
+      "id": "N4-1", "act": "SL-4", "type": "battle",
+      "title": "潮汐塔顶",
+      "summary": "最终 Boss 战：褪墨之潮的化身。印戒可说服守卫免战；税吏证词降低 Boss 难度。",
+      "encounter": "N4-1",
+      "edges": [
+        { "type": "item", "item": "scriptorium_signet", "to": "N4-2",
+          "fallback": "N4-1b",
+          "requires": { "rep.scriptorium": { ">=": 1 } } }
+      ]
+    },
+    {
+      "id": "N4-1b", "act": "SL-4", "type": "battle",
+      "title": "潮汐塔顶·强攻",
+      "summary": "无印戒路径的完整 Boss 战（手下留情旗标可降低难度）。",
+      "encounter": "N4-1",
+      "edges": [ { "type": "choice", "label": "面对抉择", "to": "N4-2" } ]
+    },
+    {
+      "id": "N4-2", "act": "SL-4", "type": "branch",
+      "title": "抉择",
+      "summary": "这本书该修补、该焚毁，还是该由你重新写？",
+      "edges": [
+        { "type": "reputation", "label": "修补卷轴", "to": "E1",
+          "requires": { "alignment": { "ink_gt": 50 } } },
+        { "type": "reputation", "label": "焚毁残卷", "to": "E2",
+          "requires": { "alignment": { "blank_gt": 50 } } },
+        { "type": "item", "item": "codex_fragment", "label": "写新的一页", "to": "E3",
+          "requires": { "item.codex_fragment": { ">=": 4 }, "bond_max": { ">=": 60 } } },
+        { "type": "choice", "label": "……（无条件满足）", "to": "E4" }
+      ]
+    },
+    {
+      "id": "E1", "act": "SL-4", "type": "ending", "title": "重墨",
+      "summary": "结局演出 + 尾声结算。", "edges": []
+    },
+    {
+      "id": "E2", "act": "SL-4", "type": "ending", "title": "自由灰",
+      "summary": "结局演出 + 尾声结算。", "edges": []
+    },
+    {
+      "id": "E3", "act": "SL-4", "type": "ending", "title": "新篇",
+      "summary": "结局演出 + 尾声结算（隐藏）。", "edges": []
+    },
+    {
+      "id": "E4", "act": "SL-4", "type": "ending", "title": "褪墨吞港",
+      "summary": "结局演出 + 尾声结算（失败非终局）。", "edges": []
+    }
+  ]
+}
