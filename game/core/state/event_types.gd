@@ -7,6 +7,17 @@ extends RefCounted
 # 检定 / 战斗
 const CHECK_ROLL := &"check.roll"
 const BATTLE_ATTACK := &"battle.attack"
+const BATTLE_DOWN := &"battle.down"      # 单位倒地（11 §5.2/§7）
+const BATTLE_DEAD := &"battle.dead"      # 单位死亡（11 §7 三负）
+const BATTLE_REVIVE := &"battle.revive"  # 扶起/稳住/战后起身（11 §5.2/§7）
+const SKILL_USE := &"skill.use"          # 次数制技能扣次（11 §8）
+
+# 遭遇状态机（09 §1 约定：状态切换以 state.entered 事件外发，渲染壳只订阅、不被指挥）
+const STATE_ENTERED := &"state.entered"
+const COMBAT_START := &"combat.start"    # 先攻序列落定（11 §5）
+const COMBAT_END := &"combat.end"        # 一方全灭/撤退边/目标达成（09 §1）
+const TURN_START := &"turn.start"        # 回合/阶段轮转
+const COMMAND_REJECTED := &"command.rejected"  # 非法意图拒绝（tech/01 §6.2：不污染逻辑状态）
 
 # 状态板写入（07 §6：flag.written / clock.tick / rep.changed ……）
 const FLAG_WRITE := &"flag.write"

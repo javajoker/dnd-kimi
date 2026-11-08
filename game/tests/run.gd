@@ -21,6 +21,13 @@ func _init() -> void:
 	test_packlint()
 	test_story_graph()
 	test_story_bot()
+	test_light_v1()
+	test_encounter_sm()
+	test_auto_agent()
+	call_deferred("_async_shell_tests")
+
+func _async_shell_tests() -> void:
+	await test_portrait_shell()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -434,3 +441,529 @@ func test_story_bot() -> void:
 		if r["ok"] and str(r["ending"]) == "E3":
 			first_play_e3 = true
 	check(not first_play_e3, "一周目（无继承）不可达 E3（残简 ≤3 且羁绊图内上限 45 < 60，战役书 §8/§9）")
+
+# ---------------------------------------------------------------- LightV1 规则包（framework/11 全文）
+
+func test_light_v1() -> void:
+	print("[light_v1]")
+	check(LightV1.DC_EASY == 8 and LightV1.DC_MEDIUM == 12 and LightV1.DC_HARD == 16,
+		"难度三档 DC 8/12/16（11 §3）")
+	# §3.1 优劣合并：不叠加、互抵
+	check(LightV1.combine_advantage([LightV1.ADV_ADVANTAGE]) == LightV1.ADV_ADVANTAGE, "单一优势 → 优势")
+	check(LightV1.combine_advantage([LightV1.ADV_ADVANTAGE, LightV1.ADV_ADVANTAGE]) == LightV1.ADV_ADVANTAGE,
+		"多优势不叠加")
+	check(LightV1.combine_advantage([LightV1.ADV_DISADVANTAGE]) == LightV1.ADV_DISADVANTAGE, "单一劣势 → 劣势")
+	check(LightV1.combine_advantage([LightV1.ADV_ADVANTAGE, LightV1.ADV_DISADVANTAGE]) == LightV1.ADV_NORMAL,
+		"优劣互抵 → 普通掷")
+	check(LightV1.combine_advantage([]) == LightV1.ADV_NORMAL, "无来源 → 普通掷")
+	# 优势 2d20 取高 / 劣势取低（与平行 Rng 复算一致）
+	for seed: int in [7, 42, 2026]:
+		var r := LightV1.roll_d20(Rng.new(seed), LightV1.ADV_ADVANTAGE)
+		var rep := Rng.new(seed)
+		var a := rep.d20()
+		var b := rep.d20()
+		check((r["rolls"] as Array) == [a, b] and int(r["keep"]) == maxi(a, b),
+			"优势取高（seed=%d）" % seed)
+		var r2 := LightV1.roll_d20(Rng.new(seed), LightV1.ADV_DISADVANTAGE)
+		var rep2 := Rng.new(seed)
+		var c := rep2.d20()
+		var d := rep2.d20()
+		check(int(r2["keep"]) == mini(c, d), "劣势取低（seed=%d）" % seed)
+	# 伤害骰解析
+	var d1 := LightV1.parse_dice("1d6+2")
+	check(int(d1["count"]) == 1 and int(d1["sides"]) == 6 and int(d1["mod"]) == 2, "parse_dice 1d6+2")
+	var d2 := LightV1.parse_dice("2d4-1")
+	check(int(d2["count"]) == 2 and int(d2["sides"]) == 4 and int(d2["mod"]) == -1, "parse_dice 2d4-1")
+	# 检定：极端修正必成/必败
+	check(bool(LightV1.check(Rng.new(1), 30, LightV1.DC_HARD)["success"]), "d20+30 vs DC16 必成")
+	check(not bool(LightV1.check(Rng.new(1), -30, LightV1.DC_EASY)["success"]), "d20-30 vs DC8 必败")
+	# 攻击：暴击翻倍（修正不加倍）与必失——扫 seed 找 nat20/nat1
+	var found_crit := false
+	var found_fumble := false
+	for seed: int in range(1, 3000):
+		if found_crit and found_fumble:
+			break
+		var res := LightV1.attack(Rng.new(seed), 30, 18, "1d6+2")
+		if bool(res["crit"]) and not found_crit:
+			found_crit = true
+			check(bool(res["hit"]) and (res["damage_rolls"] as Array).size() == 2
+				and int(res["damage"]) == int(res["damage_rolls"][0]) + int(res["damage_rolls"][1]) + 2,
+				"nat20 暴击：必中、伤害骰翻倍、修正不加倍（11 §3）")
+		elif bool(res["fumble"]) and not found_fumble:
+			found_fumble = true
+			check(not bool(res["hit"]) and int(res["damage"]) == 0, "nat1 必失（+30 修正亦失，11 §3）")
+	check(found_crit and found_fumble, "seed 空间内命中 nat20 与 nat1 样本")
+	# 豁免：half / none（11 §5.1）
+	var sv := LightV1.save_throw(Rng.new(5), 30, {"attr": "finesse", "dc": 11, "on_success": "half"}, "4d6")
+	check(bool(sv["success"]) and int(sv["damage_taken"]) == int(floori(float(sv["damage_full"]) / 2.0)),
+		"豁免成功半伤（向下取整）")
+	var sv2 := LightV1.save_throw(Rng.new(5), 30, {"attr": "finesse", "dc": 11, "on_success": "none"}, "4d6")
+	check(bool(sv2["success"]) and int(sv2["damage_taken"]) == 0, "豁免成功免伤（none）")
+	var sv3 := LightV1.save_throw(Rng.new(5), -30, {"attr": "finesse", "dc": 11, "on_success": "half"}, "4d6")
+	check(not bool(sv3["success"]) and int(sv3["damage_taken"]) == int(sv3["damage_full"]), "豁免失败全伤")
+	# 死亡豁免：≥10 一胜（11 §7）
+	var ds_ok := true
+	for seed: int in range(1, 200):
+		var ds := LightV1.death_save(Rng.new(seed))
+		if bool(ds["success"]) != (int(ds["roll"]) >= 10):
+			ds_ok = false
+	check(ds_ok, "死亡豁免 d20≥10 记一胜")
+
+# ---------------------------------------------------------------- 遭遇测试夹具
+
+func _tp2_party() -> Array:
+	return [
+		{"id": "pc", "name": "白页者", "kind": "player", "hp": 14, "max_hp": 14, "ac": 11,
+			"attrs": {"might": 2, "finesse": 1, "wits": 0}, "attack_mod": 2, "damage": "1d6+2",
+			"skills": [{"id": "inkbolt", "name": "墨术飞矢", "kind": "attack", "attr": "wits",
+				"damage": "1d6", "uses": 2, "target": "enemy"}],
+			"items": [{"id": "heal_potion", "name": "补给药水", "count": 2,
+				"use": {"timing": "bonus_action", "heal": "1d4+2", "consume": true}}]},
+		{"id": "kelan", "name": "珂兰", "kind": "companion", "hp": 10, "max_hp": 10, "ac": 11,
+			"attrs": {"might": 0, "finesse": 1, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
+			"skills": [{"id": "kelan_bolt", "name": "墨矢", "kind": "attack", "attr": "finesse",
+				"damage": "1d6+1", "target": "enemy"}]},
+		{"id": "laofei", "name": "老费", "kind": "companion", "hp": 12, "max_hp": 12, "ac": 12,
+			"attrs": {"might": 1, "finesse": 0, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
+			"skills": [{"id": "laofei_hook", "name": "船钩", "kind": "attack", "attr": "might",
+				"damage": "1d6+1", "target": "enemy"}]},
+	]
+
+func _tp2_enemies() -> Array:
+	return [
+		{"id": "boss", "name": "墨魈", "hp": 16, "max_hp": 16, "ac": 11,
+			"attrs": {"might": 1, "finesse": 1, "wits": 0}, "attack_mod": 3, "damage": "1d4+1",
+			"skills": [{"id": "ink_rain", "name": "墨雨溅射", "kind": "aoe", "damage": "1d6",
+				"uses": 2, "cooldown": 2,
+				"save": {"attr": "finesse", "dc": 11, "on_success": "half"}}]},
+		{"id": "imp1", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
+			"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
+		{"id": "imp2", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
+			"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
+	]
+
+func _std_def() -> Dictionary:
+	return {"party": _tp2_party(), "enemies": _tp2_enemies(),
+		"party_advantage_rounds": 1, "loot": [{"item": "ink_core", "n": 1}], "xp": 100}
+
+func _mini_def(atk_mod: int = 2) -> Dictionary:
+	var pc: Dictionary = _tp2_party()[0]
+	pc["attack_mod"] = atk_mod
+	pc.erase("skills")
+	pc.erase("items")
+	return {"party": [pc], "enemies": [_tp2_enemies()[1]]}
+
+func _sm_with(seed: int, def: Dictionary) -> EncounterSM:
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(seed), "campaign01")
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(def)
+	return sm
+
+func _cmd(ctype: StringName, actor: String, target: String = "", skill: String = "",
+		item: String = "", source: StringName = &"player") -> Dictionary:
+	return {"type": ctype, "actor": actor, "target": target, "skill": skill, "item": item, "source": source}
+
+func _last_attack(sm: EncounterSM) -> Dictionary:
+	var evs := sm.stream.query_by_type(EventTypes.BATTLE_ATTACK)
+	return evs.back()["payload"] if not evs.is_empty() else {}
+
+## 用结束回合动态驱动当前友方阶段走完（不假设先攻序；止于本轮边界）。
+func _end_party_phase(sm: EncounterSM) -> void:
+	var r0 := sm.round_no()
+	var guard := 0
+	while sm.state == EncounterSM.S_COMBAT and sm.phase() == &"party" \
+			and sm.current_actor_id() != "" and sm.round_no() == r0 and guard < 20:
+		guard += 1
+		sm.submit_command(_cmd(EncounterSM.CMD_END_TURN, sm.current_actor_id()))
+
+## pc 先攻必优先的 def（finesse 20），用于行动经济/托管断言。
+func _pc_first_def() -> Dictionary:
+	var def := _std_def()
+	((def["party"] as Array)[0] as Dictionary)["attrs"] = {"might": 2, "finesse": 20, "wits": 0}
+	return def
+
+## 珂兰可倒地的夹具：墨雨溅射 6d6、pc 高血高修正重骰且先攻优先。
+func _down_def() -> Dictionary:
+	var boss_hard: Dictionary = _tp2_enemies()[0]
+	((boss_hard["skills"] as Array)[0] as Dictionary)["damage"] = "6d6"
+	return {"party": [
+			_tp2_party()[0].merged({"hp": 100, "max_hp": 100, "attack_mod": 30, "damage": "30d6",
+				"attrs": {"might": 2, "finesse": 20, "wits": 0}}, true),
+			_tp2_party()[1].merged({"hp": 8}, true)],
+		"enemies": [boss_hard]}
+
+# ---------------------------------------------------------------- EncounterSM（09 §1、tech/01 §6.1/§6.2、11 §4/§5）
+
+func test_encounter_sm() -> void:
+	print("[encounter_sm]")
+	# —— 六态转换表（09 §1）——
+	var s0 := EventStream.new()
+	var sm := EncounterSM.new(Board.new(s0), s0, Rng.new(1), "campaign01")
+	sm.enter("N1-7")
+	check(sm.state == EncounterSM.S_ENTER, "进场态")
+	check(not sm.transition(EncounterSM.S_COMBAT), "非法转换拒绝：进场→战斗")
+	check(sm.transition(EncounterSM.S_EXPLORE), "进场→探索")
+	check(sm.transition(EncounterSM.S_DISCOVER), "探索→发现")
+	check(sm.transition(EncounterSM.S_EXPLORE), "发现→探索（双向流转）")
+	check(not sm.transition(EncounterSM.S_REST), "非法转换拒绝：探索→休整")
+	check(not sm.transition(EncounterSM.S_EXIT), "非法转换拒绝：探索→出场")
+	var st_evs := s0.query_by_type(EventTypes.STATE_ENTERED)
+	check(st_evs.size() == 4 and str(st_evs[0]["payload"]["state"]) == "enter"
+		and str(st_evs[1]["payload"]["state"]) == "explore"
+		and str(st_evs[1]["payload"]["prev"]) == "enter", "状态切换外发 state.entered（09 §1 约定）")
+	# 结算→休整→出场
+	var sm2 := _sm_with(3, _std_def())
+	check(sm2.state == EncounterSM.S_COMBAT, "探索→战斗（敌意触发）")
+	check(not sm2.transition(EncounterSM.S_EXIT), "未声明撤退边：战斗→出场拒绝（09 §7）")
+	# 打完进结算（pc 扫 seed 找必胜开局：优势首回合 + 高修正重骰）
+	var won := false
+	for seed: int in range(1, 400):
+		var smw := _sm_with(seed, {"party": [_tp2_party()[0].merged({"attack_mod": 30, "damage": "30d6"}, true)],
+			"enemies": [_tp2_enemies()[1]], "xp": 100, "loot": [{"item": "ink_core", "n": 1}]})
+		smw.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1"))
+		if smw.is_over():
+			won = true
+			check(smw.state == EncounterSM.S_SETTLE, "战斗→结算（一方全灭）")
+			check(smw.result() == &"victory", "胜利结果")
+			check(smw.board.item_count("ink_core") == 1, "结算写状态板：战利品墨核落板（09 §1 硬要求）")
+			check(smw.stream.query_by_type(EventTypes.XP_GAIN).size() == 1, "结算产出 xp.gain")
+			check(not smw.transition(EncounterSM.S_EXPLORE), "非法转换拒绝：结算→探索")
+			check(smw.transition(EncounterSM.S_REST), "结算→休整")
+			check(smw.transition(EncounterSM.S_EXIT), "休整→出场")
+			check(not smw.transition(EncounterSM.S_ENTER), "出场为终态")
+			break
+	check(won, "seed 空间内找到必胜样本")
+	# 撤退边（09 §7）
+	var smr := _sm_with(3, _std_def().merged({"retreat_allowed": true}, true))
+	check(smr.transition(EncounterSM.S_EXIT), "声明撤退边后战斗→出场允许")
+	var smr2 := _sm_with(3, _std_def().merged({"retreat_allowed": true}, true))
+	smr2.submit_command(_cmd(EncounterSM.CMD_RETREAT, smr2.current_actor_id()))
+	check(smr2.is_over() and smr2.result() == &"retreat" and smr2.state == EncounterSM.S_SETTLE,
+		"撤退命令 → combat.end(retreat) → 结算（失败即分支）")
+
+	# —— 先攻（11 §5：d20+敏降序，平局玩家优先）——
+	var smi := _sm_with(42, _std_def())
+	var rep := Rng.new(42)
+	var expect: Array = []
+	for u: Variant in _tp2_party() + _tp2_enemies():
+		expect.append({"id": (u as Dictionary)["id"],
+			"init": rep.d20() + int((u as Dictionary)["attrs"]["finesse"]),
+			"seq": expect.size(), "side": &"party" if (u as Dictionary).has("kind") else &"enemy"})
+	expect.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["init"]) != int(b["init"]):
+			return int(a["init"]) > int(b["init"])
+		if a["side"] != b["side"]:
+			return a["side"] == &"party"
+		return int(a["seq"]) < int(b["seq"]))
+	var expect_order: Array = []
+	for e: Variant in expect:
+		expect_order.append(str((e as Dictionary)["id"]))
+	check(smi.get_order() == expect_order, "先攻序列 = d20+敏降序、平局玩家优先（平行 Rng 复算）")
+	check(smi.stream.query_by_type(EventTypes.COMBAT_START).size() == 1, "combat.start 事件")
+
+	# —— 普通攻击命中与伤害 ——
+	var hit_ok := false
+	for seed: int in range(1, 200):
+		var smh := _sm_with(seed, _mini_def())
+		smh.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1"))
+		var p := _last_attack(smh)
+		if bool(p.get("hit", false)) and not bool(p["crit"]):
+			hit_ok = true
+			check((p["damage_rolls"] as Array).size() == 1
+				and int(p["damage"]) == int(p["damage_rolls"][0]) + 2, "命中伤害 = 武器骰+修正（11 §5）")
+			check(int(smh.get_unit("imp1")["hp"]) == 8 - int(p["damage"]), "伤害落板到目标 HP")
+			break
+	check(hit_ok, "seed 空间内找到普通命中样本")
+
+	# —— 见证撤销首回合优势（11 §3.1 内容包声明来源）——
+	var smadv := _sm_with(9, _std_def())
+	var atk1 := smadv.current_actor_id()
+	smadv.submit_command(_cmd(EncounterSM.CMD_ATTACK, atk1, "imp1"))
+	var padv := _last_attack(smadv)
+	check(str(padv["mode"]) == "advantage" and (padv["rolls"] as Array).size() == 2
+		and int(padv["keep"]) == maxi(int(padv["rolls"][0]), int(padv["rolls"][1])),
+		"首回合全队攻击优势（2d20 取高）")
+	while smadv.state == EncounterSM.S_COMBAT and smadv.phase() == &"party" and smadv.round_no() == 1:
+		smadv.submit_command(_cmd(EncounterSM.CMD_END_TURN, smadv.current_actor_id()))
+	check(smadv.round_no() == 2 and smadv.party_advantage_rounds() == 0, "全员行动完进敌方回合并进第 2 轮（11 §5.2）")
+	smadv.submit_command(_cmd(EncounterSM.CMD_ATTACK, smadv.current_actor_id(), "imp1"))
+	check(str(_last_attack(smadv)["mode"]) == "normal", "第 2 轮优势消退 → 普通掷")
+
+	# —— 墨雨溅射豁免（11 §5.1）——
+	var smsv := _sm_with(9, _std_def())
+	while smsv.state == EncounterSM.S_COMBAT and smsv.round_no() == 1 and smsv.phase() == &"party":
+		smsv.submit_command(_cmd(EncounterSM.CMD_END_TURN, smsv.current_actor_id()))
+	var saves := smsv.stream.query_by_type(EventTypes.CHECK_ROLL).filter(
+		func(ev: Dictionary) -> bool: return str(ev["payload"].get("kind", "")) == "save")
+	check(saves.size() == 3, "墨雨溅射对全员各掷一次豁免")
+	var sv0: Dictionary = saves[0]["payload"]
+	check(int(sv0["dc"]) == 11 and str(sv0["on_success"]) == "half"
+		and not bool(sv0.get("key", true)), "豁免 DC11/half、默认普通演出（11 §5.1）")
+
+	# —— 行动经济（11 §4/§5.2）——
+	var sme := _sm_with(11, _pc_first_def())
+	sme.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1"))
+	check(not sme.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1")), "动作已用：第二次攻击拒绝")
+	check(sme.stream.query_by_type(EventTypes.COMMAND_REJECTED).back()["payload"]["reason"] == "action_used",
+		"拒绝产出 command.rejected(action_used)")
+	check(sme.submit_command(_cmd(EncounterSM.CMD_ITEM, "pc", "pc", "", "heal_potion")), "附赠动作用药")
+	check(not sme.submit_command(_cmd(EncounterSM.CMD_ITEM, "pc", "pc", "", "heal_potion")), "附赠已用：第二次用药拒绝")
+	check(sme.current_actor_id() != "pc" and sme.current_actor_id() != "", "动作+附赠耗尽自动轮到下一单位")
+	check(not sme.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1")), "非当前单位命令拒绝（not_your_turn）")
+	# 次数制技能（11 §8）：墨术飞矢 2 次，第 3 次拒绝
+	var sku := _sm_with(11, _pc_first_def())
+	sku.submit_command(_cmd(EncounterSM.CMD_SKILL, "pc", "imp1", "inkbolt"))
+	_end_party_phase(sku)
+	sku.submit_command(_cmd(EncounterSM.CMD_SKILL, "pc", "imp1", "inkbolt"))
+	_end_party_phase(sku)
+	check(int(sku.get_unit("pc")["skill_uses"]["inkbolt"]) == 0, "次数扣减至 0")
+	check(not sku.submit_command(_cmd(EncounterSM.CMD_SKILL, "pc", "imp1", "inkbolt")), "次数耗尽拒绝（skill_depleted）")
+	# 道具消耗写板（tech/04 §4 consume）
+	var smit := _sm_with(11, _pc_first_def())
+	smit.board.give_item("heal_potion", 2, {"event_id": 1, "node_id": "N1-1", "pack_id": "campaign01"})
+	smit.submit_command(_cmd(EncounterSM.CMD_ITEM, "pc", "pc", "", "heal_potion"))
+	check(smit.board.item_count("heal_potion") == 1, "consume 道具从 global.inv 移除（写板+事件流）")
+	check(smit.stream.query_by_type(EventTypes.ITEM_USE).size() == 1, "item.use 事件")
+
+	# —— 同伴（11 §5.2：每存活同伴 1 动作）——
+	var smc := _sm_with(11, _pc_first_def())
+	smc.submit_command(_cmd(EncounterSM.CMD_END_TURN, "pc"))
+	var comp := smc.current_actor_id()
+	check(comp == "kelan" or comp == "laofei", "同伴进入指令通道")
+	var comp_skill := "kelan_bolt" if comp == "kelan" else "laofei_hook"
+	check(smc.submit_command(_cmd(EncounterSM.CMD_SKILL, comp, "imp1", comp_skill)), "同伴招牌技能可执行")
+	check(not smc.submit_command(_cmd(EncounterSM.CMD_ATTACK, comp, "imp1")), "同伴每回合 1 动作")
+
+	# —— 倒地互救与战后起身（11 §5.2/§7）——
+	var aid_done := false
+	var post_done := false
+	for seed: int in range(1, 3000):
+		if aid_done and post_done:
+			break
+		var smd := _sm_with(seed, _down_def())
+		_end_party_phase(smd) # 第 1 轮友方结束 → 敌方墨雨溅射（6d6）
+		if smd.is_over() or not bool(smd.get_unit("kelan")["downed"]) or smd.current_actor_id() != "pc":
+			continue
+		if not aid_done:
+			var smd2 := _sm_with(seed, _down_def())
+			_end_party_phase(smd2)
+			smd2.submit_command(_cmd(EncounterSM.CMD_FIRST_AID, "pc", "kelan"))
+			var fa := smd2.stream.query_by_type(EventTypes.CHECK_ROLL).filter(
+				func(ev: Dictionary) -> bool: return str(ev["payload"].get("kind", "")) == "first_aid")
+			if not fa.is_empty() and bool(fa.back()["payload"]["success"]):
+				aid_done = true
+				check(int(smd2.get_unit("kelan")["hp"]) == 1 and not bool(smd2.get_unit("kelan")["downed"]),
+					"急救成功 1 HP 扶起（d20+智 vs DC8，11 §5.2）")
+				check(smd2.stream.query_by_type(EventTypes.BATTLE_REVIVE).back()["payload"]["reason"] == "first_aid",
+					"battle.revive(first_aid) 事件")
+		if not post_done:
+			smd.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "boss"))
+			if smd.is_over() and smd.result() == &"victory":
+				var kl := smd.get_unit("kelan")
+				if int(kl["hp"]) == 1 and not bool(kl["downed"]):
+					post_done = true
+					check(true, "战后倒地同伴自动 1 HP 起身（11 §5.2）")
+	check(aid_done, "seed 空间内找到急救成功样本")
+	check(post_done, "seed 空间内找到战后起身样本")
+
+	# —— 死亡豁免三局两胜（11 §7）——
+	var stabilized := false
+	var died := false
+	for seed: int in range(1, 3000):
+		if stabilized and died:
+			break
+		var smds := _sm_with(seed, _down_def())
+		_end_party_phase(smds) # 第 1 轮：墨雨溅射打倒珂兰
+		if not bool(smds.get_unit("kelan")["downed"]):
+			continue
+		var guard := 0
+		while not smds.is_over() and guard < 40:
+			guard += 1
+			var kl_now := smds.get_unit("kelan")
+			if not bool(kl_now["downed"]) or bool(kl_now["dead"]):
+				break
+			_end_party_phase(smds)
+		var kl2 := smds.get_unit("kelan")
+		var ds_evs := smds.stream.query_by_type(EventTypes.CHECK_ROLL).filter(
+			func(ev: Dictionary) -> bool: return str(ev["payload"].get("kind", "")) == "death_save")
+		if not stabilized and int(kl2["hp"]) == 1 and not bool(kl2["downed"]) and not bool(kl2["dead"]) \
+				and smds.stream.query_by_type(EventTypes.BATTLE_REVIVE).any(
+					func(ev: Dictionary) -> bool: return ev["payload"]["reason"] == "stabilized"):
+			stabilized = true
+			check(ds_evs.all(func(ev: Dictionary) -> bool: return bool(ev["payload"].get("key", false))),
+				"死亡豁免恒定关键判定 key=true（11 §7/09 §6）")
+			check(true, "三胜稳住：1 HP 起身（battle.revive stabilized）")
+		if not died and bool(kl2["dead"]):
+			died = true
+			check(true, "三负死亡（battle.dead）")
+	check(stabilized, "seed 空间内找到三胜稳住样本")
+	check(died, "seed 空间内找到三负死亡样本")
+
+# ---------------------------------------------------------------- AutoAgent（09 §9.3、tech/01 §6.2）
+
+func test_auto_agent() -> void:
+	print("[auto_agent]")
+	var agent := AutoAgent.new()
+	# 技能优先 + 命令同构性
+	var sm := _sm_with(11, _pc_first_def())
+	var auto := agent.next_command(sm)
+	var manual := _cmd(EncounterSM.CMD_SKILL, "pc", sm.first_alive_enemy(), "inkbolt")
+	var auto_cmp := auto.duplicate()
+	auto_cmp.erase("source")
+	var manual_cmp := manual.duplicate()
+	manual_cmp.erase("source")
+	check(auto_cmp == manual_cmp, "托管与手操产出同构 Command（仅 source 不同，tech/01 §6.2）")
+	check(auto["source"] == &"auto", "托管命令 source=auto（09 §9.3 可回放可追溯）")
+	var keys: Array = auto.keys()
+	keys.sort()
+	var expect_keys: Array = ["actor", "item", "skill", "source", "target", "type"]
+	check(keys == expect_keys, "命令键集恒定")
+	check(sm.submit_command(auto), "托管命令通过同一合法性校验")
+	check(sm.stream.query_by_type(EventTypes.BATTLE_ATTACK).back()["payload"]["source"] == &"auto",
+		"事件流标注来源 auto")
+	# 动作已用 → 结束回合
+	var after := agent.next_command(sm)
+	check(after["type"] == EncounterSM.CMD_END_TURN, "动作耗尽 → 结束回合")
+	sm.submit_command(after)
+	check(["kelan", "laofei"].has(str(agent.next_command(sm)["actor"])), "同伴由同一代理接管（11 §5.2）")
+	# 次数耗尽退普攻（09 §9.3）
+	var sm2 := _sm_with(11, _pc_first_def())
+	sm2.submit_command(_cmd(EncounterSM.CMD_SKILL, "pc", "imp1", "inkbolt", "", &"player"))
+	_end_party_phase(sm2)
+	sm2.submit_command(_cmd(EncounterSM.CMD_SKILL, "pc", "imp1", "inkbolt", "", &"player"))
+	_end_party_phase(sm2)
+	var c2 := agent.next_command(sm2)
+	check(c2["type"] == EncounterSM.CMD_ATTACK and str(c2["skill"]) == "", "次数技能耗尽退普攻")
+	# 低血用药（默认 HP<50%，阈值可配置）
+	var low_def := _pc_first_def()
+	(low_def["party"][0] as Dictionary)["hp"] = 6
+	var sm3 := _sm_with(11, low_def)
+	var c3 := agent.next_command(sm3)
+	check(c3["type"] == EncounterSM.CMD_ITEM and str(c3["item"]) == "heal_potion" and str(c3["target"]) == "pc",
+		"HP<50% 优先用药（09 §9.3 阈值策略）")
+	agent.heal_threshold = 0.3
+	check(agent.next_command(sm3)["type"] != EncounterSM.CMD_ITEM, "阈值可配置：30% 时 6/14 不用药")
+	agent.heal_threshold = 0.5
+	# 战斗结束 → 无命令（托管自动停止的前置：core 不再受理）
+	var sm4 := _sm_with(7, {"party": [_tp2_party()[0].merged({"attack_mod": 30, "damage": "30d6"}, true)],
+		"enemies": [_tp2_enemies()[1]]})
+	sm4.submit_command(_cmd(EncounterSM.CMD_ATTACK, "pc", "imp1"))
+	if sm4.is_over():
+		check(agent.next_command(sm4).is_empty(), "战斗结束代理不再产出命令")
+	else:
+		check(false, "预设必胜样本未终结战斗")
+
+# ---------------------------------------------------------------- 竖屏壳（04 §④、09 §5/§6/§9，无头断言）
+
+func _ratios_close(r: Array[float], expect: Array, tol: float = 0.02) -> bool:
+	return absf(r[0] - float(expect[0])) < tol \
+		and absf(r[1] - float(expect[1])) < tol \
+		and absf(r[2] - float(expect[2])) < tol
+
+func test_portrait_shell() -> void:
+	print("[portrait_shell]")
+	var scene: PackedScene = load("res://shell/portrait/encounter_portrait.tscn")
+	var portrait: EncounterPortrait = scene.instantiate()
+	root.add_child(portrait)
+	await process_frame
+	await process_frame
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(11), "campaign01")
+	var agent := AutoAgent.new()
+	portrait.bind(sm, agent)
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	await process_frame
+	await process_frame
+
+	# 呼吸：探索 8/62/30（04 §④.1 冻结比例，09 §5）
+	check(_ratios_close(portrait.get_band_ratios(), [0.08, 0.62, 0.30]),
+		"呼吸：探索态 8/62/30（04 §④.1）")
+	# 房间推进条 pip 状态（04 §④.2）
+	portrait.set_rooms(["N1-1", "N1-3", "N1-7", "N1-8"], 2)
+	await process_frame
+	check(portrait.pip_state(0) == EncounterPortrait.PIP_PAST
+		and portrait.pip_state(1) == EncounterPortrait.PIP_PAST
+		and portrait.pip_state(2) == EncounterPortrait.PIP_CURRENT
+		and portrait.pip_state(3) == EncounterPortrait.PIP_FUTURE,
+		"推进条：已过点亮 / 当前脉动 / 未来剪影")
+	# 战斗态呼吸 12/55/33：高度变化随 state.entered 发生（09 §1/§5）
+	# 待裁决：04 §④.1 战斗行写作 12/55/37（合计 104≠100），实现按状态栏 12、主视野 55、操作台补齐 33 落位
+	sm.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	check(_ratios_close(portrait.get_band_ratios(), [0.12, 0.55, 0.33]),
+		"呼吸：战斗态 12/55/33（state.entered 驱动，04 §④.1 裁决见交付说明）")
+	# 对话档 8/50/42（04 §④.1 表）
+	portrait.apply_breathing(&"dialog")
+	await process_frame
+	await process_frame
+	check(_ratios_close(portrait.get_band_ratios(), [0.08, 0.50, 0.42]), "呼吸：对话档 8/50/42")
+	portrait._restore_breathing()
+	await process_frame
+	await process_frame
+	check(_ratios_close(portrait.get_band_ratios(), [0.12, 0.55, 0.33]), "呼吸恢复战斗档")
+
+	# 事件流 → UI 更新链路：日志
+	stream.emit(EventTypes.LOG, {"msg": "测试日志条目"}, &"core")
+	await process_frame
+	check(portrait.log_view.get_parsed_text().contains("测试日志条目"), "事件流→UI：log 事件更新日志 Tab")
+	# 事件流 → UI：攻击后敌方单位 HP 文本
+	var target := sm.first_alive_enemy()
+	sm.submit_command(_cmd(EncounterSM.CMD_ATTACK, sm.current_actor_id(), target))
+	await process_frame
+	var hp_now := int(sm.get_unit(target)["hp"])
+	var hp_shown := false
+	for child: Node in portrait.enemy_row.get_children():
+		if (child as Button).text.contains("HP %d/" % hp_now):
+			hp_shown = true
+	check(hp_shown, "事件流→UI：battle.attack 后敌方 HP 显示更新")
+	# 快捷栏芯片（09 §9.2：技能/道具/急救/结束回合 + 次数余量）；驱动到 pc 行动
+	var guard := 0
+	while sm.current_actor_id() != "pc" and guard < 6:
+		guard += 1
+		sm.submit_command(_cmd(EncounterSM.CMD_END_TURN, sm.current_actor_id()))
+	await process_frame
+	var chip_texts: Array = []
+	for child: Node in portrait.quickbar.get_children():
+		if child is Button:
+			chip_texts.append((child as Button).text)
+	var joined := " ".join(chip_texts)
+	check(joined.contains("攻击") and joined.contains("补给药水") and joined.contains("急救")
+		and joined.contains("结束回合"), "快捷栏芯片齐备（行动 Tab）")
+	check(joined.contains("墨术飞矢 ×2"), "芯片呈现次数余量（09 §9.2）")
+
+	# 托管：节拍下限（09 §9.3：≥0.8s/动作，1×/2×）与同一 Command 通道
+	check(portrait.auto_timer.wait_time == 0.8, "托管 1× 节拍 0.8s")
+	portrait.set_speed(2)
+	check(absf(portrait.auto_timer.wait_time - 0.4) < 0.001, "托管 2× 节拍 0.4s")
+	portrait.set_auto(true)
+	await create_timer(1.6).timeout
+	check(stream.query_by_type(EventTypes.BATTLE_ATTACK).any(
+		func(ev: Dictionary) -> bool: return ev["payload"]["source"] == &"auto"),
+		"托管经同一 Command 通道产出 source=auto 事件")
+	portrait._manual(_cmd(EncounterSM.CMD_END_TURN, sm.current_actor_id()))
+	check(not portrait.auto_on, "玩家点按即接管（09 §9.3 即时生效）")
+
+	# 关键判定全屏演出（09 §6；死亡豁免恒定关键，11 §7）
+	stream.emit(EventTypes.CHECK_ROLL, {"roller": "kelan", "kind": "death_save", "rolls": [3],
+		"keep": 3, "dc": 10, "success": false, "s": 0, "f": 1, "key": true, "extreme": false}, &"core")
+	await create_timer(0.2).timeout
+	check(portrait.key_overlay.visible, "关键判定全屏接管（09 §6）")
+	check(not portrait.status_band.visible and not portrait.console_panel.visible,
+		"全屏时状态栏/操作台退屏（04 §④.1 关键判定行）")
+	var mb := InputEventMouseButton.new()
+	mb.pressed = true
+	portrait._on_key_overlay_input(mb)
+	await create_timer(0.3).timeout
+	check(not portrait.key_overlay.visible, "关键演出可点击跳过（09 §6/04 §④.7）")
+	await process_frame
+	await process_frame
+	check(_ratios_close(portrait.get_band_ratios(), [0.12, 0.55, 0.33]), "演出结束呼吸回落战斗档")
+
+	portrait.queue_free()
+	await process_frame

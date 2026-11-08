@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3 uid="uid://d3t1encportrait"]
+
+[ext_resource type="Script" path="res://shell/portrait/encounter_portrait.gd" id="1"]
+
+; 竖屏遭遇壳：三段式呼吸布局（04 §④.1）——节点树由脚本在 _ready 构建，
+; 场景文件仅承载根节点（渲染壳 = 事件流的视图，结构即代码）。
+[node name="EncounterPortrait" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
