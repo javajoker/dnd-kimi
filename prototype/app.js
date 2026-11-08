@@ -110,6 +110,11 @@ function allocPoint(attr) {
 /* ---------- 轻规则包 v1：检定与战斗 ---------- */
 const DC = { easy: 8, medium: 12, hard: 16 };
 const d20 = () => 1 + Math.floor(Math.random() * 20);
+// 优势/劣势（11 §3.1）：2d20 取高/取低
+function d20x(mode) {
+  const a = d20(), b = d20();
+  return mode === "adv" ? Math.max(a, b) : mode === "dis" ? Math.min(a, b) : a;
+}
 const dN = (n) => 1 + Math.floor(Math.random() * n);
 function modOf(attr) { return PACK.player.attrs[attr] || 0; }
 function profOf(skill) { return PACK.player.prof.includes(skill) ? 2 : 0; }
@@ -532,15 +537,19 @@ function startBattle(node) {
   runtime.phase = "battle";
   runtime.battle = {
     spec, round: 1, busy: false, over: false, fled: false,
-    moved: false, bonusUsed: false,
+    moved: false, bonusUsed: false, pcActed: false,
+    compActed: {}, downed: {}, saves: { s: 0, f: 0 }, playerDown: false,
     auto: false, autoSpeed: 1, lastAutoAct: 0,
     enemies: Array.from({ length: spec.count }, (_, i) => ({
       name: spec.name + (spec.count > 1 ? "·" + "甲乙"[i] : ""), hp: spec.hp, ac: spec.ac, atk: spec.atk, dmg: spec.dmg
     })),
     skillUses: {}
   };
-  // 横屏网格占位坐标
-  runtime.battle.pos = { allies: [[2, 4]], enemies: spec.count === 1 ? [[3, 1]] : [[2, 1], [4, 1]] };
+  // 「见证撤销」旗标 → 本场首回合全队攻击优势（11 §3.1 内容包声明来源示例）
+  runtime.battle.advRound1 = !!Board.flags.witnessed_revocation;
+  // 横屏网格占位坐标（你 + 同伴）
+  runtime.battle.pos = { allies: [[2, 4], [1, 4], [3, 4]], enemies: spec.count === 1 ? [[3, 1]] : [[2, 1], [4, 1]] };
+  if (runtime.battle.advRound1) addLog(`<b class="crit">「你见过撤销」</b>：本场首回合，全队攻击获得优势（2d20 取高）。`);
   addLog(`<b class="hurt">遭遇战开始：${node.title}</b>（先攻：d20+敏，玩家先手）`);
   emit("battle.start", { id: node.encounter.id, enemy: spec.name });
   if (!localStorage.getItem("proto_tut_battle")) setTimeout(() => showCoach(TUT_BATTLE, "proto_tut_battle"), 400);
@@ -548,33 +557,52 @@ function startBattle(node) {
 function battleViewHTML() {
   const b = runtime.battle;
   const foes = b.enemies.map((e, i) =>
-    `<div class="unit enemy ${e.hp <= 0 ? "" : ""}" style="${e.hp <= 0 ? "opacity:.3" : ""}">
+    `<div class="unit enemy" style="${e.hp <= 0 ? "opacity:.3" : ""}">
       <div class="nm">${e.hp <= 0 ? "消散" : e.name}</div><div class="hp">HP ${Math.max(0, e.hp)}/${b.spec.hp} · AC ${e.ac}</div></div>`).join("");
+  const allies = [
+    `<div class="unit active" data-who="pc"><div class="nm">${b.playerDown ? "倒地·" : ""}${PACK.player.name}</div>
+      <div class="hp">HP ${Math.max(0, PACK.player.hp)}/${PACK.player.maxhp} · AC ${PACK.player.ac}</div></div>`,
+    ...PACK.companions.map(c =>
+      `<div class="unit ${b.downed[c.id] ? "" : "active"}" data-who="${c.id}" style="${b.downed[c.id] ? "opacity:.4" : ""}">
+        <div class="nm">${c.name}${b.downed[c.id] ? "·倒地" : ""}</div><div class="hp">HP ${Math.max(0, c.hp)}/${c.maxhp} · AC ${c.ac}</div></div>`)
+  ].join("");
   return `<div id="vp-battle"><div class="lane">
     <div class="unit-row">${foes}</div>
     <div class="vs-mark">— 竖向战场 · 第 ${b.round} 回合 —</div>
-    <div class="unit-row"><div class="unit active"><div class="nm">${PACK.player.name}</div>
-      <div class="hp">HP ${PACK.player.hp}/${PACK.player.maxhp} · AC ${PACK.player.ac}</div></div></div>
+    <div class="unit-row">${allies}</div>
   </div></div>`;
 }
 /* ---------- 快捷栏（09 文档 §9.2：芯片 = 整备选择 + 情境过滤；拖动/点按双通道） ---------- */
 function trayHTML() {
   const b = runtime.battle;
   if (!b || b.over) return "";
+  const pcDis = b.busy || b.pcActed || b.playerDown;
   const skillChips = runtime.loadout.skills.map(id => {
     const s = PACK.player.skills.find(x => x.id === id);
     const left = s.uses ? s.uses - (b.skillUses[id] || 0) : Infinity;
-    const dis = b.busy || left <= 0;
+    const dis = pcDis || left <= 0;
     return `<div class="chip ${dis ? "dis" : ""}" data-skill="${id}" title="点按=默认目标 · 拖动到敌人=指定目标">
-      ⚔️ ${s.name}<span class="chip-sub">${s.dmg}${s.uses ? "·余" + Math.max(0, left) : ""}</span></div>`;
+      ⚔️ ${s.name}<span class="chip-sub">${s.dmg}${s.uses ? "·余" + Math.max(0, left) : ""}${b.pcActed ? "·已行动" : ""}</span></div>`;
   }).join("");
   const itemChips = runtime.loadout.items.filter(id => Board.inv.includes(id)).map(id => {
     const it = PACK.items[id];
-    const dis = b.busy || b.bonusUsed;
+    const dis = b.busy || b.bonusUsed || b.playerDown;
     return `<div class="chip item ${dis ? "dis" : ""}" data-item="${id}" title="点按=对自己使用 · 拖动到友方=指定目标">
       🧪 ${it.name}<span class="chip-sub">附赠${b.bonusUsed ? "·已用" : ""}</span></div>`;
   }).join("");
-  return skillChips + itemChips;
+  // 同伴芯片（11 §5.2：共用同一指令通道，每回合每同伴 1 动作）
+  const compChips = PACK.companions.map(c => {
+    const dis = b.busy || b.downed[c.id] || b.compActed[c.id] || c.hp <= 0;
+    return `<div class="chip comp ${dis ? "dis" : ""}" data-comp="${c.id}" title="点按=默认目标 · 拖动到敌人=指定目标">
+      🧑 ${c.name}·${c.skill.name}<span class="chip-sub">${b.downed[c.id] ? "倒地" : c.skill.dmg + (b.compActed[c.id] ? "·已行动" : "")}</span></div>`;
+  }).join("");
+  // 倒地互救（11 §5.2：动作「急救」d20+智 vs DC 8）
+  const rescueChips = PACK.companions.filter(c => b.downed[c.id]).map(c => {
+    const dis = pcDis;
+    return `<div class="chip item ${dis ? "dis" : ""}" data-rescue="${c.id}">
+      ✚ 急救·${c.name}<span class="chip-sub">动作 · d20+智 vs DC 8</span></div>`;
+  }).join("");
+  return skillChips + itemChips + compChips + rescueChips;
 }
 function autoButtonHTML() {
   const b = runtime.battle;
@@ -617,20 +645,25 @@ setInterval(() => {                                   // 代理调度器：300ms
 }, 300);
 function autoAct(b) {
   // 策略 1：HP 低于阈值且有携带药水 → 附赠用药
-  if (!b.bonusUsed && PACK.player.hp <= PACK.player.maxhp * PACK.auto.potion_below) {
+  if (!b.bonusUsed && !b.playerDown && PACK.player.hp <= PACK.player.maxhp * PACK.auto.potion_below) {
     const potion = runtime.loadout.items.find(id => Board.inv.includes(id) && PACK.items[id].use);
     if (potion) { addLog(`🤖 <b>托管</b>：血量过半失，使用药水。`); useItemInBattle(potion); return; }
   }
-  // 策略 2：按整备顺序找第一个仍有次数的技能（代掷骰）
-  for (const id of runtime.loadout.skills) {
-    const s = PACK.player.skills.find(x => x.id === id);
-    if (!s) continue;
-    if (s.uses && (b.skillUses[s.id] || 0) >= s.uses) continue;
-    addLog(`🤖 <b>托管</b>：执行「${s.name}」（d20 代掷）。`);
-    attackSkill(s);
-    return;
+  // 策略 2：PC 按整备顺序找第一个仍有次数的技能（代掷骰）
+  if (!b.pcActed && !b.playerDown) {
+    for (const id of runtime.loadout.skills) {
+      const s = PACK.player.skills.find(x => x.id === id);
+      if (!s) continue;
+      if (s.uses && (b.skillUses[s.id] || 0) >= s.uses) continue;
+      addLog(`🤖 <b>托管</b>：执行「${s.name}」（d20 代掷）。`);
+      attackSkill(s);
+      return;
+    }
   }
-  // 策略 3：无可用动作 → 结束回合
+  // 策略 3：未行动的同伴依次行动
+  const c = PACK.companions.find(c => c.hp > 0 && !b.downed[c.id] && !b.compActed[c.id]);
+  if (c) { addLog(`🤖 <b>托管</b>：${c.name} 执行「${c.skill.name}」。`); companionAct(c); return; }
+  // 策略 4：全员行动完（或玩家倒地）→ 结束回合
   endTurn();
 }
 function useItemInBattle(id) {
@@ -652,64 +685,137 @@ function endTurn() {
   setTimeout(enemyTurn, 600);
 }
 function attack(i) {
-  const b = runtime.battle;
   const s = PACK.player.skills.find(x => x.id === runtime.loadout.skills[i]) || PACK.player.skills[i];
   attackSkill(s);
 }
+/* 友方目标集合与伤害应用（11 §5.2 同伴规则） */
+function aliveTargets() {
+  const b = runtime.battle, t = [];
+  if (PACK.player.hp > 0) t.push({ kind: "pc", name: PACK.player.name, ac: PACK.player.ac });
+  PACK.companions.forEach(c => { if (c.hp > 0 && !b.downed[c.id]) t.push({ kind: "comp", ref: c, name: c.name, ac: c.ac }); });
+  return t;
+}
+function applyDamage(t, dmg) {
+  const b = runtime.battle;
+  if (t.kind === "pc") PACK.player.hp -= dmg;
+  else {
+    t.ref.hp -= dmg;
+    if (t.ref.hp <= 0 && !b.downed[t.ref.id]) {
+      b.downed[t.ref.id] = true;
+      addLog(`<b class="fail">${t.ref.name} 倒下了！</b>（可用动作「急救」扶起）`);
+      emit("battle.downed", { who: t.ref.id });
+    }
+  }
+}
+/* 行动经济：PC 1 动作 + 每存活同伴 1 动作；全部行动完自动进入敌方回合 */
+function afterFriendlyAction() {
+  const b = runtime.battle;
+  if (b.enemies.every(e => e.hp <= 0)) { b.over = true; renderEncounter(); return; }
+  const compsAlive = PACK.companions.filter(c => c.hp > 0 && !b.downed[c.id]);
+  const allActed = (b.pcActed || b.playerDown) && compsAlive.every(c => b.compActed[c.id]);
+  if (allActed) { b.busy = true; renderEncounter(); setTimeout(enemyTurn, 700); }
+  else renderEncounter();
+}
 function attackSkill(s) {
   const b = runtime.battle;
-  if (!b || b.busy || b.over) return;
+  if (!b || b.busy || b.over || b.pcActed || b.playerDown) { if (b && b.pcActed) toast("本回合你已行动"); return; }
   if (s.uses && (b.skillUses[s.id] || 0) >= s.uses) { toast(`${s.name} 次数已尽`); return; }
   if (s.uses) b.skillUses[s.id] = (b.skillUses[s.id] || 0) + 1;
-  if (s.kind === "utility") {                       // 墨盾格挡等：无需目标
+  b.pcActed = true;
+  if (s.kind === "utility") {                       // 墨盾格挡：AC+2 且攻击者劣势（11 §3.1）
     PACK.player.ac = (PACK.player.baseAc || 11) + 2;
-    addLog(`<b>${s.name}</b>：墨纹在臂上凝成盾面，本场 AC +2（→ ${PACK.player.ac}）`);
-    emit("battle.utility", { skill: s.id, ac: PACK.player.ac });
-    b.busy = true; renderEncounter();
-    setTimeout(enemyTurn, 700);
+    b.shielded = true;
+    addLog(`<b>${s.name}</b>：墨纹凝成盾面——本场 AC +2（→ ${PACK.player.ac}），攻击你的敌人承受劣势。`);
+    emit("battle.utility", { skill: s.id, ac: PACK.player.ac, dis_on_attackers: true });
+    afterFriendlyAction();
     return;
   }
   const target = b.enemies.find(e => e.hp > 0);
-  const roll = d20(), mod = modOf(s.attr), total = roll + mod;
+  const adv = b.advRound1 && b.round === 1;
+  const roll = d20x(adv ? "adv" : null), mod = modOf(s.attr), total = roll + mod;
   const hit = roll === 20 || (roll !== 1 && total >= target.ac);
-  const dmg = hit ? dmgRoll(s.dmg) + (roll === 20 ? dmgRoll(s.dmg) : 0) : 0;
+  const dmg = hit ? dmgRoll(s.dmg) + (roll === 20 ? dmgRoll(s.dmg) : 0) : 0;   // 暴击：伤害骰翻倍（11 §3）
   if (hit) target.hp -= dmg;
-  addLog(`<b>${s.name}</b>：d20=${roll}+${mod}=${total} vs AC ${target.ac} → ${hit ? `<b class="crit">命中</b>，伤害 <b>${dmg}</b>` : '<b class="fail">未命中</b>'}`);
-  emit("battle.attack", { skill: s.name, roll, total, hit, dmg });
-  if (b.enemies.every(e => e.hp <= 0)) { b.over = true; renderEncounter(); return; }
-  b.busy = true; renderEncounter();
-  setTimeout(enemyTurn, 900);
+  addLog(`<b>${s.name}</b>：d20=${roll}${adv ? "（优势）" : ""}+${mod}=${total} vs AC ${target.ac} → ${hit ? `<b class="crit">命中</b>，伤害 <b>${dmg}</b>${roll === 20 ? "（暴击翻倍！）" : ""}` : '<b class="fail">未命中</b>'}`);
+  emit("battle.attack", { skill: s.name, roll, total, hit, dmg, adv: !!adv });
+  afterFriendlyAction();
+}
+function companionAct(c) {
+  const b = runtime.battle;
+  if (!b || b.busy || b.over || b.compActed[c.id] || b.downed[c.id] || c.hp <= 0) return;
+  b.compActed[c.id] = true;
+  const target = b.enemies.find(e => e.hp > 0);
+  const adv = b.advRound1 && b.round === 1;
+  const roll = d20x(adv ? "adv" : null), total = roll + c.attr;
+  const hit = roll === 20 || (roll !== 1 && total >= target.ac);
+  const dmg = hit ? dmgRoll(c.skill.dmg) + (roll === 20 ? dmgRoll(c.skill.dmg) : 0) : 0;
+  if (hit) target.hp -= dmg;
+  addLog(`<b>${c.name}·${c.skill.name}</b>：d20=${roll}${adv ? "（优势）" : ""}+${c.attr}=${total} vs AC ${target.ac} → ${hit ? `<b class="crit">命中</b>，伤害 <b>${dmg}</b>` : '<b class="fail">未命中</b>'}`);
+  emit("battle.attack", { who: c.id, skill: c.skill.name, roll, total, hit, dmg });
+  afterFriendlyAction();
+}
+function rescueCompanion(cid) {
+  const b = runtime.battle;
+  if (!b || b.busy || b.over || b.pcActed || b.playerDown) return;
+  const c = PACK.companions.find(x => x.id === cid);
+  b.pcActed = true;
+  const roll = d20(), mod = modOf("智"), total = roll + mod, ok = total >= 8;
+  if (ok) { c.hp = 1; b.downed[cid] = false; }
+  addLog(`<b>急救·${c.name}</b>：d20=${roll}+${mod}=${total} vs DC 8 → ${ok ? `<b class="heal">扶起（1 HP 归队）</b>` : '<b class="fail">未能稳住</b>'}`);
+  emit("battle.rescue", { target: cid, roll, total, ok });
+  afterFriendlyAction();
 }
 function enemyTurn() {
   const b = runtime.battle;
-  b.enemies.filter(e => e.hp > 0).forEach(e => {
-    const roll = d20(), total = roll + e.atk;
-    const hit = roll !== 1 && total >= PACK.player.ac;
-    const dmg = hit ? dmgRoll(e.dmg) : 0;
-    if (hit) PACK.player.hp -= dmg;
-    addLog(`<b class="hurt">${e.name}</b>反扑：d20=${roll}+${e.atk}=${total} vs AC ${PACK.player.ac} → ${hit ? `<b class="hurt">命中</b>，你受到 <b class="hurt">${dmg}</b> 伤害` : "被闪开"}`);
-  });
-  b.round++; b.busy = false; b.moved = false; b.bonusUsed = false;
-  if (PACK.player.hp <= 0) { deathSave(); return; }
+  const foes = b.enemies.filter(e => e.hp > 0);
+  // Boss 范围效果：墨雨溅射（11 §5.1 豁免最小版：敏豁免 DC 11，成功半伤）
+  if (b.spec.boss && b.round % 2 === 0 && foes.length) {
+    addLog(`<b class="hurt">墨雨溅射</b>：墨色的雨泼向全队——全员敏捷豁免 DC 11！`);
+    aliveTargets().forEach(t => {
+      const mod = t.kind === "pc" ? modOf("敏") : t.ref.attr;
+      const roll = d20(), total = roll + mod, ok = total >= 11;
+      const dmg = ok ? Math.floor(dN(4) / 2) : dN(4);
+      applyDamage(t, dmg);
+      addLog(`　${t.name} 豁免：d20=${roll}+${mod}=${total} vs DC 11 → ${ok ? `<b class="crit">成功</b>，半伤 ${dmg}` : `<b class="fail">失败</b>，${dmg} 伤害`}`);
+      emit("battle.save", { who: t.name, attr: "敏", roll, total, ok, dmg });
+    });
+  } else {
+    foes.forEach(e => {
+      const alive = aliveTargets();
+      if (!alive.length) return;
+      const t = alive[Math.floor(Math.random() * alive.length)];
+      const dis = b.shielded && t.kind === "pc";
+      const roll = d20x(dis ? "dis" : null), total = roll + e.atk;
+      const hit = roll !== 1 && total >= t.ac;
+      const dmg = hit ? dmgRoll(e.dmg) : 0;
+      if (hit) applyDamage(t, dmg);
+      addLog(`<b class="hurt">${e.name}</b>反扑 ${t.name}：d20=${roll}${dis ? "（劣势）" : ""}+${e.atk}=${total} vs AC ${t.ac} → ${hit ? `<b class="hurt">命中</b>，${dmg} 伤害` : "被闪开"}`);
+    });
+  }
+  b.round++; b.busy = false; b.moved = false; b.bonusUsed = false; b.pcActed = false; b.compActed = {};
+  if (PACK.player.hp <= 0 && !b.playerDown) { b.playerDown = true; deathSave(); return; }
+  if (b.playerDown && !b.over) { deathSave(); return; }       // 倒地期间每轮继续豁免（三局两胜）
   renderEncounter();
 }
 function deathSave() {
-  // 死亡豁免：框架恒定关键判定（09 §6），三局两胜简化为一次演示
-  const c = { skill: "死亡豁免", dc: 10, key: true, keyReason: "死亡豁免：织卷前的最后一线" };
+  // 死亡豁免：框架恒定关键判定（09 §6），三局两胜（11 §7）
+  const b = runtime.battle;
+  const c = { skill: "死亡豁免", dc: 10, key: true, keyReason: `死亡豁免 · 三局两胜（当前 ${b.saves.s} 胜 ${b.saves.f} 负）` };
   const roll = d20();
   keyRollShow(c, roll, 0, roll, roll >= 10, () => {
     const ok = roll >= 10;
-    emit("check.roll", { skill: "死亡豁免", roll, mod: 0, dc: 10, total: roll, success: ok }, { key: true });
-    if (ok) {
-      PACK.player.hp = 1;
-      addLog(`<b class="crit">死亡豁免成功</b>（${roll}≥10）：你以 1 HP 稳住。`);
-      runtime.battle.busy = false; runtime.battle.round++;
-      renderEncounter();
+    if (ok) b.saves.s++; else b.saves.f++;
+    emit("check.roll", { skill: "死亡豁免", roll, mod: 0, dc: 10, total: roll, success: ok, saves: { ...b.saves } }, { key: true });
+    if (b.saves.s >= 3) {
+      PACK.player.hp = 1; b.playerDown = false; b.saves = { s: 0, f: 0 };
+      addLog(`<b class="crit">三次豁免成功</b>——你稳住伤势，以 1 HP 回到战斗。`);
+    } else if (b.saves.f >= 3) {
+      addLog(`<b class="fail">三次豁免失败</b>——失败即分支：同伴把你拖出了战场。`);
+      PACK.player.hp = 1; b.over = true; b.fled = true;
     } else {
-      addLog(`<b class="fail">死亡豁免失败</b>——但失败即分支：同伴把你拖出了战场。`);
-      PACK.player.hp = 1; runtime.battle.over = true; runtime.battle.fled = true;
-      renderEncounter();
+      addLog(`死亡豁免${ok ? '<b class="crit">成功</b>' : '<b class="fail">失败</b>'}（${b.saves.s} 胜 ${b.saves.f} 负）——同伴还在撑着。`);
     }
+    renderEncounter();
   });
 }
 function winBattle() {
@@ -717,6 +823,7 @@ function winBattle() {
   const fled = runtime.battle && runtime.battle.fled;
   PACK.player.ac = PACK.player.baseAc || 11;        // 战斗增益散场清除
   runtime.battle.auto = false;                       // 遭遇结束托管自停（09 §9.3）
+  PACK.companions.forEach(c => { if (c.hp <= 0) c.hp = 1; });   // 倒地同伴战后 1 HP 起身（11 §5.2）
   const w = node.encounter && node.onWin || {};
   if (!fled) {
     if (w.xp) addXp(w.xp);
@@ -784,10 +891,18 @@ function lsDiceHTML() {
 }
 function gridHTML() {
   const b = runtime.battle;
+  const allyLabels = ["你", "珂", "费"];
   let cells = "";
   for (let y = 0; y < 5; y++) for (let x = 0; x < 8; x++) {
     let cls = "", label = "";
-    if (b.pos.allies.some(([ax, ay]) => ax === x && ay === y)) { cls = "ally"; label = "你"; }
+    b.pos.allies.forEach(([ax, ay], ai) => {
+      if (ax === x && ay === y) {
+        const isPc = ai === 0;
+        const comp = isPc ? null : PACK.companions[ai - 1];
+        const down = comp && b.downed[comp.id];
+        if (isPc || !down) { cls = "ally"; label = allyLabels[ai] || "友"; }
+      }
+    });
     b.pos.enemies.forEach(([ex, ey], i) => {
       if (ex === x && ey === y && b.enemies[i].hp > 0) { cls = "enemy"; label = "墨"; }
     });
@@ -1001,18 +1116,21 @@ function attachGestures() {
     chip.addEventListener("pointerup", e => {
       const g = gest.chip; gest.chip = null; hidePath();
       if (!g || g.el !== chip) return;
-      const skillId = chip.dataset.skill, itemId = chip.dataset.item;
-      if (g.moved) {                                    // 拖动：按落点分流（12 §3.6）
-        const drop = document.elementFromPoint(e.clientX, e.clientY);
-        if (skillId && drop && drop.closest(".unit.enemy, .cell.enemy"))
-          attackSkill(PACK.player.skills.find(s => s.id === skillId));
-        else if (itemId && drop && drop.closest(".unit.active, .cell.ally"))
-          useItemInBattle(itemId);
-        else toast("已取消（拖到目标单位上使用）");
-      } else {                                          // 点按：默认目标（等价路径）
+      const skillId = chip.dataset.skill, itemId = chip.dataset.item,
+            compId = chip.dataset.comp, rescueId = chip.dataset.rescue;
+      const exec = () => {
         if (skillId) attackSkill(PACK.player.skills.find(s => s.id === skillId));
         else if (itemId) useItemInBattle(itemId);
-      }
+        else if (compId) companionAct(PACK.companions.find(c => c.id === compId));
+        else if (rescueId) rescueCompanion(rescueId);
+      };
+      if (g.moved) {                                    // 拖动：按落点分流（12 §3.6）
+        const drop = document.elementFromPoint(e.clientX, e.clientY);
+        if ((skillId || compId) && drop && drop.closest(".unit.enemy, .cell.enemy")) exec();
+        else if (itemId && drop && drop.closest(".unit.active, .cell.ally, .unit[data-who]")) exec();
+        else if (rescueId) exec();                      // 急救无需目标拖动
+        else toast("已取消（拖到目标单位上使用）");
+      } else exec();                                    // 点按：默认目标（等价路径）
     });
     chip.addEventListener("pointercancel", () => { gest.chip = null; hidePath(); });
   });

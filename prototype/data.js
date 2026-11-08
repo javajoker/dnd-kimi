@@ -115,8 +115,12 @@ const PACK = {
       { id:"inkshield",name:"墨盾格挡", kind:"utility", attr:"智", dmg:"AC+2", uses:1, note:"本场 AC+2" }
     ] },
   companions: [
-    { name:"珂兰", hp:10, maxhp:10, bond:20, note:"被写下的过去：誊写庭抄经役" },
-    { name:"老费", hp:12, maxhp:12, bond:10, note:"想改写的一页：被撤销的女儿" }
+    { id:"kelan", name:"珂兰", hp:10, maxhp:10, ac:11, attr:1, bond:20,
+      note:"被写下的过去：誊写庭抄经役",
+      skill:{ id:"kelan_bolt", name:"墨矢", dmg:"1d6+1" } },
+    { id:"laofei", name:"老费", hp:12, maxhp:12, ac:12, attr:1, bond:10,
+      note:"想改写的一页：被撤销的女儿",
+      skill:{ id:"laofei_hook", name:"船钩", dmg:"1d6+1" } }
   ],
   eventsList: [
     { id:"dock_tales",   name:"码头异闻",   obj:"完成码头检定", state:"active" },
