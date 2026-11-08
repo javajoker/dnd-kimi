@@ -470,7 +470,7 @@ function battleActionsHTML() {
   const b = runtime.battle;
   if (!b || b.over) return `<button class="btn primary" onclick="winBattle()">战斗结束 → 结算</button>`;
   if (b.busy) return `<div class="check-hint">敌方行动中……</div>`;
-  let h = `<div class="check-hint">动作 + 附赠 + 移动　|　手势：拖动=移动 · 轨迹=施法 · 双击=结束回合 · 捏合=缩放</div>`;
+  let h = `<div class="check-hint">动作 + 附赠 + 移动　|　手势：拖动=移动 · 轨迹=施法 · 双指点击=结束回合 · 捏合=缩放</div>`;
   PACK.player.skills.forEach((s, i) => {
     const uses = s.uses ? (b.skillUses[s.id] || 0) : 0;
     const left = s.uses ? s.uses - uses : Infinity;
@@ -478,7 +478,7 @@ function battleActionsHTML() {
       <span class="badge">${s.dmg}${s.uses ? " · 余 " + (left) : ""}</span></button>`;
   });
   h += battleItemButtons();
-  h += `<button class="btn center" onclick="endTurn()">⏭ 结束回合（双击战场同效）</button>`;
+  h += `<button class="btn center" onclick="endTurn()">⏭ 结束回合（双指点击战场同效）</button>`;
   return h;
 }
 function battleItemButtons() {
@@ -635,7 +635,7 @@ function gridHTML() {
     cells += `<div class="cell ${cls}" data-x="${x}" data-y="${y}">${label}${cls === "" ? `<span class="sub">${x},${y}</span>` : ""}</div>`;
   }
   return `<div id="grid-map" style="transform:scale(${runtime.zoom || 1})">${cells}</div>
-    <div style="position:absolute;bottom:8px;font-size:10px;color:var(--dim)">战术格 8×5 · 拖动=移动 · 拖向敌人=施法 · 双击=结束回合 · 捏合=缩放</div>`;
+    <div style="position:absolute;bottom:8px;font-size:10px;color:var(--dim)">战术格 8×5 · 拖动=移动 · 拖向敌人=施法 · 双指点击=结束回合 · 捏合=缩放</div>`;
 }
 
 /* ---------- 日志（事件流视图） ---------- */
@@ -794,10 +794,10 @@ function renderSettle() {
 }
 
 /* ============================================================
- * 手势层（framework/12）：拖动=移动 · 轨迹=施法 · 双击=结束回合
+ * 手势层（framework/12）：拖动=移动 · 轨迹=施法 · 双指点击=结束回合
  * 捏合=缩放 · 长按=详情 · 横滑=切 Tab。按钮永远有等价路径。
  * ============================================================ */
-const gest = { down: null, line: null, pointers: new Map(), pinchD0: 0, zoom0: 1, lastTap: 0, pressTimer: null };
+const gest = { down: null, line: null, pointers: new Map(), pinchD0: 0, zoom0: 1, twoTapT: 0, twoTapFired: false, pressTimer: null };
 
 function svgLine() {
   let svg = $("#gesture-svg");
@@ -840,14 +840,15 @@ function attachGestures() {
   }
   if (!field || !runtime.battle || runtime.battle.over) return;
 
-  // —— 战场：单位拖动（移动/施法轨迹）、双击结束回合、捏合缩放、长按详情 ——
+  // —— 战场：单位拖动（移动/施法轨迹）、双指点击结束回合、捏合缩放、长按详情 ——
   field.style.touchAction = "none";
   field.addEventListener("pointerdown", e => {
     gest.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (gest.pointers.size === 2) {                      // 捏合开始
+    if (gest.pointers.size === 2) {                      // 双指：捏合 or 双指点击（12 §3.3）
       const [p, q] = [...gest.pointers.values()];
       gest.pinchD0 = Math.hypot(p.x - q.x, p.y - q.y);
       gest.zoom0 = runtime.zoom || 1;
+      gest.twoTapT = Date.now(); gest.twoTapFired = false;
       gest.down = null; hidePath();
       return;
     }
@@ -858,11 +859,6 @@ function attachGestures() {
       // 长按敌方/任意单位 = 详情卡（12 §2）
       const u = e.target.closest(".unit");
       gest.pressTimer = setTimeout(() => showUnitInfo(u), 400);
-    } else {
-      // 空白处双击 = 结束回合
-      const now = Date.now();
-      if (now - gest.lastTap < 280) { gest.lastTap = 0; endTurn(); }
-      else gest.lastTap = now;
     }
   });
   field.addEventListener("pointermove", e => {
@@ -883,6 +879,13 @@ function attachGestures() {
     }
   });
   field.addEventListener("pointerup", e => {
+    // 双指点击判定：双触点 <300ms 且间距未变（未进入缩放）→ 结束回合（12 §1）
+    if (gest.pointers.size === 2 && !gest.twoTapFired && gest.twoTapT
+      && Date.now() - gest.twoTapT < 300
+      && Math.abs((runtime.zoom || 1) - gest.zoom0) < 0.02) {
+      gest.twoTapFired = true;
+      endTurn();
+    }
     gest.pointers.delete(e.pointerId);
     if (gest.pointers.size < 2) gest.pinchD0 = 0;
     clearTimeout(gest.pressTimer);
@@ -959,10 +962,10 @@ const TUT_HOME = [
   { t: "双形态", d: "进入战役时选择横屏空间或竖屏时间形态，整场锁定。顶部「形态对比」按钮是原型评审专用，正式版没有。" }
 ];
 const TUT_BATTLE = [
-  { t: "战斗手势", d: "<b>拖动己方单位</b>＝移动（移动段）<br><b>从自己拖到敌人</b>＝释放墨术飞矢（轨迹即弹道）<br><b>双击战场</b>＝结束回合<br><b>双指捏合</b>＝缩放战场<br>——按钮永远可用，手势只是更快。" }
+  { t: "战斗手势", d: "<b>拖动己方单位</b>＝移动（移动段）<br><b>从自己拖到敌人</b>＝释放墨术飞矢（轨迹即弹道）<br><b>双指点击战场</b>＝结束回合<br><b>双指捏合</b>＝缩放战场<br>——按钮永远可用，手势只是更快。" }
 ];
 const HELP_PAGES = [
-  { t: "手势图鉴（1/2）", d: "<b>点按</b>＝选择/确认　<b>双击</b>＝结束回合/快掷<br><b>长按</b>＝详情/跳过演出　<b>横滑</b>＝切页签" },
+  { t: "手势图鉴（1/2）", d: "<b>点按</b>＝选择/确认　<b>双指点击</b>＝结束回合/快掷<br><b>长按</b>＝详情/跳过演出　<b>横滑</b>＝切页签" },
   { t: "手势图鉴（2/2）", d: "<b>拖动</b>＝移动单位/滚动　<b>拖动轨迹</b>＝施法<br><b>双指捏合</b>＝缩放　<b>双指拖动</b>＝平移镜头<br>——完整规范见 framework/12-手势与交互规范.md" }
 ];
 function showCoach(pages, flagKey) {
