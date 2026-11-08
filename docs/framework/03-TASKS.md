@@ -95,6 +95,21 @@
 
 ---
 
+## P1.5 技术实现（Godot，2026-11-08 立项）
+
+> 引擎裁决：Godot 4.7.2 + GDScript（`../tech/01-技术方案讨论稿.md` §2.3）。
+> 研发纪律：`/.kimi-code/skills/godot-dev`（开发流程）、`godot-acceptance`（验收审计）、`godot-developer`（研发代理）——所有 game/ 代码工作必须经技能流程执行。
+> 路线即 `../tech/01-技术方案讨论稿.md` §10 TP0~TP4。
+
+- [x] 研发设施：game/ 工程骨架（core/shell/packs/tools/tests）+ 无头测试通道（`godot --headless --path game -s tests/run.gd` 绿）
+- [x] 研发技能与代理：godot-dev / godot-acceptance / godot-developer 三件套就位
+- [ ] TP0 逻辑核骨架：状态板 + 事件流 + 条件求值器 + 种子化 RNG（core/state，RefCounted）
+- [ ] TP1 campaign01 仿真：加载 `../story/campaign01/` 数据，bot 跑通 35 节点全结局；packlint V1~V13 落地
+- [ ] TP2 单遭遇竖屏壳：三段呼吸布局 + 掷骰演出分级 + 快捷栏/整备/托管
+- [ ] TP3 双壳验证：同一遭遇横竖两壳事件流逐字节一致
+- [ ] TP4 界面闭环：主屏 → 战役入口（模式分支）→ 遭遇 → 结算 → 历史卷轴追溯
+- [ ] 持续迭代通道：内容轨（packs/ 新增即内容）与运营轨（权利配置）发版管线（承接 P2/P3）
+
 ## P2 内容管线与子游戏模板（对应 M3 前置）
 
 - [ ] 内容包结构规范定稿（节点图、事件表、遭遇定义、物品表、文本）
@@ -142,3 +157,4 @@
 | v1.3 | 2026-11-08 | 09 新增 §9 整备阶段（Loadout）与快捷栏（Tray）；12 v1.2 芯片拖动使用；tech/02 §2.4 loadout 配置契约（限制由游戏配置文件决定）；tech/04 §7 整备与资源表关系；原型实现整备界面与芯片快捷栏 |
 | v1.4 | 2026-11-08 | 09 新增 §9.3 预设方案与托管（代理节拍下限、与手操同一 Command 通道、事件流 auto 溯源）；tech/01 §6.2 补托管代理架构说明；原型实现系统预设一键套用与战斗托管（1×/2× 节拍、随时接管） |
 | v1.5 | 2026-11-08 | D&D 符合性审计补强：11 升 v1.1（优势/劣势入核 §3.1、豁免最小版 §5.1、同伴规则 §5.2、攻击暴击 §3、成长表改每级属性点）；05 §9 关闭优势/劣势开放项；tech/04 技能表补 save/adv 字段；原型同步（同伴可控行动、豁免、暴击、三局两胜死亡豁免） |
+| v1.6 | 2026-11-08 | **技术实现立项（Godot）**：E-1/E-4 裁决 = Godot 4.7.2 + GDScript；新增 P1.5 技术实现段（TP0~TP4）；研发三件套就位（.kimi-code/skills/godot-dev、godot-acceptance、.kimi-code/agents/godot-developer）；game/ 工程骨架 + 无头测试通道打通 |

@@ -5,6 +5,8 @@
 > **目录约定**：每个子游戏一个独立子目录 `docs/subgames/<子游戏名>/`，文档按需更新；主线战役书归入 `story/`，内容包数据按包一个子目录 `docs/story/<pack_id>/`。
 >
 > **交互原型**：仓库根目录 [`prototype/`](../prototype/)（零依赖，浏览器直接打开 `index.html`）——04 文档九类界面的可玩切片，对应 TASKS P1.2 试玩项。
+>
+> **正式实现**：[`game/`](../game/)（Godot 4.7.2 + GDScript，tech/01 §2.3 裁决）；研发纪律由 `.kimi-code/` 三件套执行——skills `godot-dev`（开发流程）/ `godot-acceptance`（验收审计）+ agent `godot-developer`；路线见 TASKS P1.5。
 
 ## framework/ —— 游戏框架（对一切内容包通用）
 

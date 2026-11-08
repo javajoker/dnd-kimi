@@ -1,0 +1,21 @@
+; Godot 4 project —— 抄本纪元《烬港残页》
+; 架构：core/ 逻辑核（RefCounted 零引擎依赖）+ shell/ 双壳渲染 + packs/ 内容包（PCK）
+; 规范入口：.kimi-code/skills/godot-dev/SKILL.md
+
+config_version=5
+
+[application]
+
+config/name="抄本纪元 · 烬港残页"
+config/features=PackedStringArray("4.7", "Mobile")
+
+[display]
+
+window/size/viewport_width=390
+window/size/viewport_height=760
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="mobile"
