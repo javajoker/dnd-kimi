@@ -23,6 +23,8 @@ const ITEM_USE := &"item.use"
 
 # 故事图
 const NODE_ENTER := &"node.enter"
+const STORY_TRIGGER := &"story.trigger"  # doom_clock 时间边触发（tech/02 §4.4）
+const STORY_ENDING := &"story.ending"    # 结局选定（tech/02 §9）
 
 # 成长 / 图鉴（tech/02 §4.6 效果词汇）
 const XP_GAIN := &"xp.gain"        # xp 在 07 无落板键，只进事件流（待裁决，属 tech/04 成长系统）

@@ -1,0 +1,18 @@
+[
+  { "id": "seen_fading", "name": "眼见为实", "type": "bool", "default": false,
+    "writers": ["N0-3a"], "readers": ["R2（对话加成）", "历史卷轴追溯示例"] },
+  { "id": "witnessed_revocation", "name": "见证撤销", "type": "bool", "default": false,
+    "writers": ["N1-3"], "readers": ["N1-4", "N1-5", "N1-6（三方态度变化）"] },
+  { "id": "blank_memory", "name": "空白记忆", "type": "bool", "default": false,
+    "writers": ["N2S-3"], "readers": ["E1（结局演出差异）"] },
+  { "id": "page_tearer", "name": "撕页者", "type": "bool", "default": false,
+    "writers": ["N2U-2"], "readers": ["N4-1（税吏缺席）", "E2（加成）"] },
+  { "id": "mercy_shown", "name": "手下留情", "type": "bool", "default": false,
+    "writers": ["N2U-2"], "readers": ["N4-1（税吏证词降低 Boss 难度）"] },
+  { "id": "insider", "name": "知情人", "type": "bool", "default": false,
+    "writers": ["N2G-3"], "readers": ["N3-1（额外开场白）", "图鉴条目解锁"] },
+  { "id": "failed_to_hold", "name": "未能挽留", "type": "bool", "default": false,
+    "writers": ["R2"], "readers": ["E4（演出加权）", "羁绊事件"] },
+  { "id": "campaign01_cleared", "name": "烬港通关", "type": "bool", "default": false,
+    "writers": ["N4-4 尾声结算"], "readers": ["多周目继承", "主屏战役卡状态"] }
+]

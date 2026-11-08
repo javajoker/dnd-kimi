@@ -104,7 +104,7 @@
 - [x] 研发设施：game/ 工程骨架（core/shell/packs/tools/tests）+ 无头测试通道（`godot --headless --path game -s tests/run.gd` 绿）
 - [x] 研发技能与代理：godot-dev / godot-acceptance / godot-developer 三件套就位
 - [x] TP0 逻辑核骨架：状态板（六类变量/命名空间权限/溯源/JSON 快照）+ 事件流（追加式/订阅/tail）+ 条件与效果求值器（tech/02 §4.6 全键）+ 种子化 RNG —— 68 断言无头全绿；裁决落笔：lore 解锁写 `global.lore`、局部钟键 `clock.<id>`（实现随 TP1）、xp 归成长系统（TP1）
-- [ ] TP1 campaign01 仿真：加载 `../story/campaign01/` 数据，bot 跑通 35 节点全结局；packlint V1~V13 落地
+- [x] TP1 campaign01 仿真：pack_loader/story_graph/packlint（V1~V13）/bot 仿真落地；143 断言全绿；仿真 24 局四结局全集可达（E3 确认为多周目隐藏结局）、独狼可达、覆盖率 97.7%；验收裁决补全数据（独狼入口边、羁绊投放、遭遇补登记至 16 场），战役书同步
 - [ ] TP2 单遭遇竖屏壳：三段呼吸布局 + 掷骰演出分级 + 快捷栏/整备/托管
 - [ ] TP3 双壳验证：同一遭遇横竖两壳事件流逐字节一致
 - [ ] TP4 界面闭环：主屏 → 战役入口（模式分支）→ 遭遇 → 结算 → 历史卷轴追溯

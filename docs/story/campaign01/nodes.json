@@ -48,7 +48,11 @@
       "title": "自由市广场",
       "summary": "Hub：休整 / 商店 / 传闻。商店出售「半页潮汐表」。",
       "encounter": "N1-1",
-      "edges": [ { "type": "choice", "label": "前往褪色现场", "to": "N1-2" } ]
+      "edges": [
+        { "type": "choice", "label": "购买半页潮汐表（商店，价格占位）", "to": "N1-2",
+          "effects": [ { "give_item": "half_tide_table" } ] },
+        { "type": "choice", "label": "前往褪色现场", "to": "N1-2" }
+      ]
     },
     {
       "id": "N1-2", "act": "SL-1", "type": "check",
@@ -77,7 +81,8 @@
       "edges": [
         { "type": "choice", "label": "接触誊写庭", "to": "N1-4" },
         { "type": "choice", "label": "接触断墨会", "to": "N1-5" },
-        { "type": "choice", "label": "接触拾遗行会", "to": "N1-6" }
+        { "type": "choice", "label": "接触拾遗行会", "to": "N1-6" },
+        { "type": "choice", "label": "婉拒所有邀约", "to": "N1-8" }
       ]
     },
     {
@@ -106,7 +111,8 @@
       "title": "午夜墨雨",
       "summary": "教学 Boss 战：墨魈——褪墨中诞生的扭曲文本。",
       "encounter": "N1-7",
-      "edges": [ { "type": "choice", "label": "战后", "to": "N1-8" } ]
+      "edges": [ { "type": "choice", "label": "战后", "to": "N1-8",
+        "effects": [ { "bond.kelan": 10 } ] } ]
     },
     {
       "id": "N1-8", "act": "SL-1", "type": "branch",
@@ -148,9 +154,9 @@
       "summary": "誊写庭要求一段记忆作为重墨的代价。",
       "edges": [
         { "type": "choice", "label": "献出一段自己的记忆", "to": "N2-C",
-          "effects": [ { "clock": -2 }, { "write": "blank_memory", "value": true } ] },
+          "effects": [ { "clock": -2 }, { "write": "blank_memory", "value": true }, { "alignment": 10 }, { "bond.kelan": 15 } ] },
         { "type": "choice", "label": "拒绝", "to": "N2-C",
-          "effects": [ { "rep.scriptorium": 1 }, { "clock": -1 } ] }
+          "effects": [ { "rep.scriptorium": 1 }, { "clock": -1 }, { "alignment": 10 }, { "bond.kelan": 15 } ] }
       ],
       "on_complete": [ { "give_item": "scriptorium_signet" } ]
     },
@@ -177,16 +183,16 @@
       "encounter": "N2U-2",
       "edges": [
         { "type": "choice", "label": "撕掉税吏的命运页", "to": "N2U-3",
-          "effects": [ { "rep.uninked": 2 }, { "write": "page_tearer", "value": true }, { "give_item": "black_feather_token" } ] },
+          "effects": [ { "rep.uninked": 2 }, { "write": "page_tearer", "value": true }, { "give_item": "black_feather_token" }, { "alignment": -10 } ] },
         { "type": "choice", "label": "不撕", "to": "N2U-3",
-          "effects": [ { "rep.uninked": 1 }, { "write": "mercy_shown", "value": true }, { "give_item": "black_feather_token" } ] }
+          "effects": [ { "rep.uninked": 1 }, { "write": "mercy_shown", "value": true }, { "give_item": "black_feather_token" }, { "alignment": -10 } ] }
       ]
     },
     {
       "id": "N2U-3", "act": "SL-2", "type": "scene",
       "title": "自由的灰烬",
       "summary": "撕页的后果显现。",
-      "on_enter": [ { "clock": 1 } ],
+      "on_enter": [ { "clock": 1 }, { "bond.kelan": 15 } ],
       "edges": [ { "type": "choice", "label": "继续", "to": "N2-C" } ]
     },
     {
@@ -220,13 +226,14 @@
       "id": "N2G-2c", "act": "SL-2", "type": "explore",
       "title": "绕行路线",
       "summary": "无潮汐表的失败路：多 2 场遭遇。",
+      "encounter": "N2G-2c",
       "edges": [ { "type": "choice", "label": "继续", "to": "N2G-3" } ]
     },
     {
       "id": "N2G-3", "act": "SL-2", "type": "scene",
       "title": "账本的真相",
       "summary": "行会早知褪墨将至。",
-      "on_enter": [ { "write": "insider", "value": true } ],
+      "on_enter": [ { "write": "insider", "value": true }, { "bond.kelan": 15 } ],
       "edges": [ { "type": "choice", "label": "继续", "to": "N2-C" } ]
     },
     {
@@ -270,6 +277,7 @@
       "id": "R1", "act": "SL-3", "type": "explore",
       "title": "褪色民居",
       "summary": "拾取/检定房：被撤销者的生活痕迹。",
+      "encounter": "R1",
       "edges": [ { "type": "choice", "label": "下一间", "to": "R2" } ]
     },
     {
@@ -280,7 +288,7 @@
       "edges": [ {
         "type": "check", "skill": "soothe", "difficulty": "medium",
         "success": "R3", "failure": "R3",
-        "success_effects": [ { "give_item": "codex_fragment" } ],
+        "success_effects": [ { "give_item": "codex_fragment" }, { "bond.kelan": 20 } ],
         "failure_effects": [ { "write": "failed_to_hold", "value": true } ]
       } ]
     },
