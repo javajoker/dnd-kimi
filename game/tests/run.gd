@@ -25,12 +25,18 @@ func _init() -> void:
 	test_encounter_sm()
 	test_auto_agent()
 	test_shell_router()
+	test_save_system()
+	test_loadout()
+	test_growth()
+	test_quest_runtime()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
 	await test_portrait_shell()
 	await test_landscape_shell()
 	await test_shell_diff()
+	await test_ui_screens()
+	await test_main_flow()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -1125,3 +1131,448 @@ func test_shell_diff() -> void:
 		check(str(p2["result"]) != "", "托管乱序局 %d 有战斗结果（%s）" % [i + 1, str(p2["result"])])
 		check(str(p2["portrait"]) == str(p2["landscape"]),
 			"托管乱序局 %d：两壳事件流逐字节一致（含 source=auto 命令）" % (i + 1))
+
+# ---------------------------------------------------------------- SaveSystem（07 §4，TP4）
+
+func test_save_system() -> void:
+	print("[save_system]")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var rng := Rng.new(777)
+	var prov := {"event_id": 1, "node_id": "N1-1", "pack_id": "campaign01"}
+	board.write("campaign01.seen_fading", true, prov)
+	board.write("global.doom_clock", 3, prov)
+	board.give_item("ink_core", 2, prov)
+	rng.d20() # 推进 RNG 状态，验证状态级恢复（非仅种子）
+	var tail := stream.tail()
+	var snap := SaveSystem.make_snapshot(board, stream, rng,
+		{"packs": {"campaign01": 1}, "rule_pack": {"id": "light", "min_version": 1}},
+		{"playthrough": 1, "graph": {"current_id": "N1-7"}})
+	check(int(snap["save_version"]) == SaveSystem.SAVE_VERSION, "快照含 save_version（07 §4.1）")
+	check(int(snap["event_tail"]) == tail, "快照含事件流 tail 锚点")
+	check(snap.has("board") and snap.has("rng_seed") and snap.has("bindings") and snap.has("meta"),
+		"快照五要素齐备：board/event_tail/bindings/rng/meta（07 §4.1）")
+	check(str((snap["meta"] as Dictionary).get("saved_at", "")) != "", "meta 含保存时间戳（07 §4.1）")
+	# 写盘 → 读档 → 迁移 → 应用，往返一致（JSON，tech/01 §4.3）
+	check(SaveSystem.write(snap, "test_tp4"), "写入 user://saves/")
+	check(SaveSystem.has_save("test_tp4"), "has_save 读档存在")
+	var loaded := SaveSystem.read("test_tp4")
+	check(bool(loaded["ok"]), "读档成功")
+	var mig := SaveSystem.migrate(loaded["snapshot"])
+	check(bool(mig["ok"]), "v1 迁移链直通（07 §4.3）")
+	var board2 := Board.new(EventStream.new())
+	var rng2 := Rng.new(1)
+	SaveSystem.apply(mig["snapshot"], board2, rng2)
+	check(board2.serialize() == snap["board"], "存档往返：Board 全量一致")
+	check(board2.read("campaign01.seen_fading") == true and board2.get_doom_clock() == 3
+		and board2.item_count("ink_core") == 2, "存档往返：旗标/时钟/物品一致")
+	check(rng2.d20() == rng.d20(), "存档往返：RNG 恢复后续掷一致（rng_seed 状态）")
+	# 迁移链边界
+	check(not bool(SaveSystem.migrate({"save_version": 0})["ok"]), "缺 save_version 拒绝")
+	var future: Dictionary = snap.duplicate(true)
+	future["save_version"] = SaveSystem.SAVE_VERSION + 1
+	check(not bool(SaveSystem.migrate(future)["ok"]), "未来版本快照拒绝（07 §4.3 不降级读取）")
+
+# ---------------------------------------------------------------- Loadout（09 §9.1 / tech-02 §2.4，TP4）
+
+func test_loadout() -> void:
+	print("[loadout]")
+	var pack := _load_campaign01()
+	var cfg := Loadout.resolve_config(pack, "N1-7")
+	check(not cfg.is_empty() and bool(cfg["enabled"]), "manifest loadout 启用（tech/02 §2.4）")
+	check(int(cfg["skill_slots"]) == 2 and int(cfg["item_slots"]) == 2, "槽位读 manifest 配置（技能 2 / 道具 2）")
+	check(Loadout.validate(cfg, ["a", "b"], ["x"]) == "", "槽位内选择合法")
+	check(Loadout.validate(cfg, ["a", "b", "c"], ["x"]) == "skill_slots_exceeded", "技能超槽拒绝")
+	check(Loadout.validate(cfg, ["a"], ["x", "y", "z"]) == "item_slots_exceeded", "道具超槽拒绝")
+	# 遭遇级覆盖（tech/02 §2.4：同名块覆盖）
+	var pack2: Dictionary = pack.duplicate(true)
+	(pack2["encounters"] as Dictionary)["N1-7"]["loadout"] = {"skill_slots": 1}
+	var cfg2 := Loadout.resolve_config(pack2, "N1-7")
+	check(int(cfg2["skill_slots"]) == 1 and int(cfg2["item_slots"]) == 2, "遭遇级 loadout 覆盖战役级")
+	# 未声明 = 不启用（tech/02 §2.4）
+	var pack3: Dictionary = pack.duplicate(true)
+	(pack3["manifest"] as Dictionary).erase("loadout")
+	check(Loadout.resolve_config(pack3, "N1-7").is_empty(), "未声明 loadout = 不启用整备")
+	# 确认写事件流（09 §9.1：loadout.confirm，历史卷轴可追溯）
+	var stream := EventStream.new()
+	var sel := Loadout.confirm(stream, cfg, ["inkbolt", "inkshield"], ["heal_potion"],
+		{"might": 1}, "N1-7", "campaign01")
+	var evs := stream.query_by_type(EventTypes.LOADOUT_CONFIRM)
+	check(evs.size() == 1, "确认产出 loadout.confirm 事件（09 §9.1）")
+	check((evs[0]["payload"]["skills"] as Array) == ["inkbolt", "inkshield"]
+		and int((sel as Dictionary)["skill_slots"]) == 2, "confirm 负载含选择与槽位快照")
+
+# ---------------------------------------------------------------- 成长曲线（11 §6，TP4 裁决 3 对齐）
+
+func test_growth() -> void:
+	print("[growth]")
+	# 档位表：1→2 需 300，2→3 需 700，3→4 需 1200（11 §6）
+	check(LightV1.level_for_xp(299) == 1, "299 XP 不升级（门槛 300）")
+	check(LightV1.level_for_xp(300) == 2, "300 XP 升 Lv.2")
+	check(LightV1.attr_points_for_xp(300) == 1 and LightV1.hp_bonus_for_xp(300) == 2,
+		"Lv.2：属性点 +1、HP+2（11 §6）")
+	check(LightV1.level_for_xp(699) == 2 and LightV1.level_for_xp(700) == 3, "700 XP 升 Lv.3")
+	check(LightV1.attr_points_for_xp(700) == 2 and LightV1.hp_bonus_for_xp(700) == 4,
+		"Lv.3：累计属性点 +2、HP+4")
+	check(LightV1.level_for_xp(1199) == 3 and LightV1.level_for_xp(1200) == 4, "1200 XP 升 Lv.4")
+	check(LightV1.attr_points_for_xp(1200) == 3 and LightV1.hp_bonus_for_xp(1200) == 6,
+		"连跨档（0→1200）：属性点 +3、HP+6")
+	check(LightV1.level_for_xp(99999) == 4, "等级上限 Lv.4（11 §6 表三档）")
+	check(LightV1.skill_slot_bonus(2) == 0 and LightV1.skill_slot_bonus(3) == 1,
+		"2→3 级技能槽 +1（11 §6）")
+	check(LightV1.ATTR_POINT_CAP == 3, "单项属性加点 +3 封顶（11 §6）")
+
+# ---------------------------------------------------------------- L3 事件运行时（tech/02 §5，TP4 接入 story_graph）
+
+func test_quest_runtime() -> void:
+	print("[quest_runtime]")
+	var pack := _load_campaign01()
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var graph := StoryGraph.new(board, Rng.new(42), pack)
+	graph.start()
+	graph.take_edge(_edge_to(graph, "N0-2"))
+	var qt := stream.query_by_type(EventTypes.QUEST_TRIGGER)
+	check(qt.size() == 1 and str(qt[0]["payload"]["id"]) == "dock_tales",
+		"auto 触发：进 N0-2 事件中心可见（quest.trigger）")
+	check(graph.quest_badge_count() == 1, "进行中事件角标 = 1（04 §⑤）")
+	graph.resolve_check(graph.available_edges()[0], true) # N0-2 完成 → dock_tales settle
+	var qs := stream.query_by_type(EventTypes.QUEST_SETTLE)
+	check(qs.size() == 1 and str(qs[0]["payload"]["id"]) == "dock_tales", "节点完成 → quest.settle")
+	var xp := stream.query_by_type(EventTypes.XP_GAIN)
+	check(xp.size() == 1 and int(xp[0]["payload"]["amount"]) == 50, "settle 写板：xp 50（tech/02 §5）")
+	check(graph.quest_badge_count() == 0, "已完结事件不计角标（归档历史卷轴）")
+	# 主线推进：fading_street 触发；settle 去重不重复写板（TP4 裁决：效果由节点 on_enter 承载）
+	graph.take_edge(_edge_to(graph, "N0-4"))
+	graph.take_edge(_edge_to(graph, "N1-1"))
+	var e_buy := _edge_to(graph, "N1-2")
+	for e: Variant in graph.available_edges():
+		for fx: Variant in (e as Dictionary).get("effects", []):
+			if (fx as Dictionary).has("give_item"):
+				e_buy = e
+	graph.take_edge(e_buy)
+	check(str((stream.query_by_type(EventTypes.QUEST_TRIGGER).back() as Dictionary)["payload"]["id"]) == "fading_street",
+		"auto 触发：消逝之街（进 N1-2）")
+	graph.resolve_check(graph.available_edges()[0], true) # N1-2 成功 → N1-3
+	check(board.get_doom_clock() == 1, "fading_street settle 不重复推钟（去重裁决，时钟仍 = N1-3 on_enter 的 1）")
+	# choice 触发：誊写庭委托；settle 写声望增量（N2S-1 完成）
+	graph.take_edge(_edge_to(graph, "N1-4")) # 接触誊写庭 rep+1（on_enter）；离开 N1-3 → fading_street 完结
+	check(stream.query_by_type(EventTypes.QUEST_SETTLE).any(
+		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "fading_street"),
+		"离开 N1-3 → fading_street 完结（节点完成时结算，tech/02 §5）")
+	check(graph.quest_badge_count() == 1 and graph.quests().any(
+		func(q: Dictionary) -> bool: return str(q["id"]) == "three_callings" and str(q["state"]) == "triggered"),
+		"三方拜帖进行中（进 N1-3 触发）")
+	graph.take_edge(_edge_to(graph, "N1-7"))
+	check(int(board.get_rep("scriptorium")) == 1, "three_callings settle 去重：声望不重复 +1")
+	graph.take_edge(_edge_to(graph, "N1-8"))
+	var e_s := _edge_to(graph, "N2S-1")
+	graph.take_edge(e_s) # choice 触发 archive_quest
+	check(stream.query_by_type(EventTypes.QUEST_TRIGGER).any(
+		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "archive_quest"),
+		"choice 触发：档案馆委托（label 匹配，tech/02 §5）")
+	graph.resolve_check(graph.available_edges()[0], true) # N2S-1 完成 → settle rep.scriptorium +1
+	check(int(board.get_rep("scriptorium")) == 2, "settle 写板：档案馆委托 rep.scriptorium +1")
+	# doom_clock 触发：时钟到 2 格
+	board.write("global.doom_clock", 2, {"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"})
+	graph._scan_triggers()
+	check(stream.query_by_type(EventTypes.QUEST_TRIGGER).any(
+		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "ink_rain_raid"),
+		"doom_clock 触发：墨雨夜袭（at 2，tech/02 §5）")
+	# 图进度快照往返（07 §4.1 meta.graph）
+	var snap := graph.serialize()
+	var graph2 := StoryGraph.new(Board.new(EventStream.new()), Rng.new(1), pack)
+	graph2.deserialize(JSON.parse_string(JSON.stringify(snap)))
+	check(graph2.current_id == graph.current_id and graph2.quest_badge_count() == graph.quest_badge_count()
+		and graph2.quests().size() == graph.quests().size(), "图进度快照往返一致（含 L3 事件状态）")
+	# hidden 触发：零声望抵达 N1-8 → 孤身入局（tech/02 §5 hidden）
+	var s2 := EventStream.new()
+	var b2 := Board.new(s2)
+	var g2 := StoryGraph.new(b2, Rng.new(7), pack)
+	g2.start()
+	g2.take_edge(_edge_to(g2, "N0-2"))
+	g2.resolve_check(g2.available_edges()[0], true)
+	g2.take_edge(_edge_to(g2, "N0-4"))
+	g2.take_edge(_edge_to(g2, "N1-1"))
+	g2.take_edge(_edge_to(g2, "N1-2"))
+	g2.resolve_check(g2.available_edges()[0], true) # → N1-3
+	var e_decline := _edge_to(g2, "N1-8") # 婉拒所有邀约：三方声望保持 0
+	check(not e_decline.is_empty(), "N1-3 存在婉拒边")
+	g2.take_edge(e_decline)
+	check(s2.query_by_type(EventTypes.QUEST_TRIGGER).any(
+		func(ev: Dictionary) -> bool: return str(ev["payload"]["id"]) == "lone_wolf"),
+		"hidden 触发：孤身入局（requires 三方声望 ≤0）")
+	check(not _edge_to(g2, "N2L-1").is_empty(), "hidden 触发后独狼声望边显形")
+
+# ---------------------------------------------------------------- 九类界面闭环（04 §2/§5，TP4 无头断言）
+
+func test_ui_screens() -> void:
+	print("[ui_screens]")
+	var pack := _load_campaign01()
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	# ① 主屏：五入口 + 运营位 + 帮助 + 手动/闲置存档信号
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	root.add_child(home)
+	await process_frame
+	var navs: Array = []
+	home.navigate.connect(func(id: StringName) -> void: navs.append(id))
+	home.bind(board, 2, true)
+	check(home.campaign_button.text.contains(TextsZh.HOME_CONTINUE), "主屏：战役入口带「继续」（04 §①）")
+	check(home.quests_button.text.contains("2"), "主屏：事件中心角标（04 §①）")
+	home.campaign_button.pressed.emit()
+	home.quests_button.pressed.emit()
+	home.inventory_button.pressed.emit()
+	home.character_button.pressed.emit()
+	home.history_button.pressed.emit()
+	check(navs == [&"entry", &"quests", &"inventory", &"character", &"history"],
+		"主屏五入口齐备（04 §①：②⑤⑥⑦⑧）")
+	board.write("global.doom_clock", 8, {"event_id": 1, "node_id": "", "pack_id": "campaign01"})
+	home.bind(board, 0, false)
+	check(home.doom_label.text == TextsZh.home_doom_text(8), "营地图景随褪墨度变化文案（04 §①）")
+	check(home.campaign_button.text == TextsZh.HOME_ENTRY_CAMPAIGN, "无可继续进度时不带「继续」")
+	var saves: Array = []
+	home.save_requested.connect(func() -> void: saves.append("manual"))
+	home.idle_timeout.connect(func() -> void: saves.append("idle"))
+	home.save_button.pressed.emit()
+	home.debug_force_idle()
+	check(saves == ["manual", "idle"], "手动「记录抄本」+ 主屏闲置两时机（07 §4.2）")
+	home._toggle_help()
+	check(home.is_help_visible(), "帮助入口：手势图鉴页（12 §4）")
+	home._toggle_help()
+	home.queue_free()
+	# ② 战役入口：未选禁用开始 → 选形态 → 上报
+	var entry: ScreenEntry = (load("res://shell/ui/screen_entry.tscn") as PackedScene).instantiate()
+	root.add_child(entry)
+	await process_frame
+	entry.bind(pack, [], 12.5)
+	check(entry.start_button.disabled, "未选模式禁用开始（09 §3/04 §②）")
+	check(entry.collect_label.text.contains("12"), "分支收集度呈现（04 §② 多周目信息）")
+	var chosen: Array = []
+	entry.mode_chosen.connect(func(m: StringName) -> void: chosen.append(m))
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	check(not entry.start_button.disabled and chosen == [ShellRouter.MODE_TIME],
+		"选形态后解锁开始并上报（选择即分支，09 §3）")
+	var backed := [false]
+	entry.back_requested.connect(func() -> void: backed[0] = true)
+	entry.back_button.pressed.emit()
+	check(backed[0], "战役入口有退路：返回主屏（04 §5）")
+	entry.queue_free()
+	# 整备：3 选 2 槽位限制 + 确认上报 + 属性点
+	var lo: ScreenLoadout = (load("res://shell/ui/screen_loadout.tscn") as PackedScene).instantiate()
+	root.add_child(lo)
+	await process_frame
+	var cfg := Loadout.resolve_config(pack, "N1-7")
+	lo.bind(cfg, {"skills": [
+			{"id": "s1", "name": "技能一"}, {"id": "s2", "name": "技能二"}, {"id": "s3", "name": "技能三"}],
+		"items": [{"id": "heal_potion", "name": "补给药水", "count": 2}],
+		"attr_points": 1, "attr_alloc": {"might": 0, "finesse": 0, "wits": 0}})
+	lo._toggle_skill("s1")
+	lo._toggle_skill("s2")
+	lo._toggle_skill("s3") # 第 3 个超槽：不进入选择
+	check(lo.picked_skills() == ["s1", "s2"], "整备：技能 3 选 2 槽位限制（09 §9.1）")
+	lo._toggle_item("heal_potion")
+	var lo_sel: Array = []
+	lo.confirmed.connect(func(sel: Dictionary) -> void: lo_sel.append(sel))
+	lo._on_confirm()
+	check(lo_sel.size() == 1 and (lo_sel[0]["skills"] as Array) == ["s1", "s2"]
+		and (lo_sel[0]["items"] as Array) == ["heal_potion"], "整备确认上报选择（写 loadout.confirm 由 core 落）")
+	lo.queue_free()
+	# ⑨ 结算：汇总 + 加点 + 双出口
+	var st: ScreenSettle = (load("res://shell/ui/screen_settle.tscn") as PackedScene).instantiate()
+	root.add_child(st)
+	await process_frame
+	st.bind({"title": "午夜墨雨", "result": "victory", "lines": ["经验 +100", "获得：墨核 ×1"],
+		"saved": true, "attr_points": 1, "attrs": {"might": 0, "finesse": 0, "wits": 0}})
+	check(st.summary_text.text.contains("经验 +100") and st.summary_text.text.contains("墨核"),
+		"结算：写板汇总逐项呈现（04 §⑨）")
+	check(st.saved_label.text == TextsZh.SETTLE_SAVED, "结算：存档快照提示（07 §4.2 主快照点）")
+	var allocs: Array = []
+	st.allocate.connect(func(a: String) -> void: allocs.append(a))
+	var attr_btn: Button = null
+	for child: Node in st.attr_box.get_children():
+		if child is Button and not (child as Button).disabled:
+			attr_btn = child
+			break
+	attr_btn.pressed.emit()
+	check(allocs.size() == 1, "结算：成长加点上报（属性点可留到下次整备）")
+	check(st.home_button.text == TextsZh.SETTLE_HOME and st.history_button.text == TextsZh.SETTLE_HISTORY,
+		"结算出口：回主屏 / 看卷轴（04 §⑨）")
+	# 无可用点数时加点区不显示（11 §6：仅在有点数时分配）
+	st.bind({"title": "午夜墨雨", "result": "victory", "lines": [], "saved": true,
+		"attr_points": 0, "attrs": {"might": 1, "finesse": 0, "wits": 0}})
+	check(not st.attr_box.visible and not st.attr_label.visible, "无属性点：加点区隐藏（11 §6 分配时机）")
+	# 单项 +3 封顶：已满项按钮禁用
+	st.bind({"title": "午夜墨雨", "result": "victory", "lines": [], "saved": true,
+		"attr_points": 1, "attrs": {"might": 3, "finesse": 0, "wits": 0}})
+	await process_frame # 旧按钮 queue_free 后再取新按钮
+	for child: Node in st.attr_box.get_children():
+		if child is Button and (child as Button).text.begins_with("力"):
+			check((child as Button).disabled, "单项 +3 封顶：力已满 → 按钮禁用（11 §6）")
+	st.queue_free()
+	# ⑧ 历史卷轴：倒序 + 展开明细 + 关键标记 + 溯源
+	stream.emit(EventTypes.FLAG_WRITE, {"key": "campaign01.seen_fading", "old": false, "value": true,
+		"provenance": {"event_id": 1, "node_id": "N0-3a", "pack_id": "campaign01"}}, &"board", "N0-3a")
+	stream.emit(EventTypes.CHECK_ROLL, {"roller": "pc", "kind": "death_save", "rolls": [14], "keep": 14,
+		"mod": 0, "total": 14, "dc": 10, "success": true, "s": 1, "f": 0, "key": true}, &"core", "N1-7")
+	var hi: ScreenHistory = (load("res://shell/ui/screen_history.tscn") as PackedScene).instantiate()
+	root.add_child(hi)
+	await process_frame
+	hi.bind(stream, board)
+	var rows := 0
+	var first_btn: Button = null
+	var key_marked := false
+	for child: Node in hi.list_box.get_children():
+		if child is Button:
+			rows += 1
+			if first_btn == null:
+				first_btn = child
+			if (child as Button).text.contains("★"):
+				key_marked = true
+	check(rows == stream.size() and rows >= 2, "历史卷轴：事件流条目全量入轴（04 §⑧）")
+	check(first_btn != null and first_btn.text.contains("check.roll"),
+		"历史卷轴：倒序（最新在上，04 §⑧ 时间轴）")
+	check(key_marked, "关键判定标记 ★（09 §6 key=true）")
+	first_btn.pressed.emit()
+	check(hi.detail_label.text.contains("检定明细") and hi.detail_label.text.contains("DC 10"),
+		"展开明细：检定 d20 明细（骰值+修正=结果 vs 难度，04 §⑧）")
+	var flag_btn: Button = null
+	for child: Node in hi.list_box.get_children():
+		if child is Button and (child as Button).text.contains("flag.write"):
+			flag_btn = child
+	flag_btn.pressed.emit()
+	check(hi.detail_label.text.contains("N0-3a") and hi.detail_label.text.contains("campaign01"),
+		"旗标溯源：来源节点回链状态板（07 §1/§6）")
+	var hi_back := [false]
+	hi.back_requested.connect(func() -> void: hi_back[0] = true)
+	hi.back_button.pressed.emit()
+	check(hi_back[0], "历史卷轴出口：返回来源界面（04 §5）")
+	hi.queue_free()
+	# ⑤⑥⑦ 最小版：只读列表 + 返回 + 补全标注
+	var qs: ScreenQuests = (load("res://shell/ui/screen_quests.tscn") as PackedScene).instantiate()
+	root.add_child(qs)
+	await process_frame
+	qs.bind([{"id": "dock_tales", "name": "码头异闻", "objective": "完成 N0-2 检定", "node": "N0-2",
+		"state": "triggered"}])
+	var q_text := ""
+	for child: Node in qs.list_box.get_children():
+		if child is Label:
+			q_text += (child as Label).text
+	check(q_text.contains("码头异闻") and q_text.contains(TextsZh.QUESTS_ACTIVE), "事件中心：进行中事件列表（04 §⑤）")
+	qs.queue_free()
+	var iv: ScreenInventory = (load("res://shell/ui/screen_inventory.tscn") as PackedScene).instantiate()
+	root.add_child(iv)
+	await process_frame
+	board.give_item("ink_core", 1, {"event_id": 2, "node_id": "N1-7", "pack_id": "campaign01"})
+	iv.bind(board.get_inv(), pack["items"], board.get_lore())
+	var iv_text := ""
+	for child: Node in iv.bag_box.get_children():
+		if child is Label:
+			iv_text += (child as Label).text
+	check(iv_text.contains("墨核 ×1"), "背包图鉴：global.inv 只读列表（04 §⑥）")
+	iv.queue_free()
+	var ch: ScreenCharacter = (load("res://shell/ui/screen_character.tscn") as PackedScene).instantiate()
+	root.add_child(ch)
+	await process_frame
+	ch.bind([{"id": "pc", "name": "白页者", "hp": 14, "max_hp": 14, "attrs": {"might": 2, "finesse": 1, "wits": 0},
+		"skills": [{"name": "墨术飞矢"}]}], {"kelan": 10})
+	var ch_text := ""
+	for child: Node in ch.list_box.get_children():
+		if child is Label:
+			ch_text += (child as Label).text
+	check(ch_text.contains("白页者") and ch_text.contains("kelan 10/100"), "角色：队伍卡 + 羁绊只读（04 §⑦）")
+	ch.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- main 串流集成（tech/01 §10 TP4；07 §4.2 时机；09 §7 ☰ 回主屏）
+
+func test_main_flow() -> void:
+	print("[main_flow]")
+	var main_scene: PackedScene = load("res://main.tscn")
+	var m: Node = main_scene.instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	check(m.current_screen is ScreenHome, "启动 → ①主屏（04 §2 枢纽）")
+	# 主屏 → 战役入口 → 选模式 → 开始 → 整备
+	m._on_home_navigate(&"entry")
+	await process_frame
+	check(m.current_screen is ScreenEntry, "主屏 → ②战役入口")
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_TIME)
+	check(str(m.board.read("global.mode_choice.campaign01")) == "time",
+		"模式选择写板 global.mode_choice.campaign01（09 §3，07 §3 v1.1 白名单）")
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	check(m.current_screen is ScreenLoadout, "战役入口 → 整备界面（09 §9.1：manifest loadout 启用）")
+	check(m.graph.current_id == "N1-7", "序章脚本路径抵达 N1-7（StoryGraph 真实推进）")
+	check(m.stream.query_by_type(EventTypes.QUEST_TRIGGER).size() >= 3,
+		"L3 事件随路径触发（dock_tales/fading_street/three_callings，事件中心可见）")
+	# 遭遇进行中不存档（07 §4.2）：删档后进战斗，战斗中无新档
+	var save_path := "user://saves/slot1.json"
+	if FileAccess.file_exists(save_path):
+		DirAccess.remove_absolute(save_path)
+	var lo := m.current_screen as ScreenLoadout
+	lo._toggle_skill("inkbolt")
+	lo._toggle_skill("inkshield")
+	lo._toggle_item("heal_potion")
+	lo._on_confirm()
+	check(m.stream.query_by_type(EventTypes.LOADOUT_CONFIRM).size() == 1,
+		"整备确认写 loadout.confirm 事件（09 §9.1）")
+	await create_timer(1.4).timeout # 进场延时后战斗开始
+	check(m._in_encounter and m.shell is EncounterPortrait, "整备 → 竖屏遭遇（模式分支落定）")
+	await create_timer(0.6).timeout
+	check(not FileAccess.file_exists(save_path), "遭遇进行中不存档（07 §4.2 铁律）")
+	# ☰ 保存并回主屏：恢复遭遇进入前快照（09 §7）
+	var clock_before: int = (m._encounter_snapshot["board"]["data"] as Dictionary).get("global.doom_clock", 0)
+	m.board.write("global.doom_clock", 9, {"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
+	m._on_save_quit()
+	await process_frame
+	check(m.current_screen is ScreenHome, "☰ 回主屏（09 §7）")
+	check(m.board.get_doom_clock() == int(clock_before), "☰ 回主屏：恢复遭遇进入前快照（战斗重打，09 §7）")
+	check(FileAccess.file_exists(save_path), "回主屏后世界状态落档（遭遇外时机，07 §4.2）")
+	# 继续战役 → 整备 → 战斗 → 结算（胜利）→ 存档快照 → 加点 → 回主屏
+	m._on_home_navigate(&"entry")
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	var lo2 := m.current_screen as ScreenLoadout
+	lo2._toggle_skill("inkbolt")
+	lo2._toggle_skill("inkshield")
+	lo2._on_confirm()
+	await create_timer(1.4).timeout
+	check(m._in_encounter, "主屏「继续」→ 再进遭遇（04 §① 继续进行中的战役）")
+	m.stream.emit(EventTypes.XP_GAIN, {"amount": 300,
+		"provenance": {"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"}},
+		&"core", "N1-7") # 模拟 EncounterSM 胜利经验（真实战斗由 TP2 通道已验）；序章 50 + 300 = 350 跨 300 档
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", "N1-7")
+	await create_timer(1.6).timeout
+	check(m.current_screen is ScreenSettle, "战斗结束 → ⑨结算（04 §⑨）")
+	check(FileAccess.file_exists(save_path), "遭遇结算完成 = 主快照点（07 §4.2）")
+	var read_back := SaveSystem.read("slot1")
+	check(bool(read_back["ok"]) and bool(SaveSystem.migrate(read_back["snapshot"])["ok"]),
+		"结算快照可读可迁移（v1 直通）")
+	var points := int(m.board.read("campaign01.attr_points", 0))
+	check(points == 1 and int(m.board.read("campaign01.level", 1)) == 2,
+		"成长：350 XP 跨 300 档 → Lv.2、属性点 +1（11 §6 成长表）")
+	check(int((m._battle_def({})["party"] as Array)[0]["max_hp"]) == 16,
+		"成长：Lv.2 HP+2（14→16，11 §6）")
+	m._on_settle_allocate("might")
+	check(int(m.board.read("campaign01.attr_points", 0)) == points - 1
+		and int((m.board.read("campaign01.attrs", {}) as Dictionary).get("might", 0)) == 1,
+		"结算加点写板（属性点 -1，力 +1）")
+	# 单项 +3 封顶（11 §6）
+	m.board.write("campaign01.attrs", {"might": 3, "finesse": 0, "wits": 0},
+		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
+	check(not m._apply_attr_alloc({"might": 1}, 0), "单项 +3 封顶：力 +1 拒绝（11 §6）")
+	check(m._apply_attr_alloc({"finesse": 1}, 0), "未满项仍可分配（敏 +1）")
+	# 结算 → 卷轴 → 回结算 → 回主屏（04 §5 双列检查）
+	(m.current_screen as ScreenSettle).go_history.emit()
+	await process_frame
+	check(m.current_screen is ScreenHistory, "结算 → ⑧历史卷轴（04 §⑨ 出口）")
+	(m.current_screen as ScreenHistory).back_requested.emit()
+	await process_frame
+	check(m.current_screen is ScreenSettle, "卷轴 → 回结算（返回来源界面，04 §5）")
+	(m.current_screen as ScreenSettle).go_home.emit()
+	await process_frame
+	check(m.current_screen is ScreenHome, "结算 → 回主屏（元循环落笔，04 §2）")
+	m.queue_free()
+	await process_frame

@@ -37,6 +37,8 @@ var sm: EncounterSM = null
 var agent: AutoAgent = null
 var auto_on := false
 var speed := 1
+## ☰「保存并回主屏」回调（09 §7：回到遭遇进入前快照，由 main 流程控制器接管；未接管时退出进程）。
+var on_save_quit: Callable = Callable()
 
 # ---- 节点（_ready 构建）----
 var status_band: PanelContainer
@@ -206,6 +208,9 @@ func _build_menu() -> void:
 		if not confirm_quit[0]:
 			confirm_quit[0] = true # 弹确认，文案明说进度影响（09 §7）
 			b_save.text = TextsZh.MENU_CONFIRM_QUIT
+		elif on_save_quit.is_valid():
+			menu_popup.hide()
+			on_save_quit.call() # 回遭遇进入前快照（09 §7），由 main 恢复并回主屏
 		else:
 			get_tree().quit())
 	v.add_child(b_save)
@@ -227,6 +232,11 @@ func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	sm.stream.subscribe(_on_event)
 	_restore_breathing()
 	_refresh_all()
+
+## 离场退订：壳随界面切换销毁时不得残留事件订阅（否则事件流持有失效 Callable）。
+func _exit_tree() -> void:
+	if sm != null:
+		sm.stream.unsubscribe(_on_event)
 
 func _on_event(ev: Dictionary) -> void:
 	var line := BattleText.event_log_text(ev, _unit_name) # 日志文案两壳共享（battle_text.gd）

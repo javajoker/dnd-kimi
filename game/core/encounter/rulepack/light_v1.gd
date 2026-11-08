@@ -18,6 +18,32 @@ const ADV_NORMAL := &"normal"
 const ADV_ADVANTAGE := &"advantage"
 const ADV_DISADVANTAGE := &"disadvantage"
 
+# ---- §6 成长曲线（1~4 级，对齐 campaign01）----
+const LEVEL_XP: Array[int] = [300, 700, 1200] # 1→2 / 2→3 / 3→4 升级所需累计经验
+const LEVEL_HP_BONUS := 2    # 每升一级 HP+2
+const LEVEL_ATTR_POINTS := 1 # 每升一级属性点 +1
+const ATTR_POINT_CAP := 3    # 单项属性加点 ≤+3 封顶
+
+## 累计经验 → 等级（1~4）。
+static func level_for_xp(xp_total: int) -> int:
+	var lv := 1
+	for threshold: int in LEVEL_XP:
+		if xp_total >= threshold:
+			lv += 1
+	return lv
+
+## 累计经验 → HP 加值（每级 +2，§6）。
+static func hp_bonus_for_xp(xp_total: int) -> int:
+	return (level_for_xp(xp_total) - 1) * LEVEL_HP_BONUS
+
+## 累计经验 → 应得属性点（每级 +1，§6；分配时机：结算或整备，09 §9.1）。
+static func attr_points_for_xp(xp_total: int) -> int:
+	return (level_for_xp(xp_total) - 1) * LEVEL_ATTR_POINTS
+
+## §6：2→3 级技能槽 +1（3 级及以上生效）。
+static func skill_slot_bonus(level: int) -> int:
+	return 1 if level >= 3 else 0
+
 # ---------------------------------------------------------------- §3.1 优势/劣势
 
 ## 合并优势来源：任意优势+任意劣势互抵 → 普通；仅一侧 → 该侧；多个同侧不叠加。

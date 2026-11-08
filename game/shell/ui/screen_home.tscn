@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="//tp4home01"]
+
+[ext_resource type="Script" path="res://shell/ui/screen_home.gd" id="1"]
+
+[node name="screen_home" type="Control"]
+script = ExtResource("1")

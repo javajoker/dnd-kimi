@@ -37,6 +37,13 @@ const NODE_ENTER := &"node.enter"
 const STORY_TRIGGER := &"story.trigger"  # doom_clock 时间边触发（tech/02 §4.4）
 const STORY_ENDING := &"story.ending"    # 结局选定（tech/02 §9）
 
+# L3 任务/事件运行时（tech/02 §5）：触发 → 事件中心可见；节点完成 → settle 写板
+const QUEST_TRIGGER := &"quest.trigger"
+const QUEST_SETTLE := &"quest.settle"
+
+# 整备（09 §9.1 / tech/02 §2.4：整备选择写入事件流，历史卷轴可追溯"这局带了什么"）
+const LOADOUT_CONFIRM := &"loadout.confirm"
+
 # 成长 / 图鉴（tech/02 §4.6 效果词汇）
 const XP_GAIN := &"xp.gain"        # xp 在 07 无落板键，只进事件流（待裁决，属 tech/04 成长系统）
 const LORE_UNLOCK := &"lore.unlock"  # lore 落板 global.lore（07 §2 约束）时由 Board 产出

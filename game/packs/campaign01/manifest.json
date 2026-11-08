@@ -11,6 +11,7 @@
     "recommend": { "N4-1": "space" }
   },
   "namespace": "campaign01",
+  "loadout": { "enabled": true, "item_slots": 2, "skill_slots": 2, "respec": false },
   "recommended_level": [1, 4],
   "estimated_hours": "6-9",
   "node_budget": 35,

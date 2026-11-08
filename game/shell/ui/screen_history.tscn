@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="//tp4hist01"]
+
+[ext_resource type="Script" path="res://shell/ui/screen_history.gd" id="1"]
+
+[node name="screen_history" type="Control"]
+script = ExtResource("1")

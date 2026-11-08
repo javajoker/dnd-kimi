@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="//tp4char01"]
+
+[ext_resource type="Script" path="res://shell/ui/screen_character.gd" id="1"]
+
+[node name="screen_character" type="Control"]
+script = ExtResource("1")
