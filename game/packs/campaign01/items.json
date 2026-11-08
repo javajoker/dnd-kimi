@@ -28,5 +28,6 @@
     "roles": ["stat"],
     "source": "序章带入 ×2（战役书 §4 SL-1）/ N1-1 商店",
     "unlocks": [],
+    "price": 15,
     "use": { "timing": "bonus_action", "heal": "1d4+2", "consume": true } }
 ]

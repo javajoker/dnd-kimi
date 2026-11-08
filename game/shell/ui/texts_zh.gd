@@ -71,6 +71,33 @@ const SETTLE_ATTR_KEEP := "留到下次整备"
 const COMMON_BACK := "返回"
 const COMMON_WIP := "（最小版：要素随内容接入补全）"
 
+# 节点流程（04 §3.1/§④.2/§④.3、09 §6、tech/02 §3/§5、战役书 §4 N1-1）
+const STORY_CONTINUE := "继续"
+const STORY_CHECK := "检定"
+const SKILL_NAMES := {
+	"athletics": "运动", "intimidate": "威吓", "stealth": "潜行", "thievery": "巧手",
+	"perception": "感知", "investigation": "调查", "history": "历史",
+	"persuasion": "交涉", "soothe": "安抚",
+}
+const DIFF_NAMES := {"easy": "易", "medium": "中", "hard": "难"}
+const FACTION_NAMES := {"scriptorium": "誊写庭", "uninked": "断墨会", "salvage": "拾遗行会"}
+const STORY_CLOCK := "时钟 %d 格"
+const STORY_CLOCK_NEXT := "▸ %s %d格"
+const STORY_FORECAST_TITLE := "时间边预告（04 §3.1）"
+const STORY_FORECAST_EMPTY := "暂无逼近的时间边。"
+const STORY_QUEST_BADGE := "事件 %d"
+const STORY_SLICE_END := "幕一 · 切片终点"
+const SETTLE_SLICE := "切片完成"
+# Hub（战役书 §4 N1-1：休整 / 商店 / 传闻；04 §3.3 半屏弹层）
+const HUB_SHOP := "商店"
+const HUB_REST := "休整"
+const HUB_RUMOR := "听传闻"
+const HUB_GOLD := "金币：%d"
+const HUB_CLOSE := "离开"
+const HUB_NO_GOLD := "金币不足。"
+const HUB_REST_HINT := "休整：恢复全部 HP 与技能次数"
+const HUB_RUMOR_NONE := "码头寂静，暂无新传闻。"
+
 # ① 主屏（04 §①）
 const HOME_TITLE := "烬港 · 营地"
 const HOME_ENTRY_CAMPAIGN := "战役入口"

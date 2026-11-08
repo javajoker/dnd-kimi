@@ -26,6 +26,11 @@ static func check_text(p: Dictionary, name_of: Callable) -> String:
 			return "%s 急救 %s：%d → %s" % [name_of.call(str(p["roller"])),
 				name_of.call(str(p["target"])), int(p["total"]),
 				TextsZh.RESULT_SUCCESS if bool(p["success"]) else TextsZh.RESULT_FAIL]
+		"story_check":
+			var skill := str(p.get("skill", ""))
+			return "检定·%s：%d%+d=%d vs %d → %s" % [str(TextsZh.SKILL_NAMES.get(skill, skill)),
+				int(p["keep"]), int(p["mod"]), int(p["total"]), int(p["dc"]),
+				TextsZh.RESULT_SUCCESS if bool(p["success"]) else TextsZh.RESULT_FAIL]
 	return "检定：%d" % int(p.get("total", 0))
 
 static func attack_text(p: Dictionary) -> String:

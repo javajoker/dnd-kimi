@@ -51,6 +51,8 @@
       "edges": [
         { "type": "choice", "label": "购买半页潮汐表（商店，价格 15 占位）", "to": "N1-2",
           "effects": [ { "give_item": "half_tide_table" } ] },
+        { "type": "choice", "label": "购买补给药水（商店，价格 15 占位）", "to": "N1-2",
+          "effects": [ { "give_item": "heal_potion" } ] },
         { "type": "choice", "label": "前往褪色现场", "to": "N1-2" }
       ]
     },

@@ -39,6 +39,20 @@ var auto_on := false
 var speed := 1
 ## ☰「保存并回主屏」回调（09 §7：回到遭遇进入前快照，由 main 流程控制器接管；未接管时退出进程）。
 var on_save_quit: Callable = Callable()
+# ---- 节点流程故事态（04 §④.2/§④.3：节点即房间；内容源 StoryVM，壳只渲染）----
+var story_cb := {} # {"edge": Callable(idx), "hub": Callable(action, arg)}
+var _stream: EventStream = null
+var _board: Board = null
+var _pack: Dictionary = {}
+var _story := false
+var _vm: Dictionary = {}
+var story_panel: VBoxContainer
+var story_title: Label
+var story_text: RichTextLabel
+var clock_chip: Button
+var quest_chip: Label
+var hub_popup: HubPopup
+var info_popup: InfoPopup
 
 # ---- 节点（_ready 构建）----
 var status_band: PanelContainer
@@ -85,7 +99,7 @@ func _ready() -> void:
 # ---------------------------------------------------------------- UI 构建
 
 func _build_ui() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# ① 状态栏带（04 §3.1：只放"看"的信息 + 低频操作）
 	status_band = PanelContainer.new()
 	status_band.name = "StatusBand"
@@ -93,6 +107,13 @@ func _build_ui() -> void:
 	var band_h := HBoxContainer.new()
 	band_h.add_theme_constant_override("separation", 8)
 	status_band.add_child(band_h)
+	clock_chip = Button.new() # 时间钟总览格：按下弹时间边预告（04 §3.1 例外交互）
+	clock_chip.visible = false
+	clock_chip.pressed.connect(_open_forecast)
+	band_h.add_child(clock_chip)
+	quest_chip = Label.new() # 事件中心角标（04 §⑤）
+	quest_chip.visible = false
+	band_h.add_child(quest_chip)
 	party_chips = HBoxContainer.new()
 	party_chips.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	band_h.add_child(party_chips)
@@ -122,6 +143,20 @@ func _build_ui() -> void:
 	menu_button.text = TextsZh.MENU
 	menu_button.pressed.connect(_open_menu)
 	progress_row.add_child(menu_button) # ☰ 常驻：推进条右端（09 §7）
+	# 故事态叙事面板（04 §④.3 房间呈现：scene 文本 / dialog NPC 文本；战斗时收起）
+	story_panel = VBoxContainer.new()
+	story_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	story_panel.visible = false
+	main_v.add_child(story_panel)
+	story_title = Label.new()
+	story_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	story_title.add_theme_font_size_override("font_size", 20)
+	story_panel.add_child(story_title)
+	story_text = RichTextLabel.new()
+	story_text.bbcode_enabled = false
+	story_text.scroll_following = false
+	story_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	story_panel.add_child(story_text)
 	enemy_row = HBoxContainer.new()
 	enemy_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	enemy_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -169,13 +204,13 @@ func _build_ui() -> void:
 	key_overlay = ColorRect.new()
 	key_overlay.name = "KeyOverlay"
 	key_overlay.color = Color(0.02, 0.02, 0.08, 0.96)
-	key_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	key_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	key_overlay.visible = false
 	key_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	key_overlay.gui_input.connect(_on_key_overlay_input)
 	add_child(key_overlay)
 	var key_v := VBoxContainer.new()
-	key_v.set_anchors_preset(Control.PRESET_FULL_RECT)
+	key_v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	key_v.alignment = BoxContainer.ALIGNMENT_CENTER
 	key_overlay.add_child(key_v)
 	key_dice_label = Label.new()
@@ -191,6 +226,17 @@ func _build_ui() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	key_v.add_child(hint)
+	# 半屏弹层组件（04 §3.3，双壳共用）：hub 商店 / 时间边预告
+	hub_popup = HubPopup.new()
+	hub_popup.buy_requested.connect(func(item_id: String) -> void:
+		if story_cb.has("hub"):
+			story_cb["hub"].call("buy", item_id))
+	hub_popup.rest_requested.connect(func() -> void:
+		if story_cb.has("hub"):
+			story_cb["hub"].call("rest", ""))
+	add_child(hub_popup)
+	info_popup = InfoPopup.new()
+	add_child(info_popup)
 	_build_menu()
 
 func _build_menu() -> void:
@@ -229,20 +275,52 @@ func _open_menu() -> void:
 func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	sm = p_sm
 	agent = p_agent
-	sm.stream.subscribe(_on_event)
+	_stream = sm.stream
+	_stream.subscribe(_on_event)
+	show_combat_layout() # 故事态 → 战斗态：同一壳内布局切换（04 §④.1 呼吸随状态切换）
 	_restore_breathing()
 	_refresh_all()
 
+## 故事态绑定（节点流程）：内容源 StoryVM + 事件流；不含 EncounterSM。
+func bind_story(p_stream: EventStream, p_board: Board, p_pack: Dictionary, callbacks: Dictionary) -> void:
+	sm = null
+	_stream = p_stream
+	_board = p_board
+	_pack = p_pack
+	story_cb = callbacks
+	_stream.subscribe(_on_event)
+	_story = true
+
 ## 离场退订：壳随界面切换销毁时不得残留事件订阅（否则事件流持有失效 Callable）。
 func _exit_tree() -> void:
-	if sm != null:
-		sm.stream.unsubscribe(_on_event)
+	if _stream != null:
+		_stream.unsubscribe(_on_event)
+		_stream = null
 
 func _on_event(ev: Dictionary) -> void:
 	var line := BattleText.event_log_text(ev, _unit_name) # 日志文案两壳共享（battle_text.gd）
 	if line != "":
 		_log_line(line)
-	match StringName(ev["type"]):
+	var t := StringName(ev["type"])
+	# 掷骰两级演出与战斗/故事同一事件源（09 §6）
+	if t == EventTypes.CHECK_ROLL:
+		var p: Dictionary = ev["payload"]
+		if bool(p.get("key", false)):
+			var q := p.duplicate(true)
+			q["event_id"] = ev["id"]
+			_play_key_roll(q) # 关键判定：全屏演出（09 §6）
+		else:
+			_tray_roll(p)
+	if _story:
+		# 状态反馈（任务书 §3）：旗标/声望/道具/事件 toast + 时钟角标，全经事件流驱动
+		var toast := StoryVM.toast_text(ev, _pack)
+		if toast != "":
+			_flash(toast)
+		if t == EventTypes.CLOCK_TICK and _board != null:
+			_vm["clock"] = _board.get_doom_clock()
+			_refresh_story_status()
+		return
+	match t:
 		EventTypes.STATE_ENTERED:
 			var st := StringName(ev["payload"]["state"])
 			apply_breathing(STATE_PROFILE.get(st, &"explore"))
@@ -255,19 +333,103 @@ func _on_event(ev: Dictionary) -> void:
 			var p: Dictionary = ev["payload"]
 			_flash(BattleText.attack_text(p))
 			_tray_roll(p)
-		EventTypes.CHECK_ROLL:
-			var p: Dictionary = ev["payload"]
-			if bool(p.get("key", false)):
-				var q := p.duplicate(true)
-				q["event_id"] = ev["id"]
-				_play_key_roll(q) # 关键判定：全屏演出（09 §6）
-			else:
-				_tray_roll(p)
 		EventTypes.BATTLE_DOWN:
 			_flash("%s 倒地！" % str(ev["payload"]["name"]))
 		EventTypes.COMBAT_END:
 			set_auto(false) # 遭遇结束托管自动停止（09 §9.3）
 	_refresh_all()
+
+# ---------------------------------------------------------------- 故事态（节点即房间，04 §④.2/§④.3）
+
+## 呈现当前节点：呼吸对话档（04 §④.1 对话行）、推进条 pip 同步 story 节点、
+## 主视野叙事文本、操作台选项列表（check=一键快掷 / dialog=选项带声望角标 / hub=三设施）。
+func show_story(vm: Dictionary) -> void:
+	_vm = vm
+	_story = true
+	apply_breathing(&"dialog")
+	clock_chip.visible = true
+	quest_chip.visible = true
+	round_label.visible = false
+	auto_button.visible = false
+	speed_button.visible = false
+	story_panel.visible = true
+	enemy_row.visible = false
+	party_row.visible = false
+	_refresh_story_status()
+	set_rooms(vm["rooms"], int(vm["room_index"]), vm["room_titles"]) # pip 同步 story 节点（04 §④.2）
+	story_title.text = str(vm["title"])
+	story_text.text = str(vm["text"])
+	_refresh_story_options()
+	tabs.current_tab = 0
+
+## 战斗布局恢复（bind 进入遭遇时调用；故事面板收起，单位行/回合计/托管件归位）。
+func show_combat_layout() -> void:
+	_story = false
+	story_panel.visible = false
+	enemy_row.visible = true
+	party_row.visible = true
+	clock_chip.visible = false
+	quest_chip.visible = false
+	round_label.visible = true
+	auto_button.visible = true
+	speed_button.visible = true
+
+func _refresh_story_status() -> void:
+	clock_chip.text = TextsZh.STORY_CLOCK % int(_vm.get("clock", 0))
+	var fc: Dictionary = _vm.get("forecast", {})
+	if not fc.is_empty():
+		clock_chip.text += " " + TextsZh.STORY_CLOCK_NEXT % [str(fc.get("name", "")), int(fc.get("at", 0))]
+	quest_chip.text = TextsZh.STORY_QUEST_BADGE % int(_vm.get("quest_badge", 0))
+	for child: Node in party_chips.get_children():
+		child.queue_free()
+	for p: Variant in _vm.get("party", []):
+		var chip := Label.new()
+		chip.text = " %s %d/%d " % [str((p as Dictionary)["name"]), int((p as Dictionary)["hp"]),
+			int((p as Dictionary)["max_hp"])]
+		party_chips.add_child(chip)
+
+func _refresh_story_options() -> void:
+	for child: Node in quickbar.get_children():
+		child.queue_free()
+	var idx := 0
+	for e: Variant in _vm.get("edges", []):
+		var i := idx
+		_add_chip(str((e as Dictionary)["label"]), false, func() -> void:
+			if story_cb.has("edge"):
+				story_cb["edge"].call(i))
+		idx += 1
+	if str(_vm.get("type", "")) == "hub": # hub 三设施（战役书 §4 N1-1）
+		_add_chip(TextsZh.HUB_SHOP, false, func() -> void: hub_popup.open(
+			int(_vm.get("gold", 0)), _vm.get("stock", [])))
+		_add_chip(TextsZh.HUB_REST, false, func() -> void:
+			if story_cb.has("hub"):
+				story_cb["hub"].call("rest", ""))
+		_add_chip(TextsZh.HUB_RUMOR, false, func() -> void:
+			if story_cb.has("hub"):
+				story_cb["hub"].call("rumor", ""))
+
+## 购买/休整后由 main 同步弹层货单与金币（弹层开着时刷新，不关弹层）。
+func sync_hub_popup(vm: Dictionary) -> void:
+	if hub_popup.visible:
+		hub_popup.bind(int(vm.get("gold", 0)), vm.get("stock", []))
+
+## 时间钟弹层：时间边逼近事件预告（04 §3.1 例外交互）。
+func _open_forecast() -> void:
+	var lines: Array = []
+	for f: Variant in _vm.get("forecasts", []):
+		lines.append("%s —— 时钟 %d 格触发（%s）" % [str((f as Dictionary).get("name", "")),
+			int((f as Dictionary).get("at", 0)), str((f as Dictionary).get("objective", ""))])
+	if lines.is_empty():
+		lines.append(TextsZh.STORY_FORECAST_EMPTY)
+	info_popup.show_info(TextsZh.STORY_FORECAST_TITLE, lines)
+
+## 测试探针：当前故事选项按钮文案。
+func story_option_texts() -> Array:
+	var out: Array = []
+	for child: Node in quickbar.get_children():
+		if child is Button:
+			out.append((child as Button).text)
+	return out
 
 # ---------------------------------------------------------------- 呼吸（04 §④.1：高度变化只随状态切换发生）
 

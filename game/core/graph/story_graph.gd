@@ -91,6 +91,179 @@ func resolve_check(edge: Dictionary, success: bool) -> void:
 		_scan_triggers()
 		_enter(str(edge.get("failure", "")))
 
+# ---------------------------------------------------------------- 检定掷骰（11 §2/§3；09 §6 两级演出标记）
+# UI 只按下"检定"按钮；掷骰、check.roll 事件、成败双路推进全部在 core 完成（godot-dev §2）。
+
+## 玩家有效属性 = 模板属性 + 已分配加点（11 §6；簿记键 <pack>.attrs）。
+func player_attrs() -> Dictionary:
+	var out: Dictionary = (_player_template().get("attrs", {}) as Dictionary).duplicate(true)
+	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
+	for k: Variant in alloc.keys():
+		out[str(k)] = int(out.get(str(k), 0)) + int(alloc[k])
+	return out
+
+func player_proficiencies() -> Array:
+	return (_player_template().get("proficiencies", []) as Array).duplicate()
+
+## 检定修正 = 属性修正 + 熟练 +2（11 §2；a_or_b 双技能取高，LightV1.skill_mod）。
+func check_mod(skill: String) -> int:
+	return LightV1.skill_mod(player_attrs(), player_proficiencies(), skill)
+
+## 检定边真实掷骰：d20+修正 vs DC（11 §3），产出 check.roll（kind=story_check）后按成败走边（§4.2）。
+## key/extreme 分级按 09 §6：内容包 key:true / hard 且 pivot 标记 → 关键；nat20/nat1 恒追加极端档。
+func roll_check(edge: Dictionary) -> Dictionary:
+	var skill := str(edge.get("skill", ""))
+	var dc := LightV1.dc_for(str(edge.get("difficulty", "medium")))
+	var mod := check_mod(skill)
+	var res := LightV1.check(rng, mod, dc)
+	var success := bool(res["success"])
+	var key := bool(edge.get("key", false)) \
+		or (str(edge.get("difficulty", "")) == "hard" and bool(edge.get("pivot", false)))
+	var extreme := bool(res["nat20"]) or bool(res["nat1"])
+	board.stream.emit(EventTypes.CHECK_ROLL, {"roller": "pc", "kind": "story_check",
+		"skill": skill, "rolls": res["rolls"], "keep": res["keep"], "mod": mod,
+		"total": res["total"], "dc": dc, "success": success, "key": key, "extreme": extreme},
+		&"graph", current_id)
+	resolve_check(edge, success)
+	res["success"] = success
+	res["key"] = key
+	res["extreme"] = extreme
+	return res
+
+func _player_template() -> Dictionary:
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		if str(c.get("kind", "")) == "player_template":
+			return c
+	return {}
+
+# ---------------------------------------------------------------- 时间边预告（04 §3.1：点时间钟 → 逼近事件预告）
+
+## 全部未触发且尚未到格的时钟逼近项（L3 事件 doom_clock 触发 §5 + 图内 doom_clock 边 §4.4），按格数升序。
+func clock_forecasts() -> Array:
+	var out: Array = []
+	var now := board.get_doom_clock()
+	for ev: Variant in pack.get("events", []):
+		var def: Dictionary = ev
+		var trig: Dictionary = def.get("trigger", {})
+		if str(trig.get("type", "")) != "doom_clock":
+			continue
+		var at := int(trig.get("at", 0))
+		if at > now and not _quests.has(str(def.get("id", ""))):
+			out.append({"id": str(def.get("id", "")), "name": str(def.get("name", "")),
+				"at": at, "objective": str(def.get("objective", ""))})
+	for rec: Dictionary in _clock_edges:
+		var edge: Dictionary = rec["edge"]
+		var at := int(edge.get("at", 0))
+		var key := "%s/%d" % [str(rec["node_id"]), int(rec["idx"])]
+		if at > now and not _fired_triggers.has(key):
+			out.append({"id": "", "name": str(edge.get("label", "时间边")),
+				"at": at, "objective": str(rec["node_id"])})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["at"]) < int(b["at"]))
+	return out
+
+## 最近一条逼近项（状态栏带时钟角标用；无则空字典）。
+func next_clock_trigger() -> Dictionary:
+	var f := clock_forecasts()
+	return f[0] if not f.is_empty() else {}
+
+# ---------------------------------------------------------------- Hub 动作（战役书 §4 N1-1：休整 / 商店 / 传闻）
+# 金币：07 六类变量无货币——按"计数型旗标"（07 §2 约束3）落包命名空间 <pack>.gold，待文档裁决（见交付说明）。
+
+const GOLD_KEY := "campaign01.gold" ## 计数型旗标（包命名空间，07 §2 约束3；待裁决：07 无货币变量）
+const GOLD_START := 30              ## 开局金币占位（待裁决：战役书未定初始金）
+
+func _hub_prov() -> Dictionary:
+	return {"event_id": board.stream.tail(), "node_id": current_id, "pack_id": pack_id}
+
+## 开局播种金币（幂等：已存在不覆盖）。
+func seed_gold(amount: int = GOLD_START) -> void:
+	if not board.has(GOLD_KEY):
+		board.write(GOLD_KEY, amount, _hub_prov())
+
+func get_gold() -> int:
+	return int(board.read(GOLD_KEY, 0))
+
+## 商店货单 = items.json 含 price 字段条目（tech/02 §7 投放声明；价格占位见 campaign01 README M2 记录）。
+func hub_stock() -> Array:
+	var out: Array = []
+	for iid: String in (pack.get("items", {}) as Dictionary).keys():
+		var it: Dictionary = pack["items"][iid]
+		if it.has("price"):
+			out.append({"id": iid, "name": str(it.get("name", iid)), "price": int(it["price"]),
+				"owned": board.item_count(iid), "affordable": get_gold() >= int(it["price"])})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["price"]) < int(b["price"]))
+	return out
+
+## 购买：金币扣减 + give_item（同一次动作两笔写板，均带溯源）；金币不足拒绝返回 false。
+func hub_buy(item_id: String) -> bool:
+	var it: Dictionary = (pack.get("items", {}) as Dictionary).get(item_id, {})
+	if it.is_empty() or not it.has("price"):
+		push_error("StoryGraph.hub_buy: 非卖品 '%s'" % item_id)
+		return false
+	var price := int(it["price"])
+	if get_gold() < price:
+		return false
+	board.write(GOLD_KEY, get_gold() - price, _hub_prov())
+	board.give_item(item_id, 1, _hub_prov())
+	return true
+
+## 休整：队伍 HP 恢复至满值并写板（11 §7.1：休整态恢复全满并写板；上限按 characters.json
+## hp_formula + 11 §6 等级加值重算，<pack>.hp.<cid> 簿记键见 07 §2）；次数制技能按 11 §8
+## 遭遇内计次，离场即随遭遇组装重置（tech/02 §6），休整日志一并说明。
+func hub_rest() -> Dictionary:
+	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
+	var level := int(board.read("%s.level" % pack_id, 1))
+	var hp_bonus := (level - 1) * LightV1.LEVEL_HP_BONUS
+	var restored := {}
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		if not ["player_template", "companion"].has(str(c.get("kind", ""))):
+			continue
+		var attrs: Dictionary = (c.get("attrs", {}) as Dictionary).duplicate(true)
+		for k: Variant in alloc.keys():
+			attrs[str(k)] = int(attrs.get(str(k), 0)) + int(alloc[k])
+		attrs["level"] = level
+		var max_hp := int(LightV1.eval_formula(str(c.get("hp_formula", "10")), attrs)) + hp_bonus
+		board.write("%s.hp.%s" % [pack_id, cid], max_hp, _hub_prov())
+		restored[cid] = max_hp
+	board.stream.emit(EventTypes.LOG,
+		{"msg": "你在广场的篝火边休整。伤口被重新誊写，技能次数已恢复。", "toast": true},
+		&"graph", current_id)
+	return restored
+
+## 队伍状态（状态栏带 04 §3.1「队伍 HP 概览」只读数据源）：
+## [{id, name, hp, max_hp}]；hp 取 <pack>.hp.<cid> 簿记，未写入时按满值（公式重算上限）。
+func party_status() -> Array:
+	var alloc: Dictionary = board.read("%s.attrs" % pack_id, {})
+	var level := int(board.read("%s.level" % pack_id, 1))
+	var hp_bonus := (level - 1) * LightV1.LEVEL_HP_BONUS
+	var out: Array = []
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		if not ["player_template", "companion"].has(str(c.get("kind", ""))):
+			continue
+		var attrs: Dictionary = (c.get("attrs", {}) as Dictionary).duplicate(true)
+		for k: Variant in alloc.keys():
+			attrs[str(k)] = int(attrs.get(str(k), 0)) + int(alloc[k])
+		attrs["level"] = level
+		var max_hp := int(LightV1.eval_formula(str(c.get("hp_formula", "10")), attrs)) + hp_bonus
+		out.append({"id": cid, "name": str(c.get("name", cid)),
+			"hp": mini(int(board.read("%s.hp.%s" % [pack_id, cid], max_hp)), max_hp), "max_hp": max_hp})
+	return out
+
+## 传闻（战役书 §4：未择路线以传闻形式提及）：已注册但尚未触发的 choice/hidden 触发事件。
+func hub_rumors() -> Array:
+	var out: Array = []
+	for ev: Variant in pack.get("events", []):
+		var def: Dictionary = ev
+		if not ["choice", "hidden"].has(str((def.get("trigger", {}) as Dictionary).get("type", ""))):
+			continue
+		if not _quests.has(str(def.get("id", ""))):
+			out.append({"id": str(def.get("id", "")), "name": str(def.get("name", "")),
+				"objective": str(def.get("objective", ""))})
+	return out
+
 # ---------------------------------------------------------------- 结局（§9）
 
 ## 按 endings.json 顺序求值，首个条件命中者胜；无命中取 default: true 兜底（E4，战役书 §9）。

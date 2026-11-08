@@ -18,6 +18,34 @@ const ADV_NORMAL := &"normal"
 const ADV_ADVANTAGE := &"advantage"
 const ADV_DISADVANTAGE := &"disadvantage"
 
+# ---- §2 技能表（三维衍生）：技能 → 属性；修正 = 属性修正 + 熟练 +2（若该技能熟练）----
+const SKILL_ATTR := {
+	"athletics": "might", "intimidate": "might",
+	"stealth": "finesse", "thievery": "finesse",
+	"perception": "wits", "investigation": "wits", "history": "wits",
+	"persuasion": "wits", "soothe": "wits",
+}
+const PROFICIENCY_BONUS := 2 # §2：熟练 +2
+
+## 难度档 → DC（§3：易 8 / 中 12 / 难 16；未登记按中档）。
+static func dc_for(difficulty: String) -> int:
+	return {"easy": DC_EASY, "medium": DC_MEDIUM, "hard": DC_HARD}.get(difficulty, DC_MEDIUM)
+
+## 技能检定修正（§2）：属性修正 + 熟练 +2；`a_or_b` 双技能取两者较高者。
+static func skill_mod(attrs: Dictionary, proficiencies: Array, skill: String) -> int:
+	var best := -999
+	for s: String in skill.split("_or_", false):
+		var attr := str(SKILL_ATTR.get(s, ""))
+		if attr.is_empty():
+			push_warning("LightV1: 未登记技能 '%s'（11 §2），修正按 0" % s)
+			best = maxi(best, 0)
+			continue
+		var mod := int(attrs.get(attr, 0))
+		if proficiencies.has(s):
+			mod += PROFICIENCY_BONUS
+		best = maxi(best, mod)
+	return best if best > -999 else 0
+
 # ---- §6 成长曲线（1~4 级，对齐 campaign01）----
 const LEVEL_XP: Array[int] = [300, 700, 1200] # 1→2 / 2→3 / 3→4 升级所需累计经验
 const LEVEL_HP_BONUS := 2    # 每升一级 HP+2

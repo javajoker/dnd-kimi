@@ -41,7 +41,7 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 		if not characters.has(ref):
 			errors.append("遭遇 %s party 引用未登记角色 '%s'（characters.json）" % [encounter_id, ref])
 			continue
-		party.append(_build_character_unit(str(e.get("id", ref)), characters[ref],
+		party.append(_build_character_unit(str(e.get("id", ref)), ref, characters[ref],
 			pack_id, selection, board, skills, items, encounter_id, errors))
 
 	# ---- 敌方（tech/02 §6 enemies 实例 → tech/04 §1 敌人条目）----
@@ -76,7 +76,7 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 
 # ---------------------------------------------------------------- 单位组装
 
-static func _build_character_unit(inst_id: String, c: Dictionary, pack_id: String,
+static func _build_character_unit(inst_id: String, ref: String, c: Dictionary, pack_id: String,
 		selection: Dictionary, board: Board, skills: Dictionary, items: Dictionary,
 		encounter_id: String, errors: Array[String]) -> Dictionary:
 	var kind := str(c.get("kind", ""))
@@ -117,11 +117,19 @@ static func _build_character_unit(inst_id: String, c: Dictionary, pack_id: Strin
 		var ba: Dictionary = skills[ba_id]
 		atk_mod = int(final_attrs.get(str(ba.get("attr", "might")), 0))
 		dmg = str(ba.get("damage", dmg))
+	# HP 跨遭遇持久化（11 §7.1）：<pack>.hp.<char_id> 有记录则以此开局（钳 1~上限；
+	# 死亡记录 0 按 1 HP 抬升——轻规则无永久死亡系统），无记录 = 满血公式值
+	var max_hp := int(hp) + hp_bonus
+	var hp_now := max_hp
+	var hp_key := "%s.hp.%s" % [pack_id, ref]
+	if board.has(hp_key):
+		hp_now = clampi(int(board.read(hp_key)), 1, max_hp)
 	var unit := {
 		"id": inst_id,
+		"ref": ref, # characters.json 条目 id：HP 持久化写板键（11 §7.1 <ns>.hp.<char_id>）
 		"name": str(c.get("name", inst_id)),
 		"kind": "player" if kind == "player_template" else kind, # 运行时 kind：player/companion（11 §5.2）
-		"hp": int(hp) + hp_bonus, "max_hp": int(hp) + hp_bonus, "ac": int(ac),
+		"hp": hp_now, "max_hp": max_hp, "ac": int(ac),
 		"attrs": final_attrs, "attack_mod": atk_mod, "damage": dmg,
 	}
 	# 出战技能：整备选择 ∩ 已习得（tech/04 §7）；同伴恒带招牌技能（11 §5.2）

@@ -1,17 +1,16 @@
-# TP4 界面闭环流程控制器（tech/01 §10 TP4；04 §2 导航闭环 + §5 检查表；07 §4 存档；09 §3/§7/§9.1）
-# 串流：①主屏 → ②战役入口（模式分支，09 §3）→ 整备（09 §9.1）→ ③/④遭遇（壳路由 09 §2）→
-#      ⑨结算（加点 + 结算快照 07 §4.2）→ 回主屏 / ⑧历史卷轴；⑤⑥⑦⑧ 由主屏进入、返回主屏。
-# 存档时机（07 §4.2）：遭遇结算完成（主快照）+ 主屏闲置（兜底）+ 主屏手动"记录抄本"；
-# 遭遇进行中不存档——☰「保存并回主屏」= 恢复遭遇进入前快照（09 §7，战斗重打）。
-# 战役进度引导：序章 → N1-7 沿脚本化路径真实走 StoryGraph（L3 事件随节点触发/结算）；
-# 遭遇战斗数值自 M2 起由 packs 资源表驱动（characters/skills/enemies/items + encounters，
-# tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast（TP2 留白已落位）。
-# 调试：`-- --tp4-shots` 自动推进并截图 /tmp/tp4_*.png（不提交）；`-- --mode=space|time` 预选形态。
+# 节点流程版流程控制器（tech/01 §10；04 §2 导航闭环 + §3.1/§④.2/§④.3；07 §4 存档；09 §3/§6/§7/§9.1；tech/02 §3/§4/§5）
+# 串流：①主屏 → ②战役入口（模式分支，09 §3）→ **故事图驱动节点流程**（序章 N0-1 → … → 幕一 N1-8）：
+#   scene/check/dialog/hub 节点由双壳故事态呈现（StoryVM 单源）；battle 节点进整备→遭遇→战后边回图；
+#   branch（N1-8）选择后出切片范围 → ⑨结算（成长加点 + 结算快照 07 §4.2）→ 回主屏 / ⑧历史卷轴。
+# 存档时机（07 §4.2）：切片/遭遇结算完成（主快照）+ 主屏闲置（兜底）+ 主屏手动"记录抄本"；
+# 遭遇进行中不存档——☰「保存并回主屏」= 恢复遭遇进入前快照（09 §7，战斗重打）；
+# 故事态（遭遇外）☰ = 存档后回主屏（节点进度在图快照 meta.graph 内）。
+# 战斗数值由 packs 资源表驱动（tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast。
+# 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --mode=space|time` 预选形态。
 extends Node
 
-const BATTLE_SEED := 20261108
-const BATTLE_NODE := "N1-7"
-const BATTLE_LINE := "SL-1"
+const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
+const SLICE_ACTS: Array[String] = ["SL-0", "SL-1"] # 本切片范围：序章 + 幕一（出范围即切片终点）
 const LANDSCAPE_SIZE := Vector2i(1280, 720)
 const PACK_DIR := "res://packs/campaign01"
 const SHELL_SCENES := {
@@ -41,7 +40,10 @@ var _cli_mode: StringName = &""
 var _in_encounter := false
 var _encounter_snapshot: Dictionary = {} # 遭遇进入前快照（09 §7 ☰ 回主屏恢复点）
 var _encounter_tail := 0                 # 遭遇开始时的事件锚点（结算汇总区间）
+var _campaign_tail := 0                  # 战役开始锚点（切片结算汇总区间）
 var _encounter_result: StringName = &""
+var _encounter_id := ""                  # 当前战斗节点的遭遇 id（tech/02 §6）
+var _battle_title := ""
 var _battles_won := 0
 var _mode: StringName = &""
 var _history_origin: StringName = &"home"
@@ -51,7 +53,7 @@ var _shots := false
 func _ready() -> void:
 	_setup_cjk_font()
 	var args := OS.get_cmdline_user_args()
-	_shots = args.has("--tp4-shots")
+	_shots = args.has("--m2n-shots")
 	_cli_mode = ShellRouter.cli_mode(args) if args.has("--mode=space") or args.has("--mode=time") else &""
 	var res := PackLoader.load_pack(PACK_DIR)
 	if not res["ok"]:
@@ -65,7 +67,7 @@ func _ready() -> void:
 	stream.subscribe(_on_event)
 	_show_home()
 	if _shots:
-		_run_shots_tp4()
+		_run_shots_m2n()
 
 # ---------------------------------------------------------------- 导航（04 §2/§5：任何界面有明确来路退路）
 
@@ -79,7 +81,7 @@ func _swap(screen: Control) -> void:
 
 func _show_home() -> void:
 	_in_encounter = false
-	if shell != null: # 遭遇壳随离场回收（09 §7 结算态之后为正常离场）
+	if shell != null: # 壳随离场回收（09 §7 结算态之后为正常离场）
 		shell.queue_free()
 		shell = null
 	var home: ScreenHome = (load(SCREEN_SCENES[&"home"]) as PackedScene).instantiate()
@@ -130,58 +132,108 @@ func _on_campaign_start(entry: ScreenEntry) -> void:
 	if _mode == &"":
 		return
 	if not graph.visit_log.is_empty() and not graph.is_at_ending():
-		_enter_encounter() # 战役进行中：继续当前节点（主屏"继续"语义，04 §①）
+		_present_node() # 战役进行中：继续当前节点（主屏"继续"语义，04 §①）
 		return
 	_start_campaign()
 
-## 序章 → N1-7 脚本化路径（TP4 引导：真实走 StoryGraph，L3 事件随节点触发/结算）。
+## 战役开局：播种金币（hub 商店）→ 序章带入补给 → 从入口节点真实走图（tech/02 §3）。
 func _start_campaign() -> void:
+	_campaign_tail = stream.tail()
+	graph.seed_gold()
 	graph.start()
-	_walk_to_battle_node()
-	# 序章带入（叙事既定）：N1-1 商店补给药水 ×2（战役书 §4 SL-1；TP2 引导脚本承接）
+	# 序章带入（叙事既定）：补给药水 ×2（战役书 §4 SL-1；items.json source 登记）
 	board.give_item("heal_potion", 2,
 		{"event_id": stream.tail(), "node_id": "N1-1", "pack_id": "campaign01"})
-	_enter_encounter()
+	_present_node()
 
-func _walk_to_battle_node() -> void:
-	var guard := 0
-	while graph.current_id != BATTLE_NODE and not graph.is_at_ending() and guard < 30:
-		guard += 1
-		var edge := _pick_scripted_edge()
-		if edge.is_empty():
-			push_warning("[main] 脚本路径在 %s 中断" % graph.current_id)
-			break
-		if str(edge.get("type", "")) == "check":
-			graph.resolve_check(edge, true)
-		else:
-			graph.take_edge(edge)
+# ---------------------------------------------------------------- 节点流程（故事图驱动；UI 只消费 StoryVM + 事件流）
 
-## 沿测试同款主线择优（检定恒成功；hub 先买潮汐表；邀约选誊写庭）。
-func _pick_scripted_edge() -> Dictionary:
-	var edges: Array = graph.available_edges()
-	var e := _edge_to(edges, BATTLE_NODE)
-	if not e.is_empty():
-		return e
-	for target: String in ["N0-2", "N0-4", "N1-1", "N1-3", "N1-4", "N1-8", "N2S-1"]:
-		e = _edge_to(edges, target)
-		if not e.is_empty():
-			return e
-	for ev: Variant in edges: # hub：优先给物边（N1-1 买半页潮汐表，战役书 §8）
-		for fx: Variant in (ev as Dictionary).get("effects", []):
-			if (fx as Dictionary).has("give_item"):
-				return ev
-	return edges[0] if not edges.is_empty() else {}
+## 呈现当前节点：battle → 整备/遭遇；出切片范围/结局 → 切片结算；其余 → 双壳故事态。
+func _present_node() -> void:
+	if graph.is_at_ending() or not SLICE_ACTS.has(str(graph.current().get("act", ""))):
+		_end_slice()
+		return
+	if str(graph.current().get("type", "")) == "battle":
+		_enter_encounter()
+		return
+	var vm := StoryVM.build(graph, board, pack)
+	_ensure_story_shell()
+	_story_show(vm)
 
-func _edge_to(edges: Array, to: String) -> Dictionary:
-	for ev: Variant in edges:
-		if str((ev as Dictionary).get("to", "")) == to:
-			return ev
-	return {}
+func _story_show(vm: Dictionary) -> void:
+	if shell is EncounterPortrait:
+		(shell as EncounterPortrait).show_story(vm)
+	elif shell is EncounterLandscape:
+		(shell as EncounterLandscape).show_story(vm)
+
+## 故事壳就位：实例化/复用同一壳（09 §8 一局一壳），绑定故事回调（唯一指令通道）。
+func _ensure_story_shell() -> void:
+	if shell == null:
+		shell = (load(SHELL_SCENES[_mode]) as PackedScene).instantiate()
+		add_child(shell)
+		shell.set("on_save_quit", Callable(self, "_on_save_quit"))
+		if _mode == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
+			get_window().size = LANDSCAPE_SIZE
+			get_window().move_to_center()
+		router.lock_encounter(_mode) # 形态整场锁定（09 §3/§8：战役开始即定壳）
+	if current_screen != null and current_screen != shell:
+		current_screen.queue_free()
+	current_screen = shell
+	shell.visible = true
+	shell.bind_story(stream, board, pack, {"edge": _on_story_edge, "hub": _on_hub_action})
+
+## 玩家执行节点选项：check 边真实掷骰（11 §3，check.roll 事件驱动两级演出 09 §6）；
+## dialog 选项回复进日志；边效果/on_enter 写板由 StoryGraph 落（07 §1 溯源）。
+func _on_story_edge(idx: int) -> void:
+	var edges := graph.available_edges()
+	if idx < 0 or idx >= edges.size():
+		return
+	var edge: Dictionary = edges[idx]
+	if str(graph.current().get("type", "")) == "dialog":
+		stream.emit(EventTypes.LOG, {"msg": "【%s】%s" % [str(graph.current().get("title", "")),
+			str(edge.get("label", TextsZh.STORY_CONTINUE))]}, &"core", graph.current_id)
+	if str(edge.get("type", "")) == "check":
+		var res := graph.roll_check(edge)
+		await get_tree().create_timer(2.3 if bool(res.get("key", false)) else 0.8).timeout # 等演出落定
+	else:
+		graph.take_edge(edge)
+	_present_node()
+
+## Hub 动作（战役书 §4 N1-1）：商店购买 / 休整 / 传闻；写板全部在 core，本层只转发与刷新。
+func _on_hub_action(action: String, arg: String) -> void:
+	match action:
+		"buy":
+			if not graph.hub_buy(arg):
+				stream.emit(EventTypes.LOG, {"msg": TextsZh.HUB_NO_GOLD, "toast": true}, &"core", graph.current_id)
+			var vm := StoryVM.build(graph, board, pack)
+			_story_show(vm)
+			shell.sync_hub_popup(vm)
+		"rest":
+			graph.hub_rest()
+			var vm2 := StoryVM.build(graph, board, pack)
+			_story_show(vm2)
+			shell.sync_hub_popup(vm2)
+		"rumor":
+			var rumors: Array = graph.hub_rumors()
+			var msg := StoryVM.rumor_text(rumors[0]) if not rumors.is_empty() else TextsZh.HUB_RUMOR_NONE
+			stream.emit(EventTypes.LOG, {"msg": msg, "toast": true}, &"core", graph.current_id)
+
+## 切片终点（出 SL-0/SL-1 范围或结局节点）：结算快照落盘（07 §4.2 主快照点）+ ⑨结算屏。
+func _end_slice() -> void:
+	_in_encounter = false
+	var gained := _grant_growth() # 11 §6：结算界面 = 成长加点时机（04 §⑨）
+	_save("settle")
+	_encounter_tail = _campaign_tail # 汇总区间 = 整个切片（逐项念给玩家听，04 §⑨）
+	_encounter_result = &"slice"
+	_show_settle(gained)
 
 # ---------------------------------------------------------------- 整备（09 §9.1；tech/02 §2.4）
 
 func _enter_encounter() -> void:
-	var cfg := Loadout.resolve_config(pack, BATTLE_NODE)
+	var node := graph.current()
+	_encounter_id = str(node.get("encounter", graph.current_id))
+	_battle_title = str(node.get("title", _encounter_id))
+	var cfg := Loadout.resolve_config(pack, _encounter_id)
 	if not cfg.is_empty():
 		cfg = cfg.duplicate() # 2→3 级技能槽 +1（11 §6；槽位基值仍读配置，tech/02 §2.4）
 		cfg["skill_slots"] = int(cfg["skill_slots"]) \
@@ -193,7 +245,7 @@ func _enter_encounter() -> void:
 	_swap(screen)
 	screen.bind(cfg, _loadout_candidates())
 	screen.confirmed.connect(_on_loadout_confirmed.bind(cfg))
-	screen.back_requested.connect(_show_entry)
+	screen.back_requested.connect(_present_node) # 整备可退回节点（04 §5 有退路）
 
 ## 整备备选 = 玩家模板已习得技能 ∩ skills.json（tech/04 §7）；道具 = 背包含 use 块条目（tech/04 §4）。
 func _loadout_candidates() -> Dictionary:
@@ -250,26 +302,21 @@ func _begin_encounter(selection: Dictionary) -> void:
 	_encounter_result = &""
 	var sm := EncounterSM.new(board, stream, rng, pack["pack_id"])
 	var agent := AutoAgent.new()
-	shell = (load(SHELL_SCENES[_mode]) as PackedScene).instantiate()
-	add_child(shell)
-	if current_screen != null:
+	_ensure_story_shell() # 复用故事壳（09 §8：一局一壳；bind 内切战斗布局）
+	if current_screen != null and current_screen != shell:
 		current_screen.queue_free()
 	current_screen = shell
-	if _mode == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
-		get_window().size = LANDSCAPE_SIZE
-		get_window().move_to_center()
+	shell.visible = true
 	if shell is EncounterPortrait:
 		(shell as EncounterPortrait).bind(sm, agent)
-		(shell as EncounterPortrait).set_rooms(["N1-1", "N1-3", "N1-7", "N1-8"], 2,
-			{"N1-1": "自由市广场", "N1-3": "见证撤销", "N1-7": "午夜墨雨", "N1-8": "三份邀约"})
 	else:
 		(shell as EncounterLandscape).bind(sm, agent)
 	shell.set("on_save_quit", Callable(self, "_on_save_quit"))
-	sm.enter(BATTLE_NODE)
 	router.lock_encounter(_mode) # 遭遇开始即壳锁定（09 §8）
+	var nid := graph.current_id
+	sm.enter(nid)
 	sm.transition(EncounterSM.S_EXPLORE)
-	stream.emit(EventTypes.LOG, {"msg": "午夜，墨色的雨。雨点落地成字，字扭曲着立起——墨魈朝着广场上唯一的「空白」涌来。"},
-		&"core", BATTLE_NODE)
+	stream.emit(EventTypes.LOG, {"msg": str(graph.current().get("summary", ""))}, &"core", nid)
 	await get_tree().create_timer(1.0).timeout
 	if sm.state == EncounterSM.S_EXPLORE:
 		var def := _battle_def(selection)
@@ -280,23 +327,30 @@ func _begin_encounter(selection: Dictionary) -> void:
 ## 战斗定义 = pack 资源表组装（tech/04 §1~§4 / tech/02 §6；M2：TP2 硬编码留白落位）。
 ## 引用缺失/公式失败 = 包数据缺陷：fail-fast 报错并返回空字典（不静默降级、不进战斗）。
 func _battle_def(selection: Dictionary) -> Dictionary:
-	var res := BattleDef.assemble(pack, BATTLE_NODE, selection, board)
+	var enc := _encounter_id if not _encounter_id.is_empty() else graph.current_id
+	var res := BattleDef.assemble(pack, enc, selection, board)
 	if not bool(res["ok"]):
 		push_error("[main] 战斗定义组装失败（campaign01/%s）：%s"
-			% [BATTLE_NODE, ";".join(res["errors"] as Array)])
+			% [enc, ";".join(res["errors"] as Array)])
 		return {}
 	return res["def"]
 
-## ☰「保存并回主屏」（09 §7）：遭遇进行中不存档，回到遭遇进入前快照（本局重打）。
+## ☰「保存并回主屏」（09 §7）：遭遇进行中 = 恢复遭遇进入前快照（本局重打，不存档）；
+## 故事态（遭遇外）= 进度随图快照落档后回主屏（07 §4.2 遭遇外时机）。
 func _on_save_quit() -> void:
-	if shell != null:
-		shell.queue_free()
-		shell = null
-	SaveSystem.apply(_encounter_snapshot, board, rng) # 恢复遭遇进入前的世界状态（战斗不写板，RNG 归位）
-	graph.deserialize(_encounter_snapshot["meta"].get("graph", {}))
-	stream.emit(EventTypes.LOG, {"msg": "你合上抄本。这一页的雨，被轻轻翻回了开头。"}, &"core")
-	_in_encounter = false
-	_save("quit_home") # 恢复后的世界状态落档（遭遇外时机，07 §4.2）
+	if _in_encounter:
+		if shell != null:
+			shell.queue_free()
+			shell = null
+		SaveSystem.apply(_encounter_snapshot, board, rng) # 恢复遭遇进入前的世界状态（战斗不写板，RNG 归位）
+		graph.deserialize(_encounter_snapshot["meta"].get("graph", {}))
+		stream.emit(EventTypes.LOG, {"msg": "你合上抄本。这一页的雨，被轻轻翻回了开头。"}, &"core")
+		_in_encounter = false
+		_save("quit_home") # 恢复后的世界状态落档（遭遇外时机，07 §4.2）
+		_show_home()
+		return
+	_save("quit_home") # 故事态：节点进度在 meta.graph 内随快照落档
+	stream.emit(EventTypes.LOG, {"msg": "你合上抄本。这一程就讲到这里。"}, &"core")
 	_show_home()
 
 # ---------------------------------------------------------------- 结算（04 §⑨；07 §4.2 主快照点）
@@ -311,14 +365,18 @@ func _show_settle_deferred() -> void:
 	_in_encounter = false
 	if _encounter_result == &"victory":
 		_battles_won += 1
-		var gained := _grant_growth() # 成长：XP 换算属性点（原型规则）
-		_save("settle") # 遭遇结算完成 = 主快照点（07 §4.2）
-		_show_settle(gained)
+		# 战斗是图内节点：胜利后走战后边回图（tech/02 §3 节点边结算）
+		var edges := graph.available_edges()
+		if edges.is_empty():
+			_end_slice()
+			return
+		graph.take_edge(edges[0])
+		_present_node()
 	else:
 		_save("settle") # 失败即分支：结算仍是元循环落笔（09 §7 失败不读档）
 		_show_settle(0)
 
-## 汇总区间 = 遭遇开始锚点之后的事件（04 §⑨：逐项念给玩家听）。
+## 汇总区间 = 锚点之后的事件（04 §⑨：逐项念给玩家听）。
 func _show_settle(attr_gained: int) -> void:
 	var lines: Array[String] = []
 	var xp := 0
@@ -332,8 +390,9 @@ func _show_settle(attr_gained: int) -> void:
 					int(p.get("count", 1))])
 			EventTypes.FLAG_WRITE:
 				var fkey := str(p.get("key", ""))
-				# 内部簿记键（成长/模式选择）不念给玩家（04 §⑨ 呈现语义：旗标变化摘要）
+				# 内部簿记键（成长/模式选择/金币/HP）不念给玩家（04 §⑨ 呈现语义：旗标变化摘要）
 				if fkey.begins_with("campaign01.attr") or fkey == "campaign01.xp_total" \
+						or fkey == "campaign01.gold" or fkey.begins_with("campaign01.hp.") \
 						or fkey.begins_with("global.mode_choice."):
 					continue
 				lines.append("旗标：%s" % fkey)
@@ -356,7 +415,8 @@ func _show_settle(attr_gained: int) -> void:
 func _bind_settle() -> void:
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
 	_swap(screen)
-	screen.bind({"title": "午夜墨雨", "result": String(_encounter_result), "lines": _settle_lines,
+	screen.bind({"title": TextsZh.STORY_SLICE_END if _encounter_result == &"slice" else _battle_title,
+		"result": String(_encounter_result), "lines": _settle_lines,
 		"saved": true, "attr_points": int(board.read("campaign01.attr_points", 0)),
 		"attrs": board.read("campaign01.attrs", {})})
 	screen.allocate.connect(_on_settle_allocate)
@@ -380,13 +440,13 @@ func _grant_growth() -> int:
 	var xp_total := 0
 	for ev: Dictionary in stream.query_by_type(EventTypes.XP_GAIN):
 		xp_total += int(ev["payload"].get("amount", 0))
-	var prov := {"event_id": stream.tail(), "node_id": BATTLE_NODE, "pack_id": "campaign01"}
+	var prov := {"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"}
 	board.write("campaign01.xp_total", xp_total, prov)
 	var level := LightV1.level_for_xp(xp_total)
 	if level > int(board.read("campaign01.level", 1)):
 		board.write("campaign01.level", level, prov)
 		stream.emit(EventTypes.LOG, {"msg": "等级提升至 Lv.%d：HP+%d，属性点+%d（11 §6）" % [level,
-			LightV1.hp_bonus_for_xp(xp_total), LightV1.attr_points_for_xp(xp_total)]}, &"core", BATTLE_NODE)
+			LightV1.hp_bonus_for_xp(xp_total), LightV1.attr_points_for_xp(xp_total)]}, &"core", graph.current_id)
 	var earned := LightV1.attr_points_for_xp(xp_total)
 	var granted := int(board.read("campaign01.attr_granted", 0))
 	var gained := maxi(0, earned - granted)
@@ -482,40 +542,49 @@ func _setup_cjk_font() -> void:
 				return
 	push_warning("[main] 未找到系统中文字体，界面文字可能无法渲染")
 
-# ---------------------------------------------------------------- 截图模式（TP4 证据 /tmp，不提交）
+# ---------------------------------------------------------------- 截图模式（节点流程证据 /tmp，不提交）
 
-func _run_shots_tp4() -> void:
+## 竖屏：scene/check/hub/dialog 四张；横屏（--mode=space）：叙事态一张。
+func _run_shots_m2n() -> void:
 	await get_tree().create_timer(0.8).timeout
-	await _shot("/tmp/tp4_home.png")
 	_on_home_navigate(&"entry")
-	await get_tree().create_timer(0.4).timeout
-	await _shot("/tmp/tp4_entry.png")
+	await get_tree().create_timer(0.3).timeout
 	var entry := current_screen as ScreenEntry
-	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.pick_mode(ShellRouter.MODE_SPACE if _cli_mode == ShellRouter.MODE_SPACE else ShellRouter.MODE_TIME)
 	entry.start_requested.emit()
-	await get_tree().create_timer(0.4).timeout
-	var lo := current_screen as ScreenLoadout
-	lo._toggle_skill("inkbolt")
-	lo._toggle_skill("inkshield")
-	lo._toggle_item("heal_potion")
-	await get_tree().create_timer(0.2).timeout
-	await _shot("/tmp/tp4_loadout.png")
-	lo._on_confirm()
-	await get_tree().create_timer(2.0).timeout # 进场延时 + 战斗开始
-	# 托管打完（2× 节拍，09 §9.3）
-	(shell as EncounterPortrait).set_speed(2)
-	(shell as EncounterPortrait).set_auto(true)
-	var guard := 0
-	while _in_encounter and guard < 300:
-		guard += 1
-		await get_tree().create_timer(0.2).timeout
 	await get_tree().create_timer(0.5).timeout
-	await _shot("/tmp/tp4_settle.png")
-	var st := current_screen as ScreenSettle
-	st.go_history.emit()
-	await get_tree().create_timer(0.4).timeout
-	await _shot("/tmp/tp4_history.png")
-	print("[shots] 战斗结果：", _encounter_result, " 胜场：", _battles_won)
+	if _mode == ShellRouter.MODE_SPACE:
+		await _shot("/tmp/m2n_landscape_story.png") # 横屏叙事态（N0-1，04 §③ 中央主视野）
+		print("[shots] 横屏叙事态完成")
+		get_tree().quit()
+		return
+	await _shot("/tmp/m2n_scene.png") # N0-1 scene
+	_on_story_edge(0) # → N0-2 检定房
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/m2n_check.png")
+	_on_story_edge(0) # 掷检定（截图种子成功路）
+	await get_tree().create_timer(1.2).timeout # 快掷落定 + 节点呈现
+	_on_story_edge(0) # N0-3a → N0-4
+	await get_tree().create_timer(0.3).timeout
+	_on_story_edge(0) # N0-4 → N1-1 hub
+	await get_tree().create_timer(0.3).timeout
+	(shell as EncounterPortrait).hub_popup.open(graph.get_gold(), graph.hub_stock()) # 商店半屏弹层（04 §3.3）
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/m2n_hub.png")
+	(shell as EncounterPortrait).hub_popup.hide()
+	# N1-1 → 前往褪色现场 N1-2（按文案找边：购买边数量随货单变化）
+	var edges := graph.available_edges()
+	for i: int in edges.size():
+		if str((edges[i] as Dictionary).get("label", "")).contains("褪色现场"):
+			_on_story_edge(i)
+			break
+	await get_tree().create_timer(0.3).timeout
+	_on_story_edge(0) # N1-2 掷检定（成功 → N1-3）
+	await get_tree().create_timer(1.2).timeout
+	_on_story_edge(0) # N1-3 → 接触誊写庭 N1-4
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/m2n_dialog.png")
+	print("[shots] 竖屏四张完成：scene/check/hub/dialog")
 	get_tree().quit()
 
 func _shot(path: String) -> void:

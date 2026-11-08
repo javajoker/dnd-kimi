@@ -59,7 +59,8 @@ func _build() -> void:
 ## summary = {title, result, lines[], saved, attr_points, attrs{}}。
 func bind(summary: Dictionary) -> void:
 	var result_name: String = {"victory": TextsZh.SETTLE_VICTORY, "defeat": TextsZh.SETTLE_DEFEAT,
-		"retreat": TextsZh.SETTLE_RETREAT}.get(str(summary.get("result", "")), str(summary.get("result", "")))
+		"retreat": TextsZh.SETTLE_RETREAT, "slice": TextsZh.SETTLE_SLICE}.get(
+			str(summary.get("result", "")), str(summary.get("result", "")))
 	var lines: Array[String] = ["【%s】%s —— %s" % [TextsZh.SETTLE_TITLE,
 		str(summary.get("title", "")), result_name], ""]
 	lines.append_array(summary.get("lines", []))

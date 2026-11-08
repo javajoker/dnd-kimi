@@ -549,6 +549,15 @@ func _finish(result: StringName) -> void:
 		if _xp > 0:
 			stream.emit(EventTypes.XP_GAIN, {"amount": _xp, "provenance": prov.duplicate(true)},
 				&"core", node_id)
+	# 11 §7.1：遭遇结束时 HP 写状态板（<ns>.hp.<char_id>），下次遭遇以此开局；
+	# 倒地同伴战后 1 HP 起身（上方 _revive 已落 hp=1）；非死亡单位至少 1 HP 落板（团灭=失败路分支，
+	# 不做永久团灭锁死），死亡单位写 0（组装层按 1 HP 抬升，11 §7.1 落地裁决见交付说明）。
+	for id: String in _order:
+		var u: Dictionary = _units[id]
+		if u["side"] == &"party":
+			var char_id := str(u.get("ref", u["id"]))
+			var hp_write := 0 if bool(u["dead"]) else maxi(int(u["hp"]), 1)
+			board.write("%s.hp.%s" % [pack_id, char_id], hp_write, prov)
 	_set_state(S_SETTLE)
 	stream.emit(EventTypes.LOG, {"msg": "遭遇结束：%s（%d 回合）" % [result, _round],
 		"result": result, "xp": _xp, "loot": _loot.duplicate(true)}, &"core", node_id)

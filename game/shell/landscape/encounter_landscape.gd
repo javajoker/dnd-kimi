@@ -39,6 +39,22 @@ var speed := 1
 var log_expanded := false
 ## ☰「保存并回主屏」回调（09 §7：回到遭遇进入前快照，由 main 流程控制器接管；未接管时退出进程）。
 var on_save_quit: Callable = Callable()
+# ---- 节点流程故事态（04 §③：中央主视野渲染叙事/选项，非战斗态；内容源 StoryVM）----
+var story_cb := {} # {"edge": Callable(idx), "hub": Callable(action, arg)}
+var _stream: EventStream = null
+var _board: Board = null
+var _pack: Dictionary = {}
+var _story := false
+var _vm: Dictionary = {}
+var story_panel: VBoxContainer
+var story_title: Label
+var story_text: RichTextLabel
+var clock_chip: Button
+var quest_chip: Label
+var flash_label: Label
+var wheel_title: Label
+var hub_popup: HubPopup
+var info_popup: InfoPopup
 
 # ---- 节点（_ready 构建）----
 var top_band: PanelContainer
@@ -87,7 +103,7 @@ func _ready() -> void:
 # ---------------------------------------------------------------- UI 构建（五区，09 §4）
 
 func _build_ui() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# 上缘 8%：队伍状态条 + 先攻顺序条（战斗时展开）+ ☰（右端）
 	top_band = PanelContainer.new()
 	top_band.name = "TopBand"
@@ -96,6 +112,13 @@ func _build_ui() -> void:
 	var top_h := HBoxContainer.new()
 	top_h.add_theme_constant_override("separation", 8)
 	top_band.add_child(top_h)
+	clock_chip = Button.new() # 时间钟总览格：按下弹时间边预告（04 §3.1 例外交互）
+	clock_chip.visible = false
+	clock_chip.pressed.connect(_open_forecast)
+	top_h.add_child(clock_chip)
+	quest_chip = Label.new() # 事件中心角标（04 §⑤）
+	quest_chip.visible = false
+	top_h.add_child(quest_chip)
 	party_chips = HBoxContainer.new()
 	top_h.add_child(party_chips)
 	init_bar = HBoxContainer.new()
@@ -126,7 +149,7 @@ func _build_ui() -> void:
 	_set_rect(left_wheel, 0.0, RATIO_TOP, RATIO_LEFT, 1.0 - RATIO_BOTTOM)
 	var wheel_v := VBoxContainer.new()
 	left_wheel.add_child(wheel_v)
-	var wheel_title := Label.new()
+	wheel_title = Label.new()
 	wheel_title.text = TextsZh.ZONE_WHEEL
 	wheel_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wheel_v.add_child(wheel_title)
@@ -150,6 +173,22 @@ func _build_ui() -> void:
 	grid.add_theme_constant_override("v_separation", 2)
 	center.add_child(grid)
 	center_map.resized.connect(_layout_grid)
+	# 故事态叙事面板（中央主视野，非战斗态；04 §③ 中央 60%）
+	story_panel = VBoxContainer.new()
+	story_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	story_panel.add_theme_constant_override("separation", 10)
+	story_panel.visible = false
+	center_map.add_child(story_panel)
+	story_title = Label.new()
+	story_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	story_title.add_theme_font_size_override("font_size", 22)
+	story_panel.add_child(story_title)
+	story_text = RichTextLabel.new()
+	story_text.bbcode_enabled = false
+	story_text.scroll_following = false
+	story_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	story_text.add_theme_font_size_override("normal_font_size", 18)
+	story_panel.add_child(story_text)
 	# 右栏 12%：骰子盘
 	right_dice = PanelContainer.new()
 	right_dice.name = "RightDice"
@@ -196,13 +235,13 @@ func _build_ui() -> void:
 	key_overlay = ColorRect.new()
 	key_overlay.name = "KeyOverlay"
 	key_overlay.color = Color(0.02, 0.02, 0.08, 0.96)
-	key_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	key_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	key_overlay.visible = false
 	key_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	key_overlay.gui_input.connect(_on_key_overlay_input)
 	add_child(key_overlay)
 	var key_v := VBoxContainer.new()
-	key_v.set_anchors_preset(Control.PRESET_FULL_RECT)
+	key_v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	key_v.alignment = BoxContainer.ALIGNMENT_CENTER
 	key_overlay.add_child(key_v)
 	key_dice_label = Label.new()
@@ -218,6 +257,25 @@ func _build_ui() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	key_v.add_child(hint)
+	# 状态反馈 toast（任务书 §3：旗标/声望/道具/事件，事件流驱动，与竖屏同一文案源 StoryVM）
+	flash_label = Label.new()
+	flash_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	flash_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	flash_label.add_theme_font_size_override("font_size", 18)
+	_set_rect(flash_label, 0.25, RATIO_TOP + 0.01, 0.75, RATIO_TOP + 0.07)
+	flash_label.modulate = Color(1, 1, 1, 0)
+	add_child(flash_label)
+	# 半屏弹层组件（04 §3.3，双壳共用）：hub 商店 / 时间边预告
+	hub_popup = HubPopup.new()
+	hub_popup.buy_requested.connect(func(item_id: String) -> void:
+		if story_cb.has("hub"):
+			story_cb["hub"].call("buy", item_id))
+	hub_popup.rest_requested.connect(func() -> void:
+		if story_cb.has("hub"):
+			story_cb["hub"].call("rest", ""))
+	add_child(hub_popup)
+	info_popup = InfoPopup.new()
+	add_child(info_popup)
 	_build_menu()
 	_layout_grid()
 
@@ -367,7 +425,7 @@ func _refresh_grid() -> void:
 		token.text = "%s\n%d/%d" % [str(u["name"]), int(u["hp"]), int(u["max_hp"])]
 		token.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		token.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		token.set_anchors_preset(Control.PRESET_FULL_RECT)
+		token.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		token.add_theme_color_override("font_color", Color.WHITE)
 		cell.add_child(token)
 
@@ -376,19 +434,52 @@ func _refresh_grid() -> void:
 func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	sm = p_sm
 	agent = p_agent
-	sm.stream.subscribe(_on_event)
+	_stream = sm.stream
+	_stream.subscribe(_on_event)
+	show_combat_layout() # 故事态 → 战斗态：同一壳内布局切换
+	_refresh_all()
+
+## 故事态绑定（节点流程）：内容源 StoryVM + 事件流；不含 EncounterSM。
+func bind_story(p_stream: EventStream, p_board: Board, p_pack: Dictionary, callbacks: Dictionary) -> void:
+	sm = null
+	_stream = p_stream
+	_board = p_board
+	_pack = p_pack
+	story_cb = callbacks
+	_stream.subscribe(_on_event)
+	_story = true
 
 ## 离场退订：壳随界面切换销毁时不得残留事件订阅（否则事件流持有失效 Callable）。
 func _exit_tree() -> void:
-	if sm != null:
-		sm.stream.unsubscribe(_on_event)
+	if _stream != null:
+		_stream.unsubscribe(_on_event)
+		_stream = null
 	_refresh_all()
 
 func _on_event(ev: Dictionary) -> void:
 	var line := BattleText.event_log_text(ev, _unit_name) # 日志文案两壳共享（battle_text.gd）
 	if line != "":
 		_log_line(line)
-	match StringName(ev["type"]):
+	var t := StringName(ev["type"])
+	# 掷骰两级演出与战斗/故事同一事件源（09 §6）
+	if t == EventTypes.CHECK_ROLL:
+		var p: Dictionary = ev["payload"]
+		if bool(p.get("key", false)):
+			var q := p.duplicate(true)
+			q["event_id"] = ev["id"]
+			_play_key_roll(q) # 关键判定：全屏演出（09 §6）
+		else:
+			_tray_roll(p)
+	if _story:
+		# 状态反馈（任务书 §3）：toast + 时钟角标，全经事件流驱动
+		var toast := StoryVM.toast_text(ev, _pack)
+		if toast != "":
+			_flash(toast)
+		if t == EventTypes.CLOCK_TICK and _board != null:
+			_vm["clock"] = _board.get_doom_clock()
+			_refresh_story_status()
+		return
+	match t:
 		EventTypes.STATE_ENTERED:
 			init_bar.visible = StringName(ev["payload"]["state"]) == EncounterSM.S_COMBAT
 		EventTypes.COMBAT_START:
@@ -398,17 +489,115 @@ func _on_event(ev: Dictionary) -> void:
 				round_label.text = "第 %d 轮" % int(ev["payload"]["round"])
 		EventTypes.BATTLE_ATTACK:
 			_tray_roll(ev["payload"])
-		EventTypes.CHECK_ROLL:
-			var p: Dictionary = ev["payload"]
-			if bool(p.get("key", false)):
-				var q := p.duplicate(true)
-				q["event_id"] = ev["id"]
-				_play_key_roll(q) # 关键判定：全屏演出（09 §6）
-			else:
-				_tray_roll(p)
 		EventTypes.COMBAT_END:
 			set_auto(false) # 遭遇结束托管自动停止（09 §9.3）
 	_refresh_all()
+
+# ---------------------------------------------------------------- 故事态（中央主视野叙事/选项，非战斗态）
+
+## 呈现当前节点：中央主视野叙事文本（04 §③ 中央 60%）、左栏选项列表（与竖屏操作台同源 vm）。
+func show_story(vm: Dictionary) -> void:
+	_vm = vm
+	_story = true
+	clock_chip.visible = true
+	quest_chip.visible = true
+	round_label.visible = false
+	auto_button.visible = false
+	speed_button.visible = false
+	init_bar.visible = false
+	grid.visible = false
+	story_panel.visible = true
+	story_title.text = str(vm["title"])
+	story_text.text = str(vm["text"])
+	wheel_title.text = TextsZh.TAB_ACTION
+	_refresh_story_status()
+	_refresh_story_options()
+
+## 战斗布局恢复（bind 进入遭遇时调用）。
+func show_combat_layout() -> void:
+	_story = false
+	story_panel.visible = false
+	grid.visible = true
+	clock_chip.visible = false
+	quest_chip.visible = false
+	round_label.visible = true
+	auto_button.visible = true
+	speed_button.visible = true
+	wheel_title.text = TextsZh.ZONE_WHEEL
+
+func _refresh_story_status() -> void:
+	clock_chip.text = TextsZh.STORY_CLOCK % int(_vm.get("clock", 0))
+	var fc: Dictionary = _vm.get("forecast", {})
+	if not fc.is_empty():
+		clock_chip.text += " " + TextsZh.STORY_CLOCK_NEXT % [str(fc.get("name", "")), int(fc.get("at", 0))]
+	quest_chip.text = TextsZh.STORY_QUEST_BADGE % int(_vm.get("quest_badge", 0))
+	for child: Node in party_chips.get_children():
+		child.queue_free()
+	for p: Variant in _vm.get("party", []):
+		var chip := Label.new()
+		chip.text = " %s %d/%d " % [str((p as Dictionary)["name"]), int((p as Dictionary)["hp"]),
+			int((p as Dictionary)["max_hp"])]
+		party_chips.add_child(chip)
+
+## 左栏选项列表：与竖屏操作台同一 vm.edges（godot-dev §7 禁止复制过滤逻辑）。
+func _refresh_story_options() -> void:
+	for child: Node in wheel_box.get_children():
+		child.queue_free()
+	wheel_actor.text = ""
+	var idx := 0
+	for e: Variant in _vm.get("edges", []):
+		var b := Button.new()
+		b.text = str((e as Dictionary)["label"])
+		var i := idx
+		b.pressed.connect(func() -> void:
+			if story_cb.has("edge"):
+				story_cb["edge"].call(i))
+		wheel_box.add_child(b)
+		idx += 1
+	if str(_vm.get("type", "")) == "hub": # hub 三设施（战役书 §4 N1-1）
+		_add_story_chip(TextsZh.HUB_SHOP, func() -> void: hub_popup.open(
+			int(_vm.get("gold", 0)), _vm.get("stock", [])))
+		_add_story_chip(TextsZh.HUB_REST, func() -> void:
+			if story_cb.has("hub"):
+				story_cb["hub"].call("rest", ""))
+		_add_story_chip(TextsZh.HUB_RUMOR, func() -> void:
+			if story_cb.has("hub"):
+				story_cb["hub"].call("rumor", ""))
+
+func _add_story_chip(label: String, on_press: Callable) -> void:
+	var b := Button.new()
+	b.text = label
+	b.pressed.connect(on_press)
+	wheel_box.add_child(b)
+
+## 购买/休整后由 main 同步弹层货单与金币。
+func sync_hub_popup(vm: Dictionary) -> void:
+	if hub_popup.visible:
+		hub_popup.bind(int(vm.get("gold", 0)), vm.get("stock", []))
+
+## 时间钟弹层：时间边逼近事件预告（04 §3.1 例外交互）。
+func _open_forecast() -> void:
+	var lines: Array = []
+	for f: Variant in _vm.get("forecasts", []):
+		lines.append("%s —— 时钟 %d 格触发（%s）" % [str((f as Dictionary).get("name", "")),
+			int((f as Dictionary).get("at", 0)), str((f as Dictionary).get("objective", ""))])
+	if lines.is_empty():
+		lines.append(TextsZh.STORY_FORECAST_EMPTY)
+	info_popup.show_info(TextsZh.STORY_FORECAST_TITLE, lines)
+
+func _flash(text: String) -> void:
+	flash_label.text = text
+	flash_label.modulate = Color(1, 1, 1, 1)
+	var tw := create_tween()
+	tw.tween_property(flash_label, "modulate:a", 0.0, 1.6)
+
+## 测试探针：当前故事选项按钮文案。
+func story_option_texts() -> Array:
+	var out: Array = []
+	for child: Node in wheel_box.get_children():
+		if child is Button:
+			out.append((child as Button).text)
+	return out
 
 # ---------------------------------------------------------------- 行动轮盘（左栏，与竖屏快捷栏同一指令集）
 
@@ -567,6 +756,8 @@ func _log_line(text: String) -> void:
 # ---------------------------------------------------------------- 刷新（事件流 → UI 更新链路）
 
 func _refresh_all() -> void:
+	if _story:
+		return # 故事态由 show_story/_refresh_story_status 驱动
 	if sm == null:
 		return
 	_refresh_top()
