@@ -80,6 +80,7 @@ var key_overlay: ColorRect
 var key_dice_label: Label
 var dice3d: Dice3D                   # 关键判定 3D 物理演出层（14 清单 #2，与竖屏同一事件源）
 var juice: JuiceLayer                # 打击感三件套 + 屏幕震动（14 清单 #3/#4，与竖屏同一组件/配置源）
+var camera: BattleCamera             # 战斗跟随镜头与关键推拉（14 清单 #8，与竖屏同一组件/参数源）
 var shake_button: Button             # ☰ 菜单内震动开关（14 #4：UI 偏好不写状态板，12 §5 同机制）
 var audio_settings_path := UiSettings.PATH # ☰ 音量三档滑条设置路径（14 #5；测试可注入隔离文件）
 var key_result_label: Label
@@ -296,6 +297,21 @@ func _build_ui() -> void:
 	juice.unit_node_of = func(uid: String) -> Control: return _find_unit_node(uid)
 	juice.shake_target = self # 屏幕震动 = 整壳位移（呈现层，不进事件流）
 	add_child(juice)
+	# 战斗跟随镜头（14 清单 #8，与竖屏同一 BattleCamera/参数源）：目标 = 战术格，横屏战场平移对焦
+	# （04 §④.4 智能镜头横屏对应）；可视区/锚点查询壳收口，与 JuiceLayer 同一套格位查询
+	camera = BattleCamera.new()
+	camera.name = "BattleCamera"
+	add_child(camera)
+	camera.setup(grid, func() -> Rect2: return center_map.get_global_rect(),
+		func(uid: String) -> Vector2:
+			var cell: Vector2i = unit_cell(uid)
+			if cell.x < 0 or _cells.is_empty():
+				return center_map.get_global_rect().get_center()
+			return _cells[cell.y * GRID_COLS + cell.x].get_global_rect().get_center(),
+		false)
+	camera.on_resume = func() -> void:
+		_zoom = 1.0 # 回合末回弹跟随：缩放簿记归位（缩放本体由镜头回弹 tween 归位）
+		_zoom0 = 1.0
 	# 半屏弹层组件（04 §3.3，双壳共用）：hub 商店 / 时间边预告
 	hub_popup = HubPopup.new()
 	hub_popup.buy_requested.connect(func(item_id: String) -> void:
@@ -657,9 +673,11 @@ func _on_gesture_two_finger_tap(pos: Vector2) -> void:
 			idx += 1
 
 ## 捏合 = 战术格缩放 0.7~1.6（12 §2.1：8×5 全景 ↔ 局部跟随），横屏持续生效。
+## 手动缩放会话中镜头让位（14 #8）：松手不解除让位，回合末 turn.start 触发回弹跟随。
 func _on_gesture_pinch(ratio: float, center: Vector2) -> void:
 	if not _in(center_map, center):
 		return
+	camera.begin_manual()
 	_zoom = clampf(_zoom0 * ratio, 0.7, 1.6)
 	grid.pivot_offset = grid.size * 0.5
 	grid.scale = Vector2.ONE * _zoom
@@ -679,6 +697,7 @@ func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	_stream = sm.stream
 	_stream.subscribe(_on_event)
 	juice.reset() # 新遭遇清零消散名单与计数（14 #3/#4）
+	camera.reset() # 镜头随新遭遇归零（14 #8）
 	show_combat_layout() # 故事态 → 战斗态：同一壳内布局切换
 	_refresh_all()
 
@@ -706,6 +725,8 @@ func _on_event(ev: Dictionary) -> void:
 	var t := StringName(ev["type"])
 	if juice != null:
 		juice.on_event(ev) # 打击感/震动：纯呈现消费同一事件流（14 #3/#4，与竖屏同一事件源）
+	if camera != null and not _story and sm != null:
+		camera.on_event(ev) # 跟随镜头/关键推拉：纯呈现消费同一事件流（14 #8，只在战斗态）
 	# 掷骰两级演出与战斗/故事同一事件源（09 §6）
 	if t == EventTypes.CHECK_ROLL:
 		var p: Dictionary = ev["payload"]

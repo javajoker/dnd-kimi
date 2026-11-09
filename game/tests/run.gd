@@ -79,6 +79,7 @@ func _async_shell_tests() -> void:
 	await test_character_nav()
 	await test_gap_features()
 	await test_art_pipeline()
+	await test_transition_camera()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -6296,3 +6297,268 @@ func test_art_pipeline() -> void:
 		"呼吸微光区间不变（分层细节叠加不破坏 12 §5 不闪烁铁律）")
 	hs.queue_free()
 	await process_frame
+
+# ---------------------------------------------------------------- 转场与镜头（14 清单 #8）
+# 转场器：触发与时长参数（0.2~0.3s 档）、中场换屏、幕布不吞输入、连续切换快速完成、遭遇进场滑入；
+# 战斗镜头：跟随对焦目标正确（turn.start.actor）、暴击/Boss 推拉同一事件源（不重复震屏）、
+# 捏合让位与回合末回弹跟随、事件流逐字节零变化。
+
+func test_transition_camera() -> void:
+	print("[transition_camera]")
+	# ---- 转场器参数冻结（14 #8；04 §10「各界面转场动画时长规范见 14 清单 #8」）----
+	check(UiTransition.FADE_OUT >= 0.2 and UiTransition.FADE_OUT <= 0.3,
+		"转场淡出时长 0.2~0.3s 档（14 #8 冻结）")
+	check(UiTransition.FADE_IN >= 0.2 and UiTransition.FADE_IN <= 0.3,
+		"转场淡入时长 0.2~0.3s 档（14 #8 冻结）")
+	check(UiTransition.SLIDE_PX > 0.0 and UiTransition.SLIDE_PX <= 64.0,
+		"遭遇进场上移滑入轻微（≤64px，14 #8）")
+	var tr := UiTransition.new()
+	root.add_child(tr)
+	check(tr.veil.mouse_filter == Control.MOUSE_FILTER_IGNORE,
+		"幕布不吞输入：转场期间可点（14 #8 不打断交互；12 §5 覆盖层不残留同铁律）")
+	# ---- 触发、中场换屏回调、时长记账 ----
+	var mid := [false]
+	tr.fade_through(func() -> void: mid[0] = true)
+	check(int(tr.stats["fades"]) == 1 and tr.transitioning, "转场触发登记（场次+进行中）")
+	await create_timer(UiTransition.FADE_OUT + 0.05).timeout
+	check(mid[0], "淡出完成 → 中场换屏回调执行")
+	check(tr.veil.modulate.a > 0.5, "中场幕布仍掩（淡入段进行中）")
+	await create_timer(UiTransition.FADE_IN + 0.1).timeout
+	check(tr.veil.modulate.a < 0.01 and not tr.transitioning, "淡入结束幕布归零（硬切消除）")
+	check(absf(tr.last_out - UiTransition.FADE_OUT) < 0.001
+		and absf(tr.last_in - UiTransition.FADE_IN) < 0.001, "时长记账 = 冻结参数")
+	# ---- 连续切换快速完成（不打断交互：前场中场即时结算，不叠黑场）----
+	var order: Array[String] = []
+	tr.fade_through(func() -> void: order.append("a"))
+	await create_timer(0.05).timeout
+	tr.fade_through(func() -> void: order.append("b"))
+	check(order == ["a"] and int(tr.stats["fast_forward"]) == 1,
+		"连续切换：前场中场即时结算（快速完成）")
+	await create_timer(UiTransition.FADE_OUT + UiTransition.FADE_IN + 0.15).timeout
+	check(order == ["a", "b"] and tr.veil.modulate.a < 0.01, "连续切换：终场完整播完幕布归位")
+	# ---- 遭遇进场：淡入淡出 + 轻微上移滑入 ----
+	var dummy := Control.new()
+	dummy.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	dummy.size = Vector2(200, 200)
+	root.add_child(dummy)
+	await process_frame
+	var base_y := dummy.position.y
+	tr.encounter_enter(dummy)
+	await create_timer(UiTransition.FADE_OUT + 0.05).timeout
+	check(dummy.position.y > base_y + UiTransition.SLIDE_PX * 0.5,
+		"遭遇进场：淡入段起自下方偏移（上移滑入）")
+	await create_timer(UiTransition.FADE_IN + 0.1).timeout
+	check(absf(dummy.position.y - base_y) < 0.5 and int(tr.stats["slides"]) == 1,
+		"滑入随淡入段归位（0.2~0.3s 同步）")
+	dummy.queue_free()
+	# ---- main 集成：主屏→入口经统一转场器，中场新屏现身 ----
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	var fades0 := int(m.transition.stats["fades"])
+	m._on_home_navigate(&"entry")
+	check(int(m.transition.stats["fades"]) == fades0 + 1, "主屏→入口：切换经统一转场器（14 #8）")
+	check(not (m.current_screen as Control).visible, "淡出段新屏未现身（旧屏保持可点）")
+	await create_timer(UiTransition.FADE_OUT + 0.05).timeout
+	check((m.current_screen as Control).visible, "中场换屏：新屏现身（旧屏已回收）")
+	await create_timer(UiTransition.FADE_IN + 0.1).timeout
+	m.queue_free()
+	await process_frame
+	tr.queue_free()
+
+	# ---- 战斗镜头参数冻结（14 #8）----
+	check(BattleCamera.FOCUS_TIME > 0.1 and BattleCamera.FOCUS_TIME <= 0.6,
+		"跟随对焦平滑推移时长档位（冻结）")
+	check(BattleCamera.PUNCH_IN + BattleCamera.PUNCH_OUT <= 0.5,
+		"关键推拉总量 ≤0.5s（14 #8 验收口径）")
+	check(BattleCamera.PUNCH_SCALE > 1.0 and BattleCamera.PUNCH_SCALE <= 1.3,
+		"推近倍率轻微（短暂推近再拉回）")
+
+	# ---- 竖屏：跟随对焦目标正确 + lane 只纵轴 ----
+	var pscene: PackedScene = load("res://shell/portrait/encounter_portrait.tscn")
+	var portrait: EncounterPortrait = pscene.instantiate()
+	root.add_child(portrait)
+	await process_frame
+	await process_frame
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(11), "campaign01")
+	portrait.bind(sm, AutoAgent.new())
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	await process_frame
+	var actor := sm.current_actor_id()
+	check(portrait.camera.focus_uid == actor and int(portrait.camera.stats["focus"]) >= 1,
+		"竖屏跟随：战斗开始对焦当前行动单位（04 §④.4 智能镜头）")
+	check(str(portrait.camera.last_focus.get("uid", "")) == actor, "对焦目标记账 = turn.start.actor")
+	var pan0: Vector2 = portrait.camera.last_focus.get("pan", Vector2.ONE)
+	check(absf(pan0.x) < 0.001, "竖屏 lane 滚动对焦：横轴锁定（04 §④.4 竖向战场）")
+	# 焦点切换跟随（手动发事件 = 同一事件源）
+	stream.emit(EventTypes.TURN_START, {"round": 1, "side": "party", "actor": "kelan"}, &"core", "N1-7")
+	await process_frame
+	await process_frame
+	check(portrait.camera.focus_uid == "kelan", "回合焦点切换 → 镜头平滑推移跟随新单位")
+	# ---- 暴击推近：与 Juice 同事件源（battle.attack crit），镜头只缩放不震屏 ----
+	portrait.juice.shake_override = 0 # 隔离 Juice 震动，专验镜头侧（不重复震屏口径）
+	stream.emit(EventTypes.BATTLE_ATTACK, _atk_ev("kelan", true, true, 9)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	check(int(portrait.camera.stats["punch"]) == 1, "暴击 → 镜头推近（同一 battle.attack 事件源）")
+	check(float(portrait.camera.last_punch["scale"]) == BattleCamera.PUNCH_SCALE
+		and float(portrait.camera.last_punch["in"]) + float(portrait.camera.last_punch["out"]) <= 0.5,
+		"推拉参数：推近 ×1.12、总量 ≤0.5s（14 #8）")
+	check(portrait.position == Vector2.ZERO,
+		"镜头推拉不带震屏（壳根零位移；震屏唯一源 JuiceLayer，14 #4）")
+	await create_timer(0.6).timeout
+	check((portrait.camera.target.scale - Vector2.ONE).length() < 0.01, "推近后拉回归位")
+	# ---- Boss 登场：combat.start 携 boss 单位 → 对焦 + 推近（04 §④.7 演出分级）----
+	var punches0 := int(portrait.camera.stats["punch"])
+	stream.emit(EventTypes.COMBAT_START, {"order": ["pc", "boss"], "units": {
+			"pc": {"side": &"party"}, "boss": {"side": &"enemy", "boss": true}}}, &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame # create_timer 恢复点在本帧 _process 之后：隔帧锚点需多一帧落定
+	check(int(portrait.camera.stats["punch"]) == punches0 + 1
+		and portrait.camera.focus_uid == "boss",
+		"Boss 登场：对焦 + 推近（同一 combat.start 事件源）")
+	portrait.queue_free()
+	await process_frame
+
+	# ---- 横屏：跟随对焦 + 捏合让位 + 回合末回弹跟随 ----
+	var lscene: PackedScene = load("res://shell/landscape/encounter_landscape.tscn")
+	var land: EncounterLandscape = lscene.instantiate()
+	root.add_child(land)
+	land.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land.position = Vector2.ZERO
+	land.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	await process_frame
+	var stream2 := EventStream.new()
+	var board2 := Board.new(stream2)
+	var sm2 := EncounterSM.new(board2, stream2, Rng.new(11), "campaign01")
+	land.bind(sm2, AutoAgent.new())
+	sm2.enter("N1-7")
+	sm2.transition(EncounterSM.S_EXPLORE)
+	sm2.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(land.camera.stats["focus"]) >= 1
+		and land.camera.focus_uid == sm2.current_actor_id(),
+		"横屏跟随：战斗开始对焦当前行动单位（战场平移对焦）")
+	# 捏合会话 → 镜头让位（手动缩放优先，12 §2.1）
+	land._on_gesture_pinch(3.0, land.center_map.get_global_rect().get_center())
+	check(land.camera.manual, "捏合会话：镜头让位（用户手动缩放优先，14 #8）")
+	var yield0 := int(land.camera.stats["yield"])
+	var punch0 := int(land.camera.stats["punch"])
+	stream2.emit(EventTypes.BATTLE_ATTACK, _atk_ev("imp1", true, true, 9)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	check(int(land.camera.stats["yield"]) == yield0 + 1
+		and int(land.camera.stats["punch"]) == punch0,
+		"手动缩放中：暴击推拉让位不抢镜头（登记 yield）")
+	land._on_gesture_pinch_ended(3.0, land.center_map.get_global_rect().get_center())
+	check(land.camera.manual and absf(land.grid.scale.x - 1.6) < 0.01,
+		"横屏捏合松手持续生效（12 §2.1；让位持续至回合末）")
+	# 回合末回弹跟随：turn.start 触发 resume → 缩放归位 + 恢复跟随
+	stream2.emit(EventTypes.TURN_START, {"round": 2, "side": "party", "actor": "pc"}, &"core", "N1-7")
+	check(not land.camera.manual and int(land.camera.stats["resume"]) == 1,
+		"回合末回弹跟随（14 #8：turn.start 触发回弹）")
+	await create_timer(BattleCamera.RESUME_TIME + 0.15).timeout
+	await process_frame
+	check((land.grid.scale - Vector2.ONE).length() < 0.02 and absf(land._zoom - 1.0) < 0.001,
+		"回弹：战术格缩放归位 + 壳缩放簿记同步")
+	await process_frame
+	await process_frame
+	check(land.camera.focus_uid == "pc", "回弹后跟随新行动单位（对焦恢复）")
+	# 竖屏捏合：松手弹回即回弹（04 §④.4），会话结束镜头恢复
+	var p2: EncounterPortrait = pscene.instantiate()
+	root.add_child(p2)
+	await process_frame
+	await process_frame
+	var stream3 := EventStream.new()
+	var sm3 := EncounterSM.new(Board.new(stream3), stream3, Rng.new(11), "campaign01")
+	p2.bind(sm3, AutoAgent.new())
+	sm3.enter("N1-7")
+	sm3.transition(EncounterSM.S_EXPLORE)
+	sm3.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	p2._on_gesture_pinch(1.4, p2.main_view.get_global_rect().get_center())
+	check(p2.camera.manual, "竖屏捏合会话：镜头让位")
+	p2._on_gesture_pinch_ended(1.4, p2.main_view.get_global_rect().get_center())
+	check(not p2.camera.manual, "竖屏松手弹回即回弹（04 §④.4）：镜头恢复跟随权")
+	p2.queue_free()
+	land.queue_free()
+	await process_frame
+
+	# ---- main 集成：整备→遭遇进场滑入 ----
+	var m2: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m2)
+	await process_frame
+	await process_frame
+	m2._on_home_navigate(&"entry")
+	await create_timer(0.6).timeout
+	(m2.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_TIME)
+	(m2.current_screen as ScreenEntry).start_requested.emit()
+	await create_timer(0.6).timeout
+	m2.graph._enter("N1-7")
+	m2._present_node()
+	await create_timer(0.6).timeout
+	var slides0 := int(m2.transition.stats["slides"])
+	(m2.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(0.6).timeout
+	check(int(m2.transition.stats["slides"]) == slides0 + 1, "整备→遭遇：进场滑入触发（14 #8）")
+	await create_timer(0.6).timeout
+	check(m2.shell != null and absf(m2.shell.position.y) < 0.5, "遭遇进场滑入归位")
+	m2.queue_free()
+	await process_frame
+
+	# ---- 事件流零变化（14 #8 验收口径：同种子同指令，接入前后逐字节一致）----
+	var json_a: String = await _run_battle_with_camera(false)
+	var json_b: String = await _run_battle_with_camera(true)
+	check(json_a == json_b, "转场镜头接入前后同种子同指令：事件流逐字节一致（纯呈现零污染）")
+
+## 无壳脚本化遭遇（与 _run_battle_with_juice 同种子/同指令序列风格）；
+## with_cam=true 时挂独立 BattleCamera 订阅事件流——纯呈现消费，不触碰 core。
+func _run_battle_with_camera(with_cam: bool) -> String:
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(20261109), "campaign01")
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true,
+		{"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var cam: BattleCamera = null
+	if with_cam:
+		cam = BattleCamera.new()
+		root.add_child(cam)
+		stream.subscribe(cam.on_event)
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(sd.battle_def())
+	var bot := Rng.new(31)
+	var guard := 0
+	while not sm.is_over() and guard < 300:
+		guard += 1
+		var actions := sm.get_available_actions()
+		if actions.is_empty():
+			await process_frame
+			continue
+		var enabled: Array[int] = []
+		for i: int in actions.size():
+			if not bool(actions[i]["disabled"]):
+				enabled.append(i)
+		var pick := enabled[bot.range_int(0, enabled.size() - 1)]
+		sm.submit_command(sm.command_from_action(actions[pick]))
+		await process_frame
+	var json := JSON.stringify(stream.all(), "", true, true)
+	if cam != null:
+		cam.queue_free()
+		await process_frame
+	return json

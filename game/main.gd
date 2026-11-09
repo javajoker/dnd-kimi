@@ -15,7 +15,8 @@
 # `-- --m4-shots` 锁定态/购买弹层截图；`-- --skin-shots` 外观页/换肤骰子截图（06 §7）；
 # `-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图；
 # `-- --text-shots` 长文本外置呈现截图 /tmp/text_*.png（tech/02 §1.1，不提交）；
-# `-- --font-shot` 整备「稳守」预设卡字体证据 /tmp/font_fixed.png（04 §7，不提交）。
+# `-- --font-shot` 整备「稳守」预设卡字体证据 /tmp/font_fixed.png（04 §7，不提交）；
+# `-- --trans-shots` 转场中间帧+战斗对焦帧 /tmp/trans_*.png（14 清单 #8，不提交）。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -41,6 +42,7 @@ const SCREEN_SCENES := {
 }
 var stream: EventStream
 var audio: AudioManager # 音频框架（14 清单 #5：纯呈现消费事件流，纯壳侧组件）
+var transition: UiTransition # 统一转场器（14 清单 #8：界面切换淡入淡出 + 遭遇进场滑入，纯壳侧组件）
 var board: Board
 var rng: Rng
 var entitlements: Entitlements      # 权利模型运行时（06 §2：商店/活动/成就三类点亮方）
@@ -102,6 +104,8 @@ func _ready() -> void:
 	audio = AudioManager.new() # 14 #5：先就位，_show_home 的翻页/潮声才有落点
 	add_child(audio)
 	stream.subscribe(audio.on_event) # 纯呈现订阅（与 JuiceLayer 同模式，不回注）
+	transition = UiTransition.new() # 14 #8：先就位，_show_home 的首场切换即走转场
+	add_child(transition)
 	board = Board.new(stream)
 	rng = Rng.new(BATTLE_SEED)
 	# 权利运行时 + 运营配置（06 §3.2：活动开关开 → 入口自动解锁，内容包零改动）
@@ -146,6 +150,8 @@ func _ready() -> void:
 		_run_shots_text()
 	if args.has("--font-shot"):
 		_run_shot_font()
+	if args.has("--trans-shots"):
+		_run_shots_trans()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -207,14 +213,28 @@ func _graft_discovered_arcs() -> void:
 
 # ---------------------------------------------------------------- 导航（04 §2/§5：任何界面有明确来路退路）
 
+## 界面切换统一走转场器（14 #8 淡入淡出，硬切消除）：逻辑即时换屏（current_screen 就位、
+## 绑定/连信号照常），视觉上旧屏在淡出段保持可点（幕布不吞输入），中场回收旧屏、新屏现身。
 func _swap(screen: Control) -> void:
-	if current_screen != null and current_screen != shell:
-		current_screen.queue_free()
-	elif shell != null:
-		shell.visible = false
+	var old := current_screen
+	var old_shell := shell
 	current_screen = screen
 	UITheme.attach(screen) # 主题经 Control 链下发（根为普通 Node，Window.theme 穿不透）
 	add_child(screen)
+	if transition != null:
+		screen.visible = false # 淡出中场现身（14 #8；逻辑可用，视觉切换在转场中场）
+		transition.fade_through(func() -> void:
+			if old != null and old != old_shell and is_instance_valid(old):
+				old.queue_free()
+			elif old_shell != null and is_instance_valid(old_shell):
+				old_shell.visible = false
+			if is_instance_valid(screen):
+				screen.visible = true)
+	else:
+		if old != null and old != old_shell:
+			old.queue_free()
+		elif old_shell != null:
+			old_shell.visible = false
 	if audio != null:
 		audio.play_sfx(&"page") # 翻页（界面切换，14 #5 SFX 通道）
 		audio.set_home_ambient(screen is ScreenHome) # 主屏常播港口潮声（14 #6）
@@ -445,16 +465,29 @@ func _ensure_story_shell() -> void:
 		router = ShellRouter.new() # 换壳重开一局壳锁定（09 §8：锁管玩家切换，不管内容驱动换壳）
 		notice = str(ShellRouter.NOTICE_FORCED.get(want, "")) if want != _mode \
 			else TextsZh.STORY_MODE_UNLOCK
+	var created := false
 	if shell == null:
 		shell = (load(SHELL_SCENES[want]) as PackedScene).instantiate()
 		UITheme.attach(shell as Control)
 		add_child(shell)
 		shell.set("on_save_quit", Callable(self, "_on_save_quit"))
 		router.lock_encounter(want) # 形态整场锁定（09 §3/§8：战役开始即定壳）
-	if current_screen != null and current_screen != shell:
-		current_screen.queue_free()
+		created = true
+	var old := current_screen
 	current_screen = shell
-	shell.visible = true
+	if created and transition != null:
+		# 入口→遭遇（故事壳新建）：转场中场壳现身、旧屏回收（14 #8 淡入淡出）
+		shell.visible = false
+		var new_shell := shell
+		transition.fade_through(func() -> void:
+			if old != null and is_instance_valid(old):
+				old.queue_free()
+			if is_instance_valid(new_shell):
+				new_shell.visible = true)
+	else:
+		if old != null and old != shell:
+			old.queue_free()
+		shell.visible = true
 	shell.bind_story(stream, board, pack, {"edge": _on_story_edge, "hub": _on_hub_action})
 	if notice != "": # 换壳提示在新壳订阅事件流之后发出（事件流驱动 toast，壳只订阅）
 		stream.emit(EventTypes.LOG, {"msg": notice, "toast": true}, &"core", graph.current_id)
@@ -743,6 +776,8 @@ func _begin_encounter(selection: Dictionary) -> void:
 		(shell as EncounterLandscape).bind(sm, agent)
 	shell.set("on_save_quit", Callable(self, "_on_save_quit"))
 	router.lock_encounter(_mode) # 遭遇开始即壳锁定（09 §8）
+	if transition != null:
+		transition.encounter_enter(shell) # 遭遇进场：淡入淡出 + 轻微上移滑入（14 #8）
 	var nid := graph.current_id
 	sm.enter(nid)
 	sm.transition(EncounterSM.S_EXPLORE)
@@ -1138,15 +1173,28 @@ func _on_sub_maze_advance() -> void:
 ## 子游戏故事壳：复用双壳场景（09 §8 一局一壳），绑定子游戏包与子游戏回调（与战役通道隔离）。
 func _ensure_sub_shell() -> void:
 	_set_window_orientation(_sub_mode) # 子游戏同遵战役级边界（09 §8：整备/叙事/战斗/结算同形态）
+	var created := false
 	if shell == null:
 		shell = (load(SHELL_SCENES[_sub_mode]) as PackedScene).instantiate()
 		UITheme.attach(shell as Control)
 		add_child(shell)
 		router.lock_encounter(_sub_mode) # 形态整场锁定（09 §3/§8）
-	if current_screen != null and current_screen != shell:
-		current_screen.queue_free()
+		created = true
+	var old := current_screen
 	current_screen = shell
-	shell.visible = true
+	if created and transition != null:
+		# 入口→子游戏遭遇（壳新建）：转场中场壳现身、旧屏回收（14 #8，与战役同一通道）
+		shell.visible = false
+		var new_shell := shell
+		transition.fade_through(func() -> void:
+			if old != null and is_instance_valid(old):
+				old.queue_free()
+			if is_instance_valid(new_shell):
+				new_shell.visible = true)
+	else:
+		if old != null and old != shell:
+			old.queue_free()
+		shell.visible = true
 	shell.set("on_save_quit", Callable(self, "_on_sub_save_quit"))
 	shell.bind_story(stream, board, _sub.pack,
 		{"edge": _on_sub_story_edge, "hub": func(_a: String, _b: String) -> void: pass})
@@ -1198,6 +1246,8 @@ func _sub_begin_combat(selection: Dictionary) -> void:
 		(shell as EncounterPortrait).bind(sm, agent)
 	else:
 		(shell as EncounterLandscape).bind(sm, agent)
+	if transition != null:
+		transition.encounter_enter(shell) # 子游戏遭遇进场同一场（14 #8：子游戏复用框架界面，04 §6）
 	var nid := _sub.graph.current_id
 	sm.enter(nid)
 	sm.transition(EncounterSM.S_EXPLORE)
@@ -1352,6 +1402,36 @@ func _collect_pct() -> float:
 func _item_name(item_id: String) -> String:
 	return str((pack.get("items", {}) as Dictionary).get(item_id, {}).get("name", item_id))
 
+# ---------------------------------------------------------------- 转场与镜头截图（14 清单 #8 证据 /tmp/trans_*.png，不提交）
+
+## `-- --trans-shots`：主屏→入口淡出中间帧（幕布半掩）+ 竖屏遭遇战斗跟随对焦帧。
+func _run_shots_trans() -> void:
+	await get_tree().create_timer(0.8).timeout
+	if current_screen is ScreenHome:
+		(current_screen as ScreenHome).tutorial.finish_launch() # 跳过启动卡取干净画面
+		_tutorial_mark("combat") # 首次战斗情境提示不遮对焦帧（12 §4 一次原则）
+		await get_tree().create_timer(0.2).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.12).timeout # 淡出进行中（0.25s 半程）
+	await _shot_raw("/tmp/trans_mid.png") # 转场中间帧：幕布半掩、旧屏仍可点（14 #8）
+	await get_tree().create_timer(0.6).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.6).timeout
+	graph._enter("N1-7") # 战斗节点 → 竖屏整备（截图证据，不走完整前置链）
+	_present_node()
+	await get_tree().create_timer(0.6).timeout
+	(current_screen as ScreenLoadout)._on_confirm()
+	await get_tree().create_timer(1.8).timeout # 进场滑入 0.5s + 探索演出 1.0s + 对焦 0.35s
+	# 对焦帧：发焦点事件指向上排敌方（截图证据专用，与战斗内对焦同一事件源/管线）
+	stream.emit(EventTypes.TURN_START, {"round": 1, "side": "party",
+		"actor": "boss"}, &"core", "N1-7")
+	await get_tree().create_timer(BattleCamera.FOCUS_TIME + 0.1).timeout # 推移落定
+	await _shot("/tmp/trans_focus.png") # 对焦帧：lane 滚动对焦当前行动单位（04 §④.4 智能镜头）
+	print("[shots] 转场与镜头两张完成：/tmp/trans_mid.png /tmp/trans_focus.png")
+	get_tree().quit()
+
 # ---------------------------------------------------------------- 中文字体（04 §7：内置 Noto Sans SC + 默认主题，系统字体仅开发兜底）
 
 func _setup_cjk_font() -> void:
@@ -1408,6 +1488,14 @@ func _run_shots_m2n() -> void:
 	get_tree().quit()
 
 func _shot(path: String) -> void:
+	if transition != null:
+		transition.skip_all() # 证据帧取转场完成态（14 #8；转场中间帧另由 _shot_raw 取）
+	await RenderingServer.frame_post_draw
+	var err := get_viewport().get_texture().get_image().save_png(path)
+	print("[shots] ", path, " err=", err)
+
+## 原始帧（不结算转场）：转场中间帧证据专用。
+func _shot_raw(path: String) -> void:
 	await RenderingServer.frame_post_draw
 	var err := get_viewport().get_texture().get_image().save_png(path)
 	print("[shots] ", path, " err=", err)

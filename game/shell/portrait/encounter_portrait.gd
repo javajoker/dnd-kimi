@@ -78,6 +78,7 @@ var key_dice_label: Label
 var key_result_label: Label
 var dice3d: Dice3D                   # 关键判定 3D 物理演出层（14 清单 #2；结果由事件流给定）
 var juice: JuiceLayer                # 打击感三件套 + 屏幕震动（14 清单 #3/#4；纯呈现消费事件流）
+var camera: BattleCamera             # 战斗跟随镜头与关键推拉（14 清单 #8；纯呈现消费同一事件流）
 var shake_button: Button             # ☰ 菜单内震动开关（14 #4：UI 偏好不写状态板，12 §5 同机制）
 var audio_settings_path := UiSettings.PATH # ☰ 音量三档滑条设置路径（14 #5；测试可注入隔离文件）
 var auto_timer: Timer
@@ -149,9 +150,15 @@ func _build_ui() -> void:
 	main_view = PanelContainer.new()
 	main_view.name = "MainView"
 	add_child(main_view)
+	# 镜头 lane（14 清单 #8）：主视野内容层套一层普通 Control——镜头平移施加在 main_v 上，
+	# 不经容器排序（PanelContainer 只对直接子代贴合），lane 滚动对焦的位移不被重建冲掉
+	var lane := Control.new()
+	lane.name = "CameraLane"
+	main_view.add_child(lane)
 	var main_v := VBoxContainer.new()
+	main_v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	main_v.add_theme_constant_override("separation", 4)
-	main_view.add_child(main_v)
+	lane.add_child(main_v)
 	progress_row = HBoxContainer.new()
 	progress_row.custom_minimum_size = Vector2(0, 26)
 	progress_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -257,6 +264,21 @@ func _build_ui() -> void:
 	juice.unit_node_of = func(uid: String) -> Control: return _find_unit_node(uid)
 	juice.shake_target = self # 屏幕震动 = 整壳位移（呈现层，不进事件流）
 	add_child(juice)
+	# 战斗跟随镜头（14 清单 #8）：目标 = lane 内容层，竖屏 lane 滚动只纵轴对焦（04 §④.4 竖向战场）；
+	# 可视区/锚点查询壳收口，与 JuiceLayer 同一套单位节点查询；捏合让位见手势块
+	camera = BattleCamera.new()
+	camera.name = "BattleCamera"
+	add_child(camera)
+	camera.setup(main_v, func() -> Rect2: return main_view.get_global_rect(),
+		func(uid: String) -> Vector2:
+			var n := _find_unit_node(uid)
+			return n.get_global_rect().get_center() if n != null else main_view.get_global_rect().get_center(),
+		true)
+	camera.on_resume = func() -> void:
+		_zoom = 1.0 # 回合末回弹跟随：主视野缩放簿记归位（捏合缩放本体见 pinch_ended 弹回）
+		if main_view.scale != Vector2.ONE:
+			var rtw := create_tween()
+			rtw.tween_property(main_view, "scale", Vector2.ONE, BattleCamera.RESUME_TIME)
 	# 半屏弹层组件（04 §3.3，双壳共用）：hub 商店 / 时间边预告
 	hub_popup = HubPopup.new()
 	hub_popup.buy_requested.connect(func(item_id: String) -> void:
@@ -468,14 +490,17 @@ func _on_gesture_two_finger_tap(pos: Vector2) -> void:
 			idx += 1
 
 ## 捏合 = 全局俯瞰 ↔ 跟随镜头；竖屏松手弹回（04 §④.4）。
+## 手动缩放会话中镜头让位（14 #8）：begin_manual 起对焦/推拉登记 yield 不动镜头。
 func _on_gesture_pinch(ratio: float, center: Vector2) -> void:
 	if not _in(main_view, center):
 		return
+	camera.begin_manual()
 	_zoom = clampf(ratio, 0.7, 1.6)
 	main_view.pivot_offset = main_view.size * 0.5
 	main_view.scale = Vector2.ONE * _zoom
 
 func _on_gesture_pinch_ended(_ratio: float, center: Vector2) -> void:
+	camera.end_manual() # 竖屏松手弹回即回弹（04 §④.4）：镜头即刻恢复跟随权
 	if _zoom == 1.0:
 		return
 	var tw := create_tween()
@@ -570,6 +595,7 @@ func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	_stream = sm.stream
 	_stream.subscribe(_on_event)
 	juice.reset() # 新遭遇清零消散名单与计数（14 #3/#4）
+	camera.reset() # 镜头随新遭遇归零（14 #8：对焦/让位状态不跨场残留）
 	show_combat_layout() # 故事态 → 战斗态：同一壳内布局切换（04 §④.1 呼吸随状态切换）
 	_restore_breathing()
 	_refresh_all()
@@ -597,6 +623,8 @@ func _on_event(ev: Dictionary) -> void:
 	var t := StringName(ev["type"])
 	if juice != null:
 		juice.on_event(ev) # 打击感/震动：纯呈现消费同一事件流（14 #3/#4）
+	if camera != null and not _story and sm != null:
+		camera.on_event(ev) # 跟随镜头/关键推拉：纯呈现消费同一事件流（14 #8，只在战斗态）
 	# 掷骰两级演出与战斗/故事同一事件源（09 §6）
 	if t == EventTypes.CHECK_ROLL:
 		var p: Dictionary = ev["payload"]
