@@ -106,6 +106,8 @@ func _ready() -> void:
 		_run_shots_gap()
 	if args.has("--home-shot"):
 		_run_shot_home()
+	if args.has("--home-bar-shot"):
+		_run_shot_home_bar()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -1266,6 +1268,19 @@ func _run_shot_home() -> void:
 		await get_tree().create_timer(0.6).timeout # 呼吸微光推进到非零相位
 	await _shot("/tmp/home_hotspot.png")
 	print("[shots] 主屏热点图完成：/tmp/home_hotspot.png")
+	get_tree().quit()
+
+## 主屏兜底条收起态（12 §5：toggle 可收起，收起为细条把手，绘卷占满）：`-- --home-bar-shot`（/tmp 不提交）。
+func _run_shot_home_bar() -> void:
+	await get_tree().create_timer(1.0).timeout
+	if current_screen is ScreenHome:
+		var home := current_screen as ScreenHome
+		if home.tutorial != null:
+			home.tutorial.finish_launch() # 跳过启动卡，取干净绘卷
+		home.set_bar_collapsed(true, false) # 截图态不落盘（不写 user://settings.cfg）
+		await get_tree().create_timer(0.6).timeout # 呼吸微光推进到非零相位
+	await _shot("/tmp/home_bar_collapsed.png")
+	print("[shots] 主屏兜底条收起态完成：/tmp/home_bar_collapsed.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）

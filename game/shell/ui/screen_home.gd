@@ -1,6 +1,8 @@
 # ① 主屏（营地）（docs/framework/04-UI-UX设计文档.md §①；07 §4.2 主屏闲置兜底快照；12 §4 帮助入口；12 §5 主屏热点图）
 # - 视觉层 = 可交互绘卷（HomeScroll，烬港夜景程序化占位，12 §5 落位状态）；热点与兜底条指向同一 navigate 信号
 #   （12 §5：热点图是皮肤，文字入口是骨架，两者功能等价——兜底条为无障碍与辨识度兜底）；
+# - 兜底条可收起/展开（12 §5：toggle，默认展开；收起为细条把手，把手始终可触达；收起时绘卷占满）；
+#   玩家偏好持久化到 user://settings.cfg（12 §5：UI 偏好不是世界状态，不写状态板，走 UiSettings 本地设置）；
 # - 营地图景随褪墨度（global.doom_clock）变化文案与绘卷视觉（04 §①/§4 ①：状态板的可视化）；
 # - 五入口：战役入口（进行中带"继续"）、事件中心（未读角标）、背包图鉴、角色、历史卷轴；
 # - 运营位（框架级占位，内容由投放决定）+ 帮助入口（手势图鉴，12 §4）+ 手动"记录抄本"（07 §4.2）；
@@ -18,7 +20,10 @@ const IDLE_SAVE_SEC := 2.0
 
 var doom_label: Label
 var scroll: HomeScroll            # 可交互绘卷（12 §5：热点=皮肤）
+var bar_toggle: Button            # 兜底条收起/展开把手（12 §5：始终可触达，收起后也有展开把手）
 var fallback_bar: Container       # 底部文字入口兜底条（12 §5：骨架，与热点功能等价）
+var settings_path := UiSettings.PATH # 偏好文件路径（测试可指到隔离文件）
+var _bar_collapsed := false
 var campaign_button: Button
 var quests_button: Button
 var inventory_button: Button
@@ -33,6 +38,7 @@ var tutorial: TutorialOverlay # 启动卡（12 §4 第一层：首次启动 3 �
 
 func _ready() -> void:
 	_build()
+	set_bar_collapsed(UiSettings.load_home_bar_collapsed(settings_path), false) # 启动读回偏好（12 §5；不写盘）
 	size = get_viewport().get_visible_rect().size # 根 Control 父级为纯 Node：显式落视口尺寸（锚定无参照）
 	idle_timer = Timer.new()
 	idle_timer.wait_time = IDLE_SAVE_SEC
@@ -72,6 +78,21 @@ func _build() -> void:
 	op.add_theme_font_size_override("font_size", 11)
 	op.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(op)
+	# 兜底条 toggle 把手（12 §5：可收起/展开；把手独立于兜底条本体，收起后仍可触达——等价路径永不消失）
+	var toggle_row := HBoxContainer.new()
+	toggle_row.alignment = BoxContainer.ALIGNMENT_END # 右端
+	toggle_row.add_theme_constant_override("separation", 4)
+	v.add_child(toggle_row)
+	var toggle_hint := Label.new()
+	toggle_hint.text = TextsZh.HOME_BAR_HINT
+	toggle_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.55))
+	toggle_hint.add_theme_font_size_override("font_size", 11)
+	toggle_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toggle_row.add_child(toggle_hint)
+	bar_toggle = Button.new()
+	bar_toggle.custom_minimum_size = Vector2(96, 44) # 12 §6：可触目标最小 44×44pt
+	bar_toggle.pressed.connect(func() -> void: set_bar_collapsed(not _bar_collapsed, true))
+	toggle_row.add_child(bar_toggle)
 	# 底部文字入口兜底条（12 §5：无障碍与辨识度兜底；热点图是皮肤，文字入口是骨架）
 	fallback_bar = VBoxContainer.new()
 	fallback_bar.add_theme_constant_override("separation", 4)
@@ -115,6 +136,18 @@ func _entry(parent: Container, label: String, screen_id: StringName) -> Button:
 	b.pressed.connect(func() -> void: navigate.emit(screen_id))
 	parent.add_child(b)
 	return b
+
+## 兜底条收起/展开（12 §5：toggle；收起时绘卷占满空间，把手细条仍可见）。persist=true 时写本地设置。
+func set_bar_collapsed(collapsed: bool, persist: bool) -> void:
+	_bar_collapsed = collapsed
+	fallback_bar.visible = not collapsed
+	bar_toggle.text = TextsZh.HOME_BAR_EXPAND if collapsed else TextsZh.HOME_BAR_COLLAPSE
+	if persist:
+		UiSettings.save_home_bar_collapsed(collapsed, settings_path) # UI 偏好不写状态板（12 §5）
+
+## 测试探针。
+func is_bar_collapsed() -> bool:
+	return _bar_collapsed
 
 ## 刷新（只读 Board）。quest_badge = 进行中事件数；continuable = 存在可继续的战役进度/存档。
 func bind(board: Board, quest_badge: int, continuable: bool) -> void:

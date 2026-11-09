@@ -130,6 +130,10 @@ const HOME_OP_SLOT := "〔运营位〕新内容包筹备中——《烬港残页
 const HOME_HELP := "帮助"
 const HOME_SAVE := "记录抄本"
 const HOME_SAVED := "抄本已记录"
+# 兜底条 toggle（12 §5：可收起/展开，默认展开，偏好持久化到本地设置；把手始终可触达）
+const HOME_BAR_HINT := "文字入口条"
+const HOME_BAR_COLLAPSE := "▾ 收起入口条"
+const HOME_BAR_EXPAND := "▴ 展开入口条"
 ## 营地图景随褪墨度（global.doom_clock 0~10）变化（04 §①：状态板的可视化）。
 static func home_doom_text(clock: int) -> String:
 	if clock <= 3:

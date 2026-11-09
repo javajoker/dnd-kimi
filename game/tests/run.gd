@@ -53,6 +53,7 @@ func _async_shell_tests() -> void:
 	await test_shell_diff()
 	await test_ui_screens()
 	await test_home_hotspots()
+	await test_home_bar_toggle()
 	await test_subgame_flow()
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
@@ -3206,6 +3207,65 @@ func test_home_hotspots() -> void:
 	check(home.scroll.sea_color().get_luminance() < sea0.get_luminance(),
 		"时钟 9 格：海面褪色加剧（12 §5 绘卷随褪墨度变化）")
 	home.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 兜底条收起/展开（12 §5：toggle，默认展开，偏好持久化到本地设置，UI 偏好不写状态板）
+
+func test_home_bar_toggle() -> void:
+	print("[home_bar_toggle]")
+	var path := "user://settings_test_home_bar.cfg" # 测试隔离：不动真实 user://settings.cfg
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	home.settings_path = path
+	root.add_child(home)
+	await process_frame
+	var navs: Array = []
+	home.navigate.connect(func(id: StringName) -> void: navs.append(id))
+	home.bind(board, 0, false)
+	# ---- 默认展开（12 §5）----
+	check(not home.is_bar_collapsed() and home.fallback_bar.visible, "兜底条默认展开（12 §5）")
+	check(home.bar_toggle.text == TextsZh.HOME_BAR_COLLAPSE, "展开态把手=收起钮（12 §5 toggle）")
+	# ---- 收起：入口条隐藏为细条把手，把手仍可触达（12 §5；等价路径永不消失）----
+	home.bar_toggle.pressed.emit()
+	check(home.is_bar_collapsed() and not home.fallback_bar.visible, "toggle 收起：兜底条隐去（12 §5）")
+	check(home.bar_toggle.visible and home.bar_toggle.text == TextsZh.HOME_BAR_EXPAND,
+		"收起后展开把手始终可触达（12 §5：等价路径永不消失）")
+	check(not board.has("ui.home_bar_collapsed"), "UI 偏好不写状态板（12 §5：存本地设置）")
+	# ---- 收起态五入口仍经热点可达（12 §5：热点图是皮肤）----
+	for h: Dictionary in HomeScroll.HOTSPOTS:
+		_tap_scroll(home.scroll, h)
+	check(navs == [&"entry", &"inventory", &"character", &"quests", &"history"],
+		"收起态五入口仍经热点可达（12 §5 两路径等价）")
+	# ---- 偏好写盘 + 新实例启动读回（12 §5：偏好持久化到本地设置）----
+	var cfg := ConfigFile.new()
+	check(cfg.load(path) == OK and bool(cfg.get_value("ui", "home_bar_collapsed", false)),
+		"偏好写盘 user://settings.cfg（ui.home_bar_collapsed=true）")
+	var home2: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	home2.settings_path = path
+	root.add_child(home2)
+	await process_frame
+	home2.navigate.connect(func(id: StringName) -> void: navs.append(id))
+	home2.bind(board, 0, false)
+	check(home2.is_bar_collapsed() and not home2.fallback_bar.visible, "启动读回偏好：保持收起（12 §5 持久化）")
+	# ---- 展开还原 + 展开等价路径断言不回归（12 §5：骨架与皮肤同信号）----
+	home2.bar_toggle.pressed.emit()
+	check(not home2.is_bar_collapsed() and home2.fallback_bar.visible
+		and home2.bar_toggle.text == TextsZh.HOME_BAR_COLLAPSE, "toggle 展开还原（12 §5）")
+	navs.clear()
+	home2.campaign_button.pressed.emit()
+	home2.quests_button.pressed.emit()
+	home2.inventory_button.pressed.emit()
+	home2.character_button.pressed.emit()
+	home2.history_button.pressed.emit()
+	check(navs == [&"entry", &"quests", &"inventory", &"character", &"history"],
+		"展开态兜底条等价路径不回归（12 §5）")
+	home2.queue_free()
+	home.queue_free()
+	DirAccess.remove_absolute(path) # 写后清理
+	check(not FileAccess.file_exists(path), "测试偏好文件已清理（路径隔离）")
 	await process_frame
 
 # ---------------------------------------------------------------- 横屏故事态（04 §③：中央主视野渲染叙事/选项，非战斗态）
