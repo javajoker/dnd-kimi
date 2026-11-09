@@ -5,7 +5,9 @@
 #   玩家偏好持久化到 user://settings.cfg（12 §5：UI 偏好不是世界状态，不写状态板，走 UiSettings 本地设置）；
 # - 营地图景随褪墨度（global.doom_clock）变化文案与绘卷视觉（04 §①/§4 ①：状态板的可视化）；
 # - 五入口：战役入口（进行中带"继续"）、事件中心（未读角标）、背包图鉴、角色、历史卷轴；
-# - 运营位（框架级占位，内容由投放决定）+ 帮助入口（手势图鉴，12 §4）+ 手动"记录抄本"（07 §4.2）；
+# - 运营位（06 §6 三挂载点之一）：内容由运营配置 home_promo 块投放（06 §3.2 运营侧数据），
+#   配置为空则整体隐藏不出空位；点击只发 promo_pressed 信号，路由归 main；
+# - 帮助入口（手势图鉴，12 §4）+ 手动"记录抄本"（07 §4.2）；
 # - 壳铁律：只读 Board、发信号；写板与存档由 main 流程控制器执行。
 class_name ScreenHome
 extends Control
@@ -15,6 +17,7 @@ signal save_requested   # 手动"记录抄本"（07 §4.2 手动时机）
 signal idle_timeout     # 主屏闲置（07 §4.2 兜底快照）
 signal tutorial_done          # 启动卡看完/跳过（12 §4；写板由 main 落）
 signal retrain_requested      # 帮助页「重学教程」（12 §4：可重学；清触发记录由 main 落）
+signal promo_pressed(target: String)  # 运营位点按（06 §6；target = home_promo.target：pack_id 或 "codex"）
 
 const IDLE_SAVE_SEC := 2.0
 
@@ -32,8 +35,10 @@ var history_button: Button
 var save_button: Button
 var help_button: Button
 var saved_label: Label
+var promo_button: Button          # 运营位（06 §6：内容来自 home_promo 配置，空配置整体隐藏）
 var idle_timer: Timer
 var _help_overlay: PanelContainer
+var _promo_target := ""           # 本次投放目标（pack_id 或 "codex"）
 var tutorial: TutorialOverlay # 启动卡（12 §4 第一层：首次启动 3 页核心手势，可跳过）
 
 func _ready() -> void:
@@ -71,13 +76,15 @@ func _build() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.hotspot_pressed.connect(func(id: StringName) -> void: navigate.emit(id))
 	v.add_child(scroll)
-	var op := Label.new()
-	op.text = TextsZh.HOME_OP_SLOT
-	op.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	op.add_theme_color_override("font_color", Color(0.55, 0.55, 0.6))
-	op.add_theme_font_size_override("font_size", 11)
-	op.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(op)
+	# 运营位（06 §6：home_promo 配置驱动；默认隐藏，bind 时有投放才亮相——无投放不出空位）
+	promo_button = Button.new()
+	promo_button.visible = false
+	promo_button.custom_minimum_size = Vector2(0, 44) # 12 §6：可触目标最小 44×44pt
+	promo_button.add_theme_color_override("font_color", Color(0.75, 0.68, 0.5))
+	promo_button.pressed.connect(func() -> void:
+		if _promo_target != "":
+			promo_pressed.emit(_promo_target))
+	v.add_child(promo_button)
 	# 兜底条 toggle 把手（12 §5：可收起/展开；把手独立于兜底条本体，收起后仍可触达——等价路径永不消失）
 	var toggle_row := HBoxContainer.new()
 	toggle_row.alignment = BoxContainer.ALIGNMENT_END # 右端
@@ -149,8 +156,9 @@ func set_bar_collapsed(collapsed: bool, persist: bool) -> void:
 func is_bar_collapsed() -> bool:
 	return _bar_collapsed
 
-## 刷新（只读 Board）。quest_badge = 进行中事件数；continuable = 存在可继续的战役进度/存档。
-func bind(board: Board, quest_badge: int, continuable: bool) -> void:
+## 刷新（只读 Board）。quest_badge = 进行中事件数；continuable = 存在可继续的战役进度/存档；
+## promo = 运营配置 home_promo 块（06 §6：text 非空才亮相，否则运营位整体隐藏不出空位）。
+func bind(board: Board, quest_badge: int, continuable: bool, promo: Dictionary = {}) -> void:
 	doom_label.text = TextsZh.home_doom_text(board.get_doom_clock())
 	campaign_button.text = "%s（%s）" % [TextsZh.HOME_ENTRY_CAMPAIGN, TextsZh.HOME_CONTINUE] \
 		if continuable else TextsZh.HOME_ENTRY_CAMPAIGN
@@ -158,6 +166,11 @@ func bind(board: Board, quest_badge: int, continuable: bool) -> void:
 		if quest_badge > 0 else TextsZh.HOME_ENTRY_QUESTS
 	scroll.set_state(board.get_doom_clock(), quest_badge) # 绘卷随状态板变化（12 §5；04 §4 ①）
 	saved_label.text = ""
+	# 运营位：文案与目标完全来自运营配置（06 §3.2/§6；壳不创作文案、不走事件流、不写板）
+	var promo_text := str(promo.get("text", ""))
+	_promo_target = str(promo.get("target", ""))
+	promo_button.visible = promo_text != "" and _promo_target != ""
+	promo_button.text = promo_text
 	if idle_timer != null:
 		idle_timer.start() # 回到主屏重新计闲置（07 §4.2）
 

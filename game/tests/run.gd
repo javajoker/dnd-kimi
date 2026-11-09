@@ -56,6 +56,7 @@ func _async_shell_tests() -> void:
 	await test_ui_screens()
 	await test_home_hotspots()
 	await test_home_bar_toggle()
+	await test_home_promo()
 	await test_subgame_flow()
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
@@ -2856,6 +2857,10 @@ func test_ops_config() -> void:
 	check(not ops.is_empty() and ops.has("shop") and ops.has("activities") and ops.has("achievements"),
 		"运营配置加载：价格表/活动开关/成就规则（06 §3.2 运营侧数据，不进内容包）")
 	check(str(Entitlements.price_of(ops, "arena").get("price_text", "")) == "¥12", "商店价格表：arena ¥12")
+	var promo_cfg: Dictionary = ops.get("home_promo", {})
+	check(str(promo_cfg.get("text", "")).contains("竞技场连战")
+		and str(promo_cfg.get("target", "")) == "arena",
+		"主屏运营位投放：home_promo 文案+目标在运营配置（06 §6，运营轨不动内容包）")
 	# 权利注册表 = 运营侧数据文件（06 §2.3：packs/_ops/entitlements.json，非代码常量）
 	var registry := PacklintCore.load_entitlement_registry()
 	check(bool(registry["ok"]) and (registry["entitlements"] as Array).has("entitlement.arena"),
@@ -4398,4 +4403,62 @@ func test_gap_features() -> void:
 		"重演只读：不产事件、不写板（纯演出，不可改结果）")
 	hi6._replay_close()
 	hi6.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 主屏运营位（06 §6：home_promo 配置投放；空配置隐藏；点击路由）
+
+func test_home_promo() -> void:
+	print("[home_promo]")
+	# 结算屏禁区复核（06 §6：⑨ 结算界面不做任何付费引导——源码 grep 断言固化）
+	var settle_src := FileAccess.get_file_as_string("res://shell/ui/screen_settle.gd")
+	var banned := ["购买", "付费", "shop", "Shop", "price", "¥", "acquire", "Acquire", "entitlement"]
+	var hits: Array = []
+	for token: String in banned:
+		if settle_src.contains(token):
+			hits.append(token)
+	check(hits.is_empty(), "结算屏零付费元素：源码 grep 无付费词（命中：%s，06 §6 句点纯粹）" % ";".join(hits))
+
+	# 壳级：空配置隐藏 / 配置驱动文案 / 点按只发信号
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	root.add_child(home)
+	await process_frame
+	await process_frame
+	home.bind(board, 0, false) # 无 promo 参数 = 空配置
+	check(not home.promo_button.visible, "空配置：运营位整体隐藏，不出空位（06 §6）")
+	home.bind(board, 0, false, {"text": "测试投放语", "target": "arena"})
+	check(home.promo_button.visible and home.promo_button.text == "测试投放语",
+		"配置驱动：文案来自 home_promo.text（非 texts_zh 硬编码，06 §3.2 运营侧数据）")
+	var pressed: Array = []
+	home.promo_pressed.connect(func(t: String) -> void: pressed.append(t))
+	var ev_before := stream.size()
+	home.promo_button.pressed.emit()
+	check(pressed == ["arena"], "点按上报 promo_pressed(target)（壳只发信号，路由归 main）")
+	check(stream.size() == ev_before and board.keys_with_prefix("").is_empty(),
+		"运营位不走事件流、不写状态板（06 §6 纯呈现挂载点）")
+	home.bind(board, 0, false, {"text": "无目标投放"}) # 缺 target 的畸形投放
+	check(not home.promo_button.visible, "缺 target：运营位隐藏（容错不阻断，tech/02 §11 同哲学）")
+	home.queue_free()
+	await process_frame
+
+	# main 级路由：ops_config 实投 arena → 点按直达 ② 入口锁定卡 + 购买弹层
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	var mhome := m.current_screen as ScreenHome
+	check(str((m.ops_config.get("home_promo", {}) as Dictionary).get("target", "")) == "arena",
+		"运营配置实投：home_promo.target=arena（06 §7 首发策略落地映射）")
+	check(mhome.promo_button.visible and mhome.promo_button.text.contains("守门人正在召集白页者"),
+		"主屏运营位呈现配置文案（《竞技场连战》召集语）")
+	mhome.promo_button.pressed.emit()
+	await process_frame
+	await process_frame
+	check(m.current_screen is ScreenEntry, "点按 → ② 战役入口（home_promo.target=pack_id 路由）")
+	check((m.current_screen as ScreenEntry).shop_popup.visible,
+		"锁定包直达购买半屏弹层（06 §3.1/§6；04 §3.3 不离开当前界面情境）")
+	check(not bool(m.board.read("global.entitlement.arena", false)),
+		"路由全程未点亮权利（写板只发生在购买确认，06 §2.3 写权限仅商店/活动/成就）")
+	m.queue_free()
 	await process_frame

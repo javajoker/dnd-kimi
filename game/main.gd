@@ -108,6 +108,8 @@ func _ready() -> void:
 		_run_shot_home()
 	if args.has("--home-bar-shot"):
 		_run_shot_home_bar()
+	if args.has("--promo-shot"):
+		_run_shot_promo()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -148,8 +150,11 @@ func _show_home() -> void:
 		shell = null
 	var home: ScreenHome = (load(SCREEN_SCENES[&"home"]) as PackedScene).instantiate()
 	_swap(home)
-	home.bind(board, graph.quest_badge_count(), _has_continuable())
+	# 运营位接运营配置（06 §6：home_promo 块投放，空配置不出空位）
+	home.bind(board, graph.quest_badge_count(), _has_continuable(),
+		(ops_config.get("home_promo", {}) as Dictionary))
 	home.navigate.connect(_on_home_navigate)
+	home.promo_pressed.connect(_on_home_promo)
 	home.save_requested.connect(_save_home)
 	home.idle_timeout.connect(_save_idle)
 	home.tutorial_done.connect(func() -> void: _tutorial_mark("boot")) # 启动卡一次性（12 §4）
@@ -196,6 +201,20 @@ func _on_home_navigate(screen_id: StringName) -> void:
 		&"history":
 			_history_origin = &"home"
 			_show_history()
+
+## 运营位点按路由（06 §6）：target="codex" → ⑥ 背包图鉴；target=pack_id → ② 战役入口对应卡，
+## 锁定包直达购买半屏弹层（06 §3.1/§6：锁定态卡 +「获取」；弹层不离开当前界面情境，04 §3.3）。
+## 本函数只做导航路由：不写板、不进事件流（运营位是纯呈现层挂载点）。
+func _on_home_promo(target: String) -> void:
+	if target == "codex":
+		_show_inventory()
+		return
+	if not _subgames.has(target):
+		push_warning("[main] home_promo 目标未登记为已发现包：%s（忽略，06 §6 容错不阻断）" % target)
+		return
+	_show_entry()
+	if not entitlements.can_access((_subgames[target] as Dictionary)["manifest"]):
+		_on_acquire_requested(target) # 锁定包 → 直达购买弹层（06 §6）
 
 func _show_entry() -> void:
 	var entry: ScreenEntry = (load(SCREEN_SCENES[&"entry"]) as PackedScene).instantiate()
@@ -1295,4 +1314,21 @@ func _run_shots_m4() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _shot("/tmp/m4_shop.png") # 购买半屏弹层（06 §6：不离开当前界面情境）
 	print("[shots] M4 两张完成：/tmp/m4_lock.png /tmp/m4_shop.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 主屏运营位截图（06 §6 home_promo 投放证据 /tmp，不提交）
+
+## `-- --promo-shot`：主屏运营位（配置驱动文案）→ 点按直达 arena 锁定卡 + 购买弹层。
+func _run_shot_promo() -> void:
+	await get_tree().create_timer(1.2).timeout
+	if current_screen is ScreenHome:
+		var home := current_screen as ScreenHome
+		if home.tutorial != null:
+			home.tutorial.finish_launch() # 跳过启动卡，取干净绘卷
+		await get_tree().create_timer(0.4).timeout
+		await _shot("/tmp/m2_promo.png") # 主屏运营位：home_promo 文案呈现（06 §6）
+		home.promo_button.pressed.emit() # 点按 → arena 锁定卡 + 直达购买弹层
+		await get_tree().create_timer(0.5).timeout
+		await _shot("/tmp/m2_promo_entry.png") # 路由落点证据（锁定卡 + 购买弹层）
+	print("[shots] 运营位两张完成：/tmp/m2_promo.png /tmp/m2_promo_entry.png")
 	get_tree().quit()
