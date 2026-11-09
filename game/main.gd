@@ -1,4 +1,8 @@
-# 节点流程版流程控制器（tech/01 §10；04 §2 导航闭环 + §3.1/§④.2/§④.3；07 §4 存档；09 §3/§6/§7/§9.1；tech/02 §3/§4/§5）
+# 节点流程版流程控制器（tech/01 §10；04 §2 导航闭环 + §3.1/§④.2/§④.3；07 §4 存档；09 §3/§6/§7/§8/§9.1；tech/02 §3/§4/§5）
+# 战役级横竖屏边界（09 §8）：开始战役即按所选形态切窗口与壳（横屏=横屏窗口+横屏壳，整备/叙事/战斗/结算同形态）；
+#   幕级 forced 例外照旧（SL-0/SL-3 强制竖屏，幕末 forced_except 切回所选形态）；战役结束一切路径
+#   （通关结局 / ☰ 中途退出 / 败北）恢复原屏幕布局（竖屏基准）；外层界面（主屏/功能界面）恒定竖屏；
+#   全部数据驱动自 manifest presentation（mode + forced/forced_except），代码不写死任何战役。
 # 串流：①主屏 → ②战役入口（模式分支，09 §3）→ **故事图驱动节点流程**（序章 N0-1 → … → 终章 E1~E4）：
 #   scene/check/dialog/hub 节点由双壳故事态呈现（StoryVM 单源）；battle 节点进整备→遭遇→战后边回图；
 #   强制幕（SL-0/SL-3）按 presentation.forced 换壳并以叙事化提示呈现（09 §3；N3-7 起 forced_except 解锁）；
@@ -8,7 +12,7 @@
 # 故事态（遭遇外）☰ = 存档后回主屏（节点进度在图快照 meta.graph 内）。
 # 战斗数值由 packs 资源表驱动（tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast。
 # 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --m3-shots` 子游戏截图；
-# `-- --m4-shots` 锁定态/购买弹层截图；`-- --mode=space|time` 预选形态。
+# `-- --m4-shots` 锁定态/购买弹层截图；`-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -68,6 +72,7 @@ var _encounter_id := ""                  # 当前战斗节点的遭遇 id（tech
 var _battle_title := ""
 var _battles_won := 0
 var _mode: StringName = &""
+var window_orientation: StringName = ShellRouter.MODE_TIME # 窗口形态（09 §8 战役级边界断言口；竖屏基准）
 # ---- 迷宫探索序列（tech/02 §6 maze；04 §④.3 房间类型序列化）----
 var _maze: MazeRunner = null      # 进行中的探索序列核（core 渐进执行，壳只呈现）
 var _maze_outcome := ""           # 上一拍结果摘要（拼进下一拍文本）
@@ -120,6 +125,8 @@ func _ready() -> void:
 		_run_shot_home_bar()
 	if args.has("--promo-shot"):
 		_run_shot_promo()
+	if args.has("--mode-shots"):
+		_run_shots_mode()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -189,7 +196,25 @@ func _swap(screen: Control) -> void:
 	current_screen = screen
 	add_child(screen)
 
+# ---------------------------------------------------------------- 窗口形态（09 §8 战役级横竖屏边界）
+
+## 竖屏基准尺寸 = 项目窗口配置（竖屏基准由工程设置声明，代码不写死）。
+func _portrait_size() -> Vector2i:
+	return Vector2i(int(ProjectSettings.get_setting("display/window/size/viewport_width", 390)),
+		int(ProjectSettings.get_setting("display/window/size/viewport_height", 760)))
+
+## 窗口形态切换（09 §8）：space = 横屏窗口（1280×720），time = 竖屏基准。
+## 开始战役即切所选形态；战役内常态保持（幕级 forced 例外经同一通道）；战役结束一切路径调 MODE_TIME 恢复。
+## headless 下不动物理窗口（无显示服务器），window_orientation 照常记账供无头断言。
+func _set_window_orientation(mode: StringName) -> void:
+	window_orientation = mode
+	if DisplayServer.get_name() == "headless":
+		return
+	get_window().size = LANDSCAPE_SIZE if mode == ShellRouter.MODE_SPACE else _portrait_size()
+	get_window().move_to_center()
+
 func _show_home() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8：一切离场路径恢复竖屏基准）
 	_in_encounter = false
 	_sub_active = false # 回主屏即子游戏离场（04 §6：离场必经结算，未到结算即放弃本次连战）
 	_sub_battling = false
@@ -266,6 +291,7 @@ func _on_home_promo(target: String) -> void:
 		_on_acquire_requested(target) # 锁定包 → 直达购买弹层（06 §6）
 
 func _show_entry() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var entry: ScreenEntry = (load(SCREEN_SCENES[&"entry"]) as PackedScene).instantiate()
 	_swap(entry)
 	var played: Array = []
@@ -386,6 +412,7 @@ func _shell_mode() -> StringName:
 func _ensure_story_shell() -> void:
 	var want := _story_mode()
 	var notice := ""
+	_set_window_orientation(want) # 窗口随壳形态（09 §8：开始战役即切换；forced 幕内外双向经同一通道）
 	if shell != null and _shell_mode() != want:
 		shell.queue_free()
 		shell = null
@@ -396,9 +423,6 @@ func _ensure_story_shell() -> void:
 		shell = (load(SHELL_SCENES[want]) as PackedScene).instantiate()
 		add_child(shell)
 		shell.set("on_save_quit", Callable(self, "_on_save_quit"))
-		if want == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
-			get_window().size = LANDSCAPE_SIZE
-			get_window().move_to_center()
 		router.lock_encounter(want) # 形态整场锁定（09 §3/§8：战役开始即定壳）
 	if current_screen != null and current_screen != shell:
 		current_screen.queue_free()
@@ -470,6 +494,7 @@ func _end_slice() -> void:
 ## 结局分型旗标（ending_e1~e4 / 解锁占位）由 ending 节点 on_enter 写板（nodes.json，V4 台账闭环）。
 func _present_ending() -> void:
 	_in_encounter = false
+	_set_window_orientation(ShellRouter.MODE_TIME) # 战役结束恢复原屏幕布局（09 §8：通关路径收束于竖屏基准）
 	var eid := graph.current_id
 	if not bool(board.read("campaign01.cleared")):
 		board.write("campaign01.cleared", true,
@@ -596,6 +621,7 @@ func _enter_encounter() -> void:
 	var node := graph.current()
 	_encounter_id = str(node.get("encounter", graph.current_id))
 	_battle_title = str(node.get("title", _encounter_id))
+	_set_window_orientation(_story_mode()) # 整备同战役形态（09 §8）：壳未建时窗口先就位（如「继续」直达战斗节点）
 	var cfg := Loadout.resolve_config(pack, _encounter_id)
 	if not cfg.is_empty():
 		cfg = cfg.duplicate() # 2→3 级技能槽 +1（11 §6；槽位基值仍读配置，tech/02 §2.4）
@@ -811,6 +837,7 @@ func _show_settle() -> void:
 	_bind_settle()
 
 func _bind_settle() -> void:
+	_set_window_orientation(_story_mode()) # 结算在所选形态下呈现（09 §8）；从⑧卷轴返回时恢复战役形态
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind({"title": TextsZh.STORY_SLICE_END if _encounter_result == &"slice" else _battle_title,
@@ -832,6 +859,7 @@ func _on_settle_allocate(attr: String) -> void:
 # ---------------------------------------------------------------- ⑤⑥⑦⑧ 功能界面（04 §⑤⑥⑦⑧ 最小版）
 
 func _show_quests() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var screen: ScreenQuests = (load(SCREEN_SCENES[&"quests"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(graph.quests())
@@ -841,12 +869,14 @@ func _show_quests() -> void:
 	screen.back_requested.connect(_show_home)
 
 func _show_inventory() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var screen: ScreenInventory = (load(SCREEN_SCENES[&"inventory"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), pack.get("lore", []))
 	screen.back_requested.connect(_show_home)
 
 func _show_character() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var screen: ScreenCharacter = (load(SCREEN_SCENES[&"character"]) as PackedScene).instantiate()
 	_swap(screen)
 	# 返回连接先于数据绑定（M2 审计 G1：绑定路径任何早期返回都不得带走出口）
@@ -861,6 +891,7 @@ func _show_character() -> void:
 
 ## ⑧ 历史卷轴：从主屏 / 结算进入，返回来源界面（04 §5 出口列）。
 func _show_history() -> void:
+	_set_window_orientation(ShellRouter.MODE_TIME) # ⑧历史卷轴为功能界面：恒定竖屏（09 §8）
 	var screen: ScreenHistory = (load(SCREEN_SCENES[&"history"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(stream, board)
@@ -1010,12 +1041,10 @@ func _on_sub_maze_advance() -> void:
 
 ## 子游戏故事壳：复用双壳场景（09 §8 一局一壳），绑定子游戏包与子游戏回调（与战役通道隔离）。
 func _ensure_sub_shell() -> void:
+	_set_window_orientation(_sub_mode) # 子游戏同遵战役级边界（09 §8：整备/叙事/战斗/结算同形态）
 	if shell == null:
 		shell = (load(SHELL_SCENES[_sub_mode]) as PackedScene).instantiate()
 		add_child(shell)
-		if _sub_mode == ShellRouter.MODE_SPACE and DisplayServer.get_name() != "headless":
-			get_window().size = LANDSCAPE_SIZE
-			get_window().move_to_center()
 		router.lock_encounter(_sub_mode) # 形态整场锁定（09 §3/§8）
 	if current_screen != null and current_screen != shell:
 		current_screen.queue_free()
@@ -1034,6 +1063,7 @@ func _on_sub_story_edge(idx: int) -> void:
 
 ## 战斗节点：进场一次整备（09 §9.1；连战中途不再整备、HP 不恢复——概念设计 §2 无休整）。
 func _sub_enter_battle() -> void:
+	_set_window_orientation(_sub_mode) # 子游戏整备同形态（09 §8）
 	var cfg := _sub.loadout_config()
 	if not cfg.is_empty() and _sub.run_wins == 0:
 		var screen: ScreenLoadout = (load(SCREEN_SCENES[&"loadout"]) as PackedScene).instantiate()
@@ -1141,6 +1171,7 @@ func _sub_settle_lines(summary: Dictionary, result: StringName) -> Dictionary:
 		"attr_points": Growth.attr_points(board), "attrs": Growth.attrs_map(board)}
 
 func _sub_bind_settle() -> void:
+	_set_window_orientation(_sub_mode) # 子游戏结算同形态（09 §8）
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(_sub_settle_cache)
@@ -1489,6 +1520,30 @@ func _run_shots_m4c() -> void:
 	await get_tree().create_timer(0.6).timeout
 	await _shot("/tmp/m4_riddle.png")
 	print("[shots] M4c 两张完成：/tmp/m4_graft_edge.png /tmp/m4_riddle.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 战役级横竖屏边界截图（09 §8 证据 /tmp，不提交）
+
+## `-- --mode-shots`：横屏战役——跳过 SL-0 强制竖屏段，落 SL-1 横屏叙事态 → N1-7 整备（横屏）→ 横屏战斗态。
+func _run_shots_mode() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_SPACE)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	graph._enter("N1-4") # SL-1：横屏叙事态（09 §8：开始战役即切横屏窗口+横屏壳）
+	_present_node()
+	await get_tree().create_timer(0.6).timeout
+	await _shot("/tmp/mode_story.png")
+	graph._enter("N1-7") # 战斗节点 → 整备（横屏布局）→ 遭遇
+	_present_node()
+	await get_tree().create_timer(0.4).timeout
+	(current_screen as ScreenLoadout)._on_confirm()
+	await get_tree().create_timer(2.2).timeout # 探索演出 1s + 战斗铺开
+	await _shot("/tmp/mode_battle.png")
+	print("[shots] 战役级横竖屏边界两张完成：/tmp/mode_story.png /tmp/mode_battle.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- 主屏运营位截图（06 §6 home_promo 投放证据 /tmp，不提交）

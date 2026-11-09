@@ -64,6 +64,7 @@ func _async_shell_tests() -> void:
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
 	await test_act3_forced_mode()
+	await test_mode_boundary()
 	await test_main_flow()
 	await test_character_nav()
 	await test_gap_features()
@@ -3747,6 +3748,162 @@ func test_act3_forced_mode() -> void:
 	check((m.shell as EncounterLandscape).flash_label.text.contains("全局的视野"),
 		"N3-7 解锁提示叙事化呈现（09 §3）")
 	m.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 战役级横竖屏边界（09 §8，M5）
+# 形态是战役级属性：开始战役即切窗口与壳；整备/叙事/战斗/结算同形态；幕级 forced 例外照旧；
+# 战役结束一切路径（通关/☰/败北）恢复竖屏基准；外层界面恒定竖屏；全数据驱动（manifest presentation）。
+
+func test_mode_boundary() -> void:
+	print("[mode_boundary]")
+	var main_scene: PackedScene = load("res://main.tscn")
+	# ============ 横屏战役：全程横屏 + forced 幕例外 + 一切离场路径恢复竖屏 ============
+	var m: Node = main_scene.instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_TIME and m.current_screen is ScreenHome,
+		"启动即竖屏基准（外层界面恒定竖屏，09 §8）")
+	m._on_home_navigate(&"entry")
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_TIME, "②战役入口竖屏（外层界面）")
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_SPACE)
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_TIME and m.shell is EncounterPortrait,
+		"SL-0 强制竖屏：横屏玩家开局窗口与壳均竖屏（presentation.forced，tech/02 §2.1）")
+	m._on_story_edge(0) # N0-1 → N0-2
+	await process_frame
+	m._on_story_edge(0) # 掷检定
+	await create_timer(1.2).timeout
+	m._on_story_edge(0) # → N0-4
+	await process_frame
+	m._on_story_edge(0) # → N1-1（SL-1：恢复所选形态）
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_SPACE and m.shell is EncounterLandscape,
+		"SL-1 起横屏窗口 + 横屏壳（幕末切回所选形态，09 §8）")
+	# ---- 整备横屏：直达战斗节点（壳未建时窗口先就位）----
+	m.graph._enter("N1-7")
+	m._present_node()
+	await process_frame
+	check(m.current_screen is ScreenLoadout and m.window_orientation == ShellRouter.MODE_SPACE,
+		"整备界面在横屏布局（09 §8：整备随战役形态）")
+	(m.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.4).timeout
+	check(m._in_encounter and m.shell is EncounterLandscape
+		and m.window_orientation == ShellRouter.MODE_SPACE, "战斗态横屏壳 + 横屏窗口（09 §8）")
+	# ---- ☰ 中途退出 → 恢复竖屏 ----
+	m._on_save_quit()
+	await process_frame
+	check(m.current_screen is ScreenHome and m.window_orientation == ShellRouter.MODE_TIME,
+		"☰ 中途退出：恢复竖屏基准（09 §8）")
+	# ---- 继续战役 → 仍横屏整备（形态随战役数据，非随窗口惯性）----
+	m._on_home_navigate(&"entry")
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_TIME, "回主屏后再入②入口：竖屏（外层界面）")
+	(m.current_screen as ScreenEntry).start_requested.emit() # 已选形态预选 space（global.mode_choice 写板）
+	await process_frame
+	check(m.current_screen is ScreenLoadout and m.window_orientation == ShellRouter.MODE_SPACE,
+		"主屏「继续」→ 横屏整备（所选形态保持，09 §8）")
+	(m.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.4).timeout
+	check(m.window_orientation == ShellRouter.MODE_SPACE, "再进遭遇仍横屏")
+	# ---- 败北 → 结算横屏；结算 → 卷轴（竖屏）→ 结算（横屏）→ 主屏（竖屏）----
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"defeat", "rounds": 2}, &"core", m.graph.current_id)
+	await create_timer(1.6).timeout
+	check(m.current_screen is ScreenSettle and m.window_orientation == ShellRouter.MODE_SPACE,
+		"败北结算仍横屏（09 §8：结算在所选形态下呈现）")
+	(m.current_screen as ScreenSettle).go_history.emit()
+	await process_frame
+	check(m.current_screen is ScreenHistory and m.window_orientation == ShellRouter.MODE_TIME,
+		"结算 → ⑧卷轴：功能界面恒定竖屏（09 §8）")
+	(m.current_screen as ScreenHistory).back_button.pressed.emit()
+	await process_frame
+	check(m.current_screen is ScreenSettle and m.window_orientation == ShellRouter.MODE_SPACE,
+		"卷轴返回结算：恢复横屏（来源界面语义 + 战役形态恢复，04 §5/09 §8）")
+	(m.current_screen as ScreenSettle).go_home.emit()
+	await process_frame
+	check(m.current_screen is ScreenHome and m.window_orientation == ShellRouter.MODE_TIME,
+		"结算回主屏：恢复竖屏基准（败北路径收束，09 §8）")
+	# ---- forced 幕例外：SL-2 横屏 → N3-1 强制竖屏 → N3-7 切回横屏 ----
+	m._on_home_navigate(&"entry")
+	await process_frame
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	m.graph._enter("N2-C")
+	m._present_node()
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_SPACE and m.shell is EncounterLandscape,
+		"SL-2 横屏保持（forced 幕外随所选形态）")
+	m._on_story_edge(0) # N2-C → N3-1（SL-3 强制竖屏）
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_TIME and m.shell is EncounterPortrait,
+		"forced 幕内：窗口与壳同切竖屏（SL-3，09 §8 幕级强制例外）")
+	m.graph._enter("N3-7") # forced_except：空白广场起解锁
+	m._present_node()
+	await process_frame
+	check(m.window_orientation == ShellRouter.MODE_SPACE and m.shell is EncounterLandscape,
+		"幕末切回横屏（forced_except N3-7，09 §8）")
+	# ---- 通关结局 → 恢复竖屏 ----
+	m.graph._enter("E1")
+	m._present_node()
+	await process_frame
+	check(m.current_screen is ScreenEnding and m.window_orientation == ShellRouter.MODE_TIME,
+		"通关结局：恢复竖屏基准（09 §8：一切离开战役的路径都必须恢复）")
+	m.queue_free()
+	await process_frame
+	# ============ 竖屏战役：全程零切换 ============
+	var m2: Node = main_scene.instantiate()
+	root.add_child(m2)
+	await process_frame
+	await process_frame
+	m2._on_home_navigate(&"entry")
+	await process_frame
+	(m2.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_TIME)
+	(m2.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	check(m2.window_orientation == ShellRouter.MODE_TIME and m2.shell is EncounterPortrait,
+		"竖屏战役：开局竖屏（SL-0 forced 与所选一致，零切换）")
+	m2._on_story_edge(0) # → N0-2
+	await process_frame
+	m2._on_story_edge(0) # 掷检定
+	await create_timer(1.2).timeout
+	m2._on_story_edge(0) # → N0-4
+	await process_frame
+	m2._on_story_edge(0) # → N1-1
+	await process_frame
+	check(m2.window_orientation == ShellRouter.MODE_TIME and m2.shell is EncounterPortrait,
+		"竖屏战役：SL-1 仍竖屏壳（同一壳复用，零切换）")
+	m2.graph._enter("N1-7")
+	m2._present_node()
+	await process_frame
+	check(m2.current_screen is ScreenLoadout and m2.window_orientation == ShellRouter.MODE_TIME,
+		"竖屏战役：整备竖屏")
+	(m2.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.4).timeout
+	check(m2._in_encounter and m2.shell is EncounterPortrait
+		and m2.window_orientation == ShellRouter.MODE_TIME, "竖屏战役：战斗竖屏（全程零切换）")
+	m2.stream.emit(EventTypes.COMBAT_END, {"result": &"defeat", "rounds": 2}, &"core", m2.graph.current_id)
+	await create_timer(1.6).timeout
+	check(m2.current_screen is ScreenSettle and m2.window_orientation == ShellRouter.MODE_TIME,
+		"竖屏战役：结算竖屏")
+	(m2.current_screen as ScreenSettle).go_home.emit()
+	await process_frame
+	# ---- 外层功能界面恒定竖屏（竖屏基准下逐一过闸）----
+	for nav: StringName in [&"quests", &"inventory", &"character", &"history"]:
+		m2._on_home_navigate(nav)
+		await process_frame
+		check(m2.window_orientation == ShellRouter.MODE_TIME and not (m2.current_screen is EncounterPortrait)
+			and not (m2.current_screen is EncounterLandscape),
+			"外层界面恒定竖屏：%s（09 §8）" % String(nav))
+		(m2.current_screen.get("back_button") as Button).pressed.emit()
+		await process_frame
+	check(m2.current_screen is ScreenHome and m2.window_orientation == ShellRouter.MODE_TIME,
+		"功能界面巡回后回主屏：竖屏基准")
+	m2.queue_free()
 	await process_frame
 
 # ---------------------------------------------------------------- main 节点流程集成（tech/01 §10；04 §3.1/§④.2/§④.3/§⑨；07 §4.2；09 §6/§7）
