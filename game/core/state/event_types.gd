@@ -12,6 +12,7 @@ const BATTLE_DOWN := &"battle.down"      # 单位倒地（11 §5.2/§7）
 const BATTLE_DEAD := &"battle.dead"      # 单位死亡（11 §7 三负）
 const BATTLE_REVIVE := &"battle.revive"  # 扶起/稳住/战后起身（11 §5.2/§7）
 const SKILL_USE := &"skill.use"          # 次数制技能扣次（11 §8）
+const BATTLE_SKILL := &"battle.skill"    # Boss 回合行为脚本触发技能（story/03 §2：含触发器与 save/召唤明细）
 
 # 遭遇状态机（09 §1 约定：状态切换以 state.entered 事件外发，渲染壳只订阅、不被指挥）
 const STATE_ENTERED := &"state.entered"

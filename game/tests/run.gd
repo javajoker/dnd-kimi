@@ -32,6 +32,8 @@ func _init() -> void:
 	test_quest_abandon()
 	test_gesture_recognizer()
 	test_battle_data_driven()
+	test_boss_behavior()
+	test_winrate_tool()
 	test_hp_persistence()
 	test_escort_sm()
 	test_maze_runner()
@@ -1595,6 +1597,174 @@ func test_battle_data_driven() -> void:
 	var res3 := BattleDef.assemble(broken2, "N1-7", {}, board)
 	check(not bool(res3["ok"]), "公式求值失败：组装 fail-fast 报错")
 
+# ---------------------------------------------------------------- Boss 回合行为脚本（story/03 §2/§3）
+
+## 行为观察探针：队伍"打不死也打不动"（攻修 -50、伤害归零、HP 500），AutoAgent 托管跑满 6 个敌方回合。
+## enemy_hp_override > 0 时压低首个敌人 HP（触发血量阈值脚本）；extra_enemies 追加敌人实例（同屏上限测试）。
+func _behavior_probe(enc_id: String, enemy_hp_override: int, extra_enemies: Array = []) -> Dictionary:
+	var pack := _load_campaign01()
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var res := BattleDef.assemble(pack, enc_id, {}, board)
+	check(bool(res["ok"]), "行为探针：遭遇 %s 组装 ok：%s" % [enc_id, ";".join(res["errors"] as Array)])
+	var def: Dictionary = res["def"]
+	for u: Variant in def["party"]:
+		(u as Dictionary)["attack_mod"] = -50
+		(u as Dictionary)["damage"] = "1d1-1"
+		(u as Dictionary)["hp"] = 500
+		(u as Dictionary)["max_hp"] = 500
+		(u as Dictionary).erase("skills")
+		(u as Dictionary).erase("items")
+	if enemy_hp_override > 0:
+		(def["enemies"][0] as Dictionary)["hp"] = enemy_hp_override
+	for extra: Variant in extra_enemies:
+		(def["enemies"] as Array).append(extra)
+	var sm := EncounterSM.new(board, stream, Rng.new(7), "campaign01")
+	var agent := AutoAgent.new()
+	sm.enter(enc_id)
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(def)
+	var guard := 0
+	while not sm.is_over() and sm.round_no() <= 6 and guard < 2000:
+		guard += 1
+		var cmd := agent.next_command(sm)
+		if cmd.is_empty():
+			break
+		sm.submit_command(cmd)
+	return {"sm": sm, "stream": stream}
+
+func test_boss_behavior() -> void:
+	print("[boss_behavior]")
+	var pack := _load_campaign01()
+	# —— 守页人（story/03 §3.1）满血：seal_shock 每 2 回合（第 2/4/6 回合），其余普攻；不触发转阶段
+	var stream: EventStream = _behavior_probe("R5", 0)["stream"]
+	var round_no := 0
+	var seal_rounds: Array[int] = []
+	var seal_saves := 0
+	var rewrite_leak := false
+	for ev: Dictionary in stream.all():
+		var p: Dictionary = ev["payload"]
+		if ev["type"] == EventTypes.TURN_START and str(p.get("side", "")) == "enemy":
+			round_no = int(p["round"])
+		elif ev["type"] == EventTypes.BATTLE_SKILL:
+			if str(p["skill"]) == "seal_shock":
+				seal_rounds.append(round_no)
+				check(str(p["trigger"]["kind"]) == "every_n_rounds" and int(p["trigger"]["n"]) == 2,
+					"seal_shock 触发器 = every_n_rounds(2)（battle.skill 含触发器明细，story/03 §2）")
+			elif str(p["skill"]) == "rewrite_rules":
+				rewrite_leak = true
+		elif ev["type"] == EventTypes.CHECK_ROLL and str(p.get("kind", "")) == "save" \
+				and str(p.get("skill", "")) == "seal_shock":
+			seal_saves += 1
+			check(int(p["dc"]) == 12 and str(p.get("on_success", "")) == "half"
+				and p.has("damage") and p.has("target_hp_after"),
+				"seal_shock 豁免明细进事件流：敏豁免 DC12 半伤（story/03 §3.1；11 §5.1）")
+	check(seal_rounds == [2, 4, 6], "seal_shock 第 2/4/6 回合触发（实际 %s）" % str(seal_rounds))
+	check(seal_saves == 9, "seal_shock ×3 回 × 3 队员 = 9 条豁免明细（实际 %d）" % seal_saves)
+	check(not rewrite_leak, "HP≥50% 不触发重写守则")
+	# —— 守页人丝血（10/38 < 50%）：第 1 回合重写守则 once（攻击 5→6），此后恒 +6，全场只触发一次
+	var stream2: EventStream = _behavior_probe("R5", 10)["stream"]
+	var rewrite_count := 0
+	var atk_mod_after := 0
+	var warden_atk_mods: Array[int] = []
+	for ev: Dictionary in stream2.all():
+		var p: Dictionary = ev["payload"]
+		if ev["type"] == EventTypes.BATTLE_SKILL and str(p["skill"]) == "rewrite_rules":
+			rewrite_count += 1
+			atk_mod_after = int(p.get("attack_mod_after", 0))
+			check(str(p["trigger"]["kind"]) == "when_hp_below" \
+					and absf(float(p["trigger"]["threshold"]) - 0.5) < 0.001 \
+					and bool(p["trigger"]["once"]),
+				"重写守则触发器 = when_hp_below(0.5)+once（story/03 §2）")
+		elif ev["type"] == EventTypes.BATTLE_ATTACK and str(p.get("attacker", "")) == "warden":
+			warden_atk_mods.append(int(p["atk_mod"]))
+	check(rewrite_count == 1 and atk_mod_after == 6, "重写守则全场一次：攻击 5→6（事件流可溯，story/03 §3.1）")
+	check(not warden_atk_mods.is_empty() and warden_atk_mods.all(func(m: int) -> bool: return m == 6),
+		"转阶段后守页人普攻恒 +6")
+	# —— 墨潮化身（story/03 §3.2）丝血（5/15 < 50%）：call_imps 一次召唤幼体 ×2（同屏 6→8，≤8 校验）
+	var r3 := _behavior_probe("N4-1", 5)
+	var sm3: EncounterSM = r3["sm"]
+	var summon_evs: Array = []
+	var tide_sweeps := 0
+	for ev: Dictionary in (r3["stream"] as EventStream).all():
+		var p: Dictionary = ev["payload"]
+		if ev["type"] == EventTypes.BATTLE_SKILL and str(p["skill"]) == "call_imps":
+			summon_evs.append(p)
+		elif ev["type"] == EventTypes.BATTLE_SKILL and str(p["skill"]) == "tide_sweep":
+			tide_sweeps += 1
+	check(summon_evs.size() == 1, "call_imps 全场一次（once，story/03 §3.2）")
+	if summon_evs.size() == 1:
+		check((summon_evs[0]["summoned"] as Array).size() == 2 and int(summon_evs[0]["cap"]) == 8,
+			"召唤墨魈幼体 ×2（同屏 6→8，≤8 约束校验通过）")
+	check(sm3.get_units().size() == 8 and sm3.get_order().size() == 8,
+		"召唤单位入单位表与先攻序（次轮起行动）")
+	check(tide_sweeps >= 2, "tide_sweep 每 2 回合 AoE（6 回合内 ≥2 次，实际 %d）" % tide_sweeps)
+	# —— 同屏 ≤8 约束：8/8 时召唤空发；7/8 时只召 1（story/03 §3.2）
+	var imp_x := {"name": "墨魈幼体", "hp": 8, "ac": 10, "attrs": {"might": 0, "finesse": 0, "wits": 0},
+		"attack_mod": 2, "damage": "1d4"}
+	var imp_a: Dictionary = imp_x.duplicate(true)
+	imp_a["id"] = "imp_x1"
+	var imp_b: Dictionary = imp_x.duplicate(true)
+	imp_b["id"] = "imp_x2"
+	var stream4: EventStream = _behavior_probe("N4-1", 5, [imp_a, imp_b])["stream"]
+	var full_summon: Array = []
+	for ev: Dictionary in stream4.all():
+		var p: Dictionary = ev["payload"]
+		if ev["type"] == EventTypes.BATTLE_SKILL and str(p["skill"]) == "call_imps":
+			full_summon.append(p)
+	check(full_summon.size() == 1 and (full_summon[0]["summoned"] as Array).is_empty(),
+		"同屏 8/8：召唤受 ≤8 约束空发（事件流如实记录 summoned=[]）")
+	var stream5: EventStream = _behavior_probe("N4-1", 5, [imp_a])["stream"]
+	var partial_summon: Array = []
+	for ev: Dictionary in stream5.all():
+		var p: Dictionary = ev["payload"]
+		if ev["type"] == EventTypes.BATTLE_SKILL and str(p["skill"]) == "call_imps":
+			partial_summon.append(p)
+	check(partial_summon.size() == 1 and (partial_summon[0]["summoned"] as Array).size() == 1,
+		"同屏 7/8：召唤只入 1（剩余席位钳制）")
+	# —— fail-fast：behavior 引用非自带技能 / 召唤 ref 未登记（引导层报错路径）
+	var broken: Dictionary = pack.duplicate(true)
+	broken["enemies"]["page_warden"]["behavior"] = [{"every_n_rounds": 2, "skill": "not_owned"}]
+	check(not bool(BattleDef.assemble(broken, "R5", {}, Board.new(EventStream.new()))["ok"]),
+		"behavior 引用非自带技能：组装 fail-fast（story/03 §2）")
+	var broken2: Dictionary = pack.duplicate(true)
+	broken2["enemies"]["tide_avatar"]["skills"][1]["ref"] = "no_such_imp"
+	check(not bool(BattleDef.assemble(broken2, "N4-1", {}, Board.new(EventStream.new()))["ok"]),
+		"召唤技能 ref 未登记：组装 fail-fast（story/03 §3.2）")
+
+# ---------------------------------------------------------------- 胜率标定工具（story/03 §1/§5）
+
+func test_winrate_tool() -> void:
+	print("[winrate_tool]")
+	var sd: GDScript = load("res://tools/winrate.gd")
+	var pack := _load_campaign01()
+	# 确定性：同种子同分布（逐局结果一致）
+	var a: Dictionary = sd.run_encounter(pack, "N1-7", 24, 555)
+	var b: Dictionary = sd.run_encounter(pack, "N1-7", 24, 555)
+	check(a["results"] == b["results"] and int(a["wins"]) == int(b["wins"]),
+		"winrate 确定性：同种子同分布（24 局逐局结果一致）")
+	# 预期等级基线（序章 Lv1 / 幕二 Lv2 / 幕三 Lv3 / 终章 Lv3~4 取下限 Lv3）
+	check(int(sd.encounter_level(pack, "N1-7")) == 1 and int(sd.encounter_level(pack, "N2U-2")) == 2
+		and int(sd.encounter_level(pack, "R5")) == 3 and int(sd.encounter_level(pack, "N4-1")) == 3,
+		"遭遇 → 预期等级映射（序章/幕二/幕三/终章）")
+	# 定稿锁：全表 200 局（基种子 20261109）落入 story/03 §1 目标区间
+	var targets := {"easy": [85, 95], "medium": [70, 80], "hard": [50, 65]}
+	for eid: String in sd.battle_encounters(pack):
+		var enc: Dictionary = pack["encounters"][eid]
+		var r: Dictionary = sd.run_encounter(pack, eid, 200, 20261109)
+		var rate := 100.0 * int(r["wins"]) / 200.0
+		var tgt: Array = targets[str(enc.get("difficulty", "medium"))]
+		check(rate >= float(tgt[0]) and rate <= float(tgt[1]),
+			"定稿锁：%s（%s）胜率 %.1f%% ∈ %d~%d（story/03 §1）"
+				% [eid, str(enc["difficulty"]), rate, int(tgt[0]), int(tgt[1])])
+	# §5：主线经验总量 vs 300/700/1200 门槛——通关落在 Lv3 区间 [700, 1200)
+	var xp_report: Dictionary = sd.main_path_xp(pack)
+	check(xp_report.size() == 3, "§5 校核覆盖幕二主线三链")
+	for chain: String in xp_report.keys():
+		var total := int(xp_report[chain])
+		check(total >= 700 and total < 1200 and LightV1.level_for_xp(total) == 3,
+			"§5：%s 通关经验 %d ∈ Lv3 区间 [700,1200)" % [chain, total])
+
 # ---------------------------------------------------------------- HP 跨遭遇持久化（11 §7.1，验收裁决 A）
 
 ## 数据驱动 def + 强化 pc 速胜的托管整局；返回 {sm, board, stream}。
@@ -2073,8 +2243,9 @@ func test_act3_rooms() -> void:
 	var sm3 := _win_pack_battle(pack, "R3", b2, s2)
 	check(sm3.result() == &"victory", "R3 墨魈巢穴战斗可胜（遭遇组装 + SM 通道）")
 	var r3_foes: Array = (pack["encounters"]["R3"] as Dictionary)["enemies"]
-	check(r3_foes.size() == 3 and str((r3_foes[0] as Dictionary)["ref"]) == "ink_fiend",
-		"R3 阵容：墨魈 + 幼体 ×2（数值占位待定稿，README 决策记录）")
+	check(r3_foes.size() == 3 and str((r3_foes[0] as Dictionary)["ref"]) == "ink_fiend"
+		and str((r3_foes[1] as Dictionary)["ref"]) == "ink_swarm",
+		"R3 阵容：墨魈 + 墨魈群 ×2（story/03 §1 定稿：winrate 70.5% ∈ 中 70~80）")
 	g2.take_edge(_edge_to(g2, "R4"))
 	var e_r4 := _edge_to(g2, "R4-r")
 	check(not e_r4.is_empty() and bool(e_r4.get("via_fallback", false)),
@@ -2086,10 +2257,18 @@ func test_act3_rooms() -> void:
 		"R4-r2 右路第二场可胜（场间无休整，HP 持久 11 §7.1）")
 	g2.take_edge(_edge_to(g2, "R5"))
 	var warden: Dictionary = (pack["enemies"] as Dictionary)["page_warden"]
-	check(bool(warden.get("boss", false)) and (warden["skills"] as Array).size() == 1
-		and int(((warden["skills"] as Array)[0] as Dictionary)["save"]["dc"]) == 12
-		and str(((warden["skills"] as Array)[0] as Dictionary)["save"]["on_success"]) == "half",
-		"R5 Boss 守页人：封印冲击 save DC12/half 随条目挂载（11 §5.1；自 arena 守页人精英改造）")
+	var warden_skills: Array = warden["skills"]
+	var seal: Dictionary = {}
+	for wsk: Variant in warden_skills:
+		if str((wsk as Dictionary)["id"]) == "seal_shock":
+			seal = wsk
+	check(bool(warden.get("boss", false)) and warden_skills.size() == 2
+		and not seal.is_empty()
+		and int((seal["save"] as Dictionary)["dc"]) == 12
+		and str((seal["save"] as Dictionary)["attr"]) == "finesse"
+		and str((seal["save"] as Dictionary)["on_success"]) == "half"
+		and (warden.get("behavior", []) as Array).size() == 2,
+		"R5 Boss 守页人：seal_shock 敏豁免 DC12/half + 重写守则转阶段 + behavior 脚本（story/03 §2/§3.1）")
 	check(_win_pack_battle(pack, "R5", b2, s2).result() == &"victory", "R5 守页人 Boss 战可胜（难）")
 	g2.take_edge(_edge_to(g2, "N3-7"))
 	check(g2.current_id == "N3-7" and b2.item_count("codex_fragment") == 2

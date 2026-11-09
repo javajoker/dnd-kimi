@@ -4,7 +4,11 @@
     "name": "墨魈幼体",
     "hp": 8,
     "ac": 10,
-    "attrs": { "might": 0, "finesse": 0, "wits": 0 },
+    "attrs": {
+      "might": 0,
+      "finesse": 0,
+      "wits": 0
+    },
     "attack_mod": 2,
     "damage": "1d4"
   },
@@ -13,15 +17,29 @@
     "name": "墨魈",
     "hp": 16,
     "ac": 11,
-    "attrs": { "might": 1, "finesse": 1, "wits": 0 },
+    "attrs": {
+      "might": 1,
+      "finesse": 1,
+      "wits": 0
+    },
     "attack_mod": 3,
     "damage": "1d4+1",
     "boss": true,
     "skills": [
-      { "id": "ink_rain", "name": "墨雨溅射", "kind": "aoe", "damage": "1d6",
-        "uses": 2, "cooldown": 2,
-        "save": { "attr": "finesse", "dc": 11, "on_success": "half" },
-        "note": "every_other_round（cooldown 2 = 隔一回合并用，11 §5.1 豁免范围效果）" }
+      {
+        "id": "ink_rain",
+        "name": "墨雨溅射",
+        "kind": "aoe",
+        "damage": "1d6",
+        "uses": 2,
+        "cooldown": 2,
+        "save": {
+          "attr": "finesse",
+          "dc": 11,
+          "on_success": "half"
+        },
+        "note": "every_other_round（cooldown 2 = 隔一回合并用，11 §5.1 豁免范围效果）"
+      }
     ]
   },
   {
@@ -29,83 +47,166 @@
     "name": "墨魈群",
     "hp": 10,
     "ac": 10,
-    "attrs": { "might": 1, "finesse": 0, "wits": 0 },
-    "attack_mod": 2,
+    "attrs": {
+      "might": 1,
+      "finesse": 0,
+      "wits": 0
+    },
+    "attack_mod": 3,
     "damage": "1d4+1",
-    "note": "幕二护送战（N2S-2）袭扰缮写士的墨魈小群；数值待定稿"
+    "note": "幕二护送战（N2S-2）袭扰缮写士的墨魈小群"
   },
   {
     "id": "uninked_guard",
     "name": "黑羽卫",
     "hp": 12,
     "ac": 12,
-    "attrs": { "might": 1, "finesse": 1, "wits": 0 },
+    "attrs": {
+      "might": 1,
+      "finesse": 1,
+      "wits": 0
+    },
     "attack_mod": 3,
     "damage": "1d6",
-    "note": "断墨会暗桩卫队（N2U-1b 暴露战）；数值待定稿"
+    "note": "断墨会暗桩卫队（N2U-1b 暴露战）"
   },
   {
     "id": "tax_guard",
     "name": "税吏卫队",
-    "hp": 11,
+    "hp": 14,
     "ac": 11,
-    "attrs": { "might": 1, "finesse": 0, "wits": 0 },
-    "attack_mod": 2,
+    "attrs": {
+      "might": 1,
+      "finesse": 0,
+      "wits": 0
+    },
+    "attack_mod": 3,
     "damage": "1d6",
-    "note": "撕页行动（N2U-2）护税吏的卫队；数值待定稿"
+    "note": "撕页行动（N2U-2）护税吏的卫队"
   },
   {
     "id": "dock_ambusher",
     "name": "雾码头伏击者",
     "hp": 9,
     "ac": 11,
-    "attrs": { "might": 0, "finesse": 2, "wits": 0 },
+    "attrs": {
+      "might": 0,
+      "finesse": 2,
+      "wits": 0
+    },
     "attack_mod": 3,
     "damage": "1d4+1",
-    "note": "雾码头打捞（N2G-2/2c）伏击判定的演出引用；数值待定稿"
+    "note": "雾码头打捞（N2G-2/2c）伏击判定的演出引用"
   },
   {
     "id": "mercenary",
     "name": "三方佣兵",
-    "hp": 14,
+    "hp": 12,
     "ac": 12,
-    "attrs": { "might": 2, "finesse": 1, "wits": 0 },
-    "attack_mod": 4,
+    "attrs": {
+      "might": 2,
+      "finesse": 1,
+      "wits": 0
+    },
+    "attack_mod": 3,
     "damage": "1d6+1",
-    "note": "独狼失败路通缉战（N2L-1b，难）：三方共同雇佣的追兵；数值待定稿"
+    "note": "独狼失败路通缉战（N2L-1b，难）：三方共同雇佣的追兵"
   },
   {
     "id": "page_warden",
     "name": "守页人",
-    "hp": 22,
-    "ac": 12,
-    "attrs": { "might": 2, "finesse": 1, "wits": 1 },
-    "attack_mod": 4,
+    "hp": 38,
+    "ac": 13,
+    "attrs": {
+      "might": 2,
+      "finesse": 1,
+      "wits": 1
+    },
+    "attack_mod": 5,
     "damage": "1d6+2",
     "boss": true,
     "skills": [
-      { "id": "seal_burst", "name": "封印冲击", "kind": "aoe", "damage": "1d8",
-        "uses": 2, "cooldown": 2,
-        "save": { "attr": "might", "dc": 12, "on_success": "half" },
-        "note": "封条展开的范围压制（11 §5.1 豁免范围效果；自 arena 守页人精英改造，数值占位待定稿）" }
+      {
+        "id": "seal_shock",
+        "name": "封印冲击",
+        "kind": "aoe",
+        "damage": "1d6+2",
+        "save": {
+          "attr": "finesse",
+          "dc": 12,
+          "on_success": "half"
+        },
+        "note": "story/03 §3.1：每 2 回合 AoE（敏豁免 DC 12，半伤 1d6+2；11 §5.1 豁免范围效果）"
+      },
+      {
+        "id": "rewrite_rules",
+        "name": "重写守则",
+        "kind": "buff",
+        "effect": {
+          "attack_mod": 1
+        },
+        "note": "story/03 §3.1 转阶段：HP<50% 一次，本场自身攻击 +1（事件流可溯）"
+      }
     ],
-    "note": "R5 Boss：誊写庭留下的自动缮写傀儡（战役书幕三）；回合行为脚本属战役书 §11 开放项"
+    "behavior": [
+      {
+        "every_n_rounds": 2,
+        "skill": "seal_shock"
+      },
+      {
+        "when_hp_below": 0.5,
+        "once": true,
+        "skill": "rewrite_rules"
+      }
+    ],
+    "note": "R5 Boss：誊写庭留下的自动缮写傀儡（战役书幕三）；回合行为脚本按 story/03 §2/§3.1 落位"
   },
   {
     "id": "tide_avatar",
     "name": "墨潮化身",
-    "hp": 30,
+    "hp": 15,
     "ac": 13,
-    "attrs": { "might": 2, "finesse": 2, "wits": 1 },
-    "attack_mod": 5,
-    "damage": "1d8+2",
+    "attrs": {
+      "might": 2,
+      "finesse": 2,
+      "wits": 1
+    },
+    "attack_mod": 3,
+    "damage": "1d6+2",
     "boss": true,
     "skills": [
-      { "id": "tide_surge", "name": "墨潮席卷", "kind": "aoe", "damage": "1d8",
-        "uses": 3, "cooldown": 2,
-        "save": { "attr": "finesse", "dc": 13, "on_success": "half" },
-        "note": "褪墨之潮的群体冲刷（11 §5.1 豁免范围效果；数值占位待定稿）" }
+      {
+        "id": "tide_sweep",
+        "name": "墨潮席卷",
+        "kind": "aoe",
+        "damage": "1d6+2",
+        "save": {
+          "attr": "finesse",
+          "dc": 13,
+          "on_success": "half"
+        },
+        "note": "story/03 §3.2：每 2 回合 AoE（敏豁免 DC 13，半伤 1d6+2；11 §5.1 豁免范围效果）"
+      },
+      {
+        "id": "call_imps",
+        "name": "召唤幼体",
+        "kind": "summon",
+        "ref": "ink_imp",
+        "count": 2,
+        "note": "story/03 §3.2：HP<50% 一次召唤墨魈幼体 ×2（受同屏 ≤8 约束校验）"
+      }
     ],
-    "note": "N4-1 最终 Boss：褪墨之潮的化身（战役书终章）；回合行为脚本属战役书 §11 开放项"
+    "behavior": [
+      {
+        "every_n_rounds": 2,
+        "skill": "tide_sweep"
+      },
+      {
+        "when_hp_below": 0.5,
+        "once": true,
+        "skill": "call_imps"
+      }
+    ],
+    "note": "N4-1 最终 Boss：褪墨之潮的化身（战役书终章）；回合行为脚本按 story/03 §2/§3.2 落位"
   }
 ]

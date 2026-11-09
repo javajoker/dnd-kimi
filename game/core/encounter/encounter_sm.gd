@@ -64,6 +64,10 @@ var _last_actor: String = ""
 var _escort_unit_id := ""          # 护送对象实例 id（kind=escort_npc：不占行动轮、不可指令、HP 不持久化）
 var _escort_survive_rounds := 0    # 存活满 N 个完整回合即胜；0 = 非护送遭遇
 var _escort_failure_effects: Array = [] # 目标失败写板（罚时替代全灭，08 §2 失败即分支）
+# ---- Boss 回合行为脚本（story/03 §2/§3：数据驱动，敌人条目 behavior 块）----
+const ON_SCREEN_CAP := 8                  # 同屏单位上限（story/03 §3.2：召唤受同屏 ≤8 约束校验）
+var _pending_summons: Array[String] = []  # 召唤单位延后入先攻序（避免敌方回合迭代中改序，下轮起行动）
+var _summon_seq := 0                      # 召唤实例 id 序号（包内唯一）
 
 func _init(p_board: Board, p_stream: EventStream, p_rng: Rng, p_pack_id: String = "system") -> void:
 	board = p_board
@@ -160,6 +164,7 @@ func _add_unit(def: Dictionary, side: StringName) -> void:
 	u["cooldowns"] = {}
 	u["items"] = (u.get("items", []) as Array).duplicate(true)
 	u["statuses"] = []
+	u["behavior_fired"] = {} # behavior once 触发器已发记录（story/03 §2：when_hp_below+once 只触发一次）
 	u["downed"] = false
 	u["dead"] = false
 	u["death_saves"] = {"s": 0, "f": 0}
@@ -247,6 +252,10 @@ func _run_enemy_phase() -> void:
 		_enemy_act(u)
 		if _over:
 			return
+	# 召唤单位敌方回合结束后入先攻序尾（下轮起行动；避免迭代中改序）
+	if not _pending_summons.is_empty():
+		_order.append_array(_pending_summons)
+		_pending_summons.clear()
 	_round += 1
 	_party_adv_rounds = maxi(0, _party_adv_rounds - 1)
 	# 护送目标：存活满 survive_rounds 个完整回合即胜（11 §5 目标达成，tech/02 §6 escort 块）
@@ -256,36 +265,28 @@ func _run_enemy_phase() -> void:
 	_begin_party_phase()
 
 ## 敌方行动：与玩家走同一结算路径（同一事件流，tech/01 §6.2），source=&"enemy"。
+## 有 behavior 块的敌人按回合行为脚本求值（story/03 §2：按序求值，无命中即普攻）；
+## 无 behavior 的敌人走既有 cooldown/uses 范围技能拾取（存量兼容）。
 func _enemy_act(u: Dictionary) -> void:
 	for k: String in (u["cooldowns"] as Dictionary).keys():
 		(u["cooldowns"] as Dictionary)[k] = maxi(0, int((u["cooldowns"] as Dictionary)[k]) - 1)
-	var aoe := _pick_aoe(u)
-	if not aoe.is_empty():
-		if (u["skill_uses"] as Dictionary).has(str(aoe["id"])):
-			(u["skill_uses"] as Dictionary)[str(aoe["id"])] = int((u["skill_uses"] as Dictionary)[str(aoe["id"])]) - 1
-		(u["cooldowns"] as Dictionary)[str(aoe["id"])] = int(aoe.get("cooldown", 0))
-		stream.emit(EventTypes.SKILL_USE, {"unit": u["id"], "skill": aoe["id"],
-			"name": str(aoe.get("name", aoe["id"])), "source": &"enemy"}, &"core", node_id)
-		var save_def: Dictionary = aoe.get("save", {})
-		for tid: String in _order:
-			var t: Dictionary = _units[tid]
-			if t["side"] != &"party" or bool(t["dead"]) or bool(t["downed"]):
-				continue
-			var res := LightV1.save_throw(rng, _attr(t, str(save_def.get("attr", "finesse"))),
-				save_def, str(aoe.get("damage", "1d4")))
-			_apply_damage(t, int(res["damage_taken"]), true) # 先落数值再发事件
-			stream.emit(EventTypes.CHECK_ROLL, {"roller": tid, "kind": "save",
-				"skill": aoe["id"], "rolls": res["rolls"], "keep": res["keep"], "mod": res["mod"],
-				"total": res["total"], "dc": res["dc"], "success": res["success"],
-				"damage": res["damage_taken"], "on_success": res["on_success"],
-				"target_hp_after": int(t["hp"]),
-				"key": bool(aoe.get("key", false)), # 豁免默认普通演出，内容包可标记关键（11 §5.1）
-				"extreme": bool(res["nat20"]) or bool(res["nat1"]),
-				"source": &"enemy"}, &"core", node_id)
-			_emit_damage_outcome(t)
-			if _over:
-				return
-		return
+	var behavior: Array = u.get("behavior", [])
+	if not behavior.is_empty():
+		var hit := _eval_behavior(u)
+		if not hit.is_empty():
+			_exec_behavior_skill(u, hit["skill"], hit["trigger"])
+			return
+		# 脚本无命中 → 落到下方普攻
+	else:
+		var aoe := _pick_aoe(u)
+		if not aoe.is_empty():
+			if (u["skill_uses"] as Dictionary).has(str(aoe["id"])):
+				(u["skill_uses"] as Dictionary)[str(aoe["id"])] = int((u["skill_uses"] as Dictionary)[str(aoe["id"])]) - 1
+			(u["cooldowns"] as Dictionary)[str(aoe["id"])] = int(aoe.get("cooldown", 0))
+			stream.emit(EventTypes.SKILL_USE, {"unit": u["id"], "skill": aoe["id"],
+				"name": str(aoe.get("name", aoe["id"])), "source": &"enemy"}, &"core", node_id)
+			_resolve_aoe_saves(u, aoe)
+			return
 	# 近战意图优先指向护送对象（打断仪式，tech/02 §6 escort 块）；范围效果照常覆盖全队
 	var target_id := first_alive_party()
 	if _escort_alive():
@@ -294,6 +295,102 @@ func _enemy_act(u: Dictionary) -> void:
 		_check_battle_end()
 		return
 	_resolve_attack(u, target_id, {}, &"enemy")
+
+## 范围技能豁免结算（11 §5.1：声明 save 块的范围效果；逐目标豁免明细进事件流）。
+func _resolve_aoe_saves(u: Dictionary, aoe: Dictionary) -> void:
+	var save_def: Dictionary = aoe.get("save", {})
+	for tid: String in _order:
+		var t: Dictionary = _units[tid]
+		if t["side"] != &"party" or bool(t["dead"]) or bool(t["downed"]):
+			continue
+		var res := LightV1.save_throw(rng, _attr(t, str(save_def.get("attr", "finesse"))),
+			save_def, str(aoe.get("damage", "1d4")))
+		_apply_damage(t, int(res["damage_taken"]), true) # 先落数值再发事件
+		stream.emit(EventTypes.CHECK_ROLL, {"roller": tid, "kind": "save",
+			"skill": aoe["id"], "rolls": res["rolls"], "keep": res["keep"], "mod": res["mod"],
+			"total": res["total"], "dc": res["dc"], "success": res["success"],
+			"damage": res["damage_taken"], "on_success": res["on_success"],
+			"target_hp_after": int(t["hp"]),
+			"key": bool(aoe.get("key", false)), # 豁免默认普通演出，内容包可标记关键（11 §5.1）
+			"extreme": bool(res["nat20"]) or bool(res["nat1"]),
+			"source": &"enemy"}, &"core", node_id)
+		_emit_damage_outcome(t)
+		if _over:
+			return
+
+# ---------------------------------------------------------------- Boss 回合行为脚本（story/03 §2/§3）
+
+## 按序求值行为脚本：首个命中的触发器胜出；once 触发器仅在实际执行时记为已发。
+## 返回 {skill, trigger}；无命中返回 {}。
+func _eval_behavior(u: Dictionary) -> Dictionary:
+	var fired: Dictionary = u["behavior_fired"]
+	for b: Variant in (u["behavior"] as Array):
+		var bd: Dictionary = b
+		var sk := _find_skill(u, str(bd.get("skill", "")))
+		if sk.is_empty():
+			continue
+		if bd.has("when_hp_below"):
+			if bool(bd.get("once", false)) and bool(fired.get(str(sk["id"]), false)):
+				continue
+			if float(u["hp"]) / float(maxi(1, int(u["max_hp"]))) < float(bd["when_hp_below"]):
+				fired[str(sk["id"])] = true
+				return {"skill": sk, "trigger": bd}
+		elif bd.has("every_n_rounds"):
+			var n := int(bd["every_n_rounds"])
+			if n >= 1 and _round % n == 0:
+				return {"skill": sk, "trigger": bd}
+	return {}
+
+## 执行行为脚本技能：产出全部进事件流（battle.skill 含触发器明细，story/03 §2）。
+## kind=aoe → 豁免结算（11 §5.1）；buff → 自身修正（§3.1 重写守则 攻击+1）；summon → 召唤（§3.2 同屏 ≤8 校验）。
+func _exec_behavior_skill(u: Dictionary, sk: Dictionary, trigger: Dictionary) -> void:
+	var trig := {}
+	if trigger.has("every_n_rounds"):
+		trig = {"kind": "every_n_rounds", "n": int(trigger["every_n_rounds"])}
+	else:
+		trig = {"kind": "when_hp_below", "threshold": float(trigger["when_hp_below"]),
+			"once": bool(trigger.get("once", false))}
+	var ev := {"unit": u["id"], "skill": sk["id"], "name": str(sk.get("name", sk["id"])),
+		"trigger": trig, "source": &"enemy"}
+	match str(sk.get("kind", "")):
+		"buff":
+			# 转阶段自身强化（story/03 §3.1「重写守则」：本场自身攻击 +1，事件流可溯）
+			var eff: Dictionary = sk.get("effect", {})
+			if eff.has("attack_mod"):
+				u["attack_mod"] = int(u["attack_mod"]) + int(eff["attack_mod"])
+			ev["effect"] = eff.duplicate(true)
+			ev["attack_mod_after"] = int(u["attack_mod"])
+			stream.emit(EventTypes.BATTLE_SKILL, ev, &"core", node_id)
+		"summon":
+			ev["summoned"] = _exec_summon(u, sk)
+			ev["cap"] = ON_SCREEN_CAP
+			stream.emit(EventTypes.BATTLE_SKILL, ev, &"core", node_id)
+		_: # aoe：挂 save 声明的范围效果（story/03 §2；11 §5.1）
+			ev["save"] = (sk.get("save", {}) as Dictionary).duplicate(true)
+			ev["damage_expr"] = str(sk.get("damage", "1d4"))
+			stream.emit(EventTypes.BATTLE_SKILL, ev, &"core", node_id)
+			_resolve_aoe_saves(u, sk)
+
+## 召唤：同屏存活单位 ≤8 约束校验（story/03 §3.2）；模板由 BattleDef 按 summon.ref 内联（fail-fast）。
+## 返回新单位 id 列表（可为空 = 同屏已满，技能空发但事件流如实记录）。
+func _exec_summon(u: Dictionary, sk: Dictionary) -> Array:
+	var alive := 0
+	for id: String in _units:
+		if not bool((_units[id] as Dictionary)["dead"]):
+			alive += 1
+	var room := maxi(0, ON_SCREEN_CAP - alive)
+	var n := mini(int(sk.get("count", 1)), room)
+	var tmpl: Dictionary = sk.get("summon", {})
+	var out: Array = []
+	for i: int in n:
+		_summon_seq += 1
+		var nid := "%s_minion%d" % [str(u["id"]), _summon_seq]
+		var def: Dictionary = tmpl.duplicate(true)
+		def["id"] = nid
+		_add_unit(def, &"enemy")
+		_pending_summons.append(nid)
+		out.append(nid)
+	return out
 
 ## 挑可用的范围技能（11 §5.1：声明 save 块的范围效果）。
 func _pick_aoe(u: Dictionary) -> Dictionary:

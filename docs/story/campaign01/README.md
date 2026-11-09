@@ -34,6 +34,7 @@
 - **遭遇补登记（TP1 验收裁决 3）**：N2G-2c（绕行，maze/inherit/medium/4）与 R1（拾取检定房，maze/forced_time/easy/2）补入 encounters.json，节点侧补 encounter 关联；遭遇总数 14 → 16。
 - **战斗数值入表（M2 路径第一步）**：characters/skills/enemies 三表新增，数值逐键转写自技术原型 TP2 引导脚本（与 11 文档一致，转写搬运非再创作）；引导层（main.gd）改为 pack 数据驱动组装战斗定义，同种子同指令事件流与旧硬编码逐字节一致作为"无再创作"硬证明。hp/ac 公式取可复现现值的简式（如 `10 + 2*might`=14），规则包求值器（tech/04 §2）同步落位。
 - **字段扩展登记（M2）**：encounters.json 的 `party` / `enemies` / `party_advantage` / `loot` / `xp` 与 characters.json 的 `basic_attack` 均为可选扩展字段，已同步登记 tech/02 §6 与 tech/04 §2（§11：新增字段一律可选）。`party_advantage` 即 11 §3.1"见证撤销 → 首回合全队优势"的内容包声明落位。
+- **数值定稿（story/03 v1.1）**：enemies.json 终值按 `../03-数值定稿与Boss设计.md` §1 仿真标定落位（winrate 200 局/场全入区间），移除全部"数值待定稿"标注；守页人/墨潮化身挂 `behavior` 回合行为脚本（§2 Schema：every_n_rounds / when_hp_below+once），Boss 技能 seal_shock / 重写守则 / tide_sweep / call_imps 按 §3.1/§3.2 定稿（召唤受同屏 ≤8 约束）。
 - **墨盾格挡取值（M2 裁决）**：按 11 §3.1 与原型硬编码，效果仅"持续期间攻击者劣势"，**不含 AC+2**；任务描述中的"AC+2"与文档不符，未落位，待裁决后再以一行数据追加（runtime statuses 已支持 `ac_bonus`）。
 - **heal_potion use 块（M2 裁决）**：采用扁平键 `{timing, heal, consume}`（与运行时一致），tech/04 §4 示例的 `effect` 嵌套形态待 §5 效果系统运行时接入后统一（规范已补落位注记）。
 - **价格占位（M2）**：N1-1 商店半页潮汐表价格占位 15，落 `items.json` 的 `price` 可选字段与节点边文案；heal_potion 投放点为序章带入 ×2（战役书 §4），N1-1 商店引用记于 `source`；补给药水 15 金同步上架（M2 节点流程验收裁决 B，推翻本行原"不新增购买边"注记）。

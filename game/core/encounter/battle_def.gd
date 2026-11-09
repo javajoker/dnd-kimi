@@ -56,7 +56,7 @@ static func assemble(pack: Dictionary, encounter_id: String, selection: Dictiona
 		if not enemies.has(ref):
 			errors.append("遭遇 %s enemies 引用未登记敌人 '%s'（enemies.json）" % [encounter_id, ref])
 			continue
-		foes.append(_build_enemy_unit(str(e.get("id", ref)), enemies[ref], encounter_id, errors))
+		foes.append(_build_enemy_unit(str(e.get("id", ref)), enemies[ref], enemies, encounter_id, errors))
 
 	# ---- 护送目标（tech/02 §6 escort 块 → 11 §5「遭遇定义的目标达成」）----
 	var escort_def := {}
@@ -202,7 +202,7 @@ static func _build_character_unit(inst_id: String, ref: String, c: Dictionary, p
 		unit["items"] = unit_items
 	return unit
 
-static func _build_enemy_unit(inst_id: String, def: Dictionary, encounter_id: String,
+static func _build_enemy_unit(inst_id: String, def: Dictionary, enemies: Dictionary, encounter_id: String,
 		errors: Array[String]) -> Dictionary:
 	var attrs := {"might": 0, "finesse": 0, "wits": 0}
 	for a: String in (def.get("attrs", {}) as Dictionary).keys():
@@ -236,9 +236,48 @@ static func _build_enemy_unit(inst_id: String, def: Dictionary, encounter_id: St
 		if str(s.get("kind", "")) == "aoe" and not (s.get("save", {}) as Dictionary).has("dc"):
 			errors.append("遭遇 %s 敌人 %s 范围技能 '%s' 缺 save.dc（11 §5.1）"
 				% [encounter_id, inst_id, str(s.get("id", ""))])
+		# 转阶段自身强化（story/03 §3.1：buff 技能 effect 块透传）
+		if s.has("effect"):
+			out["effect"] = (s["effect"] as Dictionary).duplicate(true)
+		# 召唤技能（story/03 §3.2）：ref 引用的敌人条目内联为 summon 模板（fail-fast）
+		if str(s.get("kind", "")) == "summon":
+			var sref := str(s.get("ref", ""))
+			if not enemies.has(sref):
+				errors.append("遭遇 %s 敌人 %s 召唤技能 '%s' 引用未登记敌人 '%s'（enemies.json）"
+					% [encounter_id, inst_id, str(s.get("id", "")), sref])
+			else:
+				var t: Dictionary = enemies[sref]
+				out["summon"] = {"ref": sref, "name": str(t.get("name", sref)),
+					"hp": int(t.get("hp", 1)), "ac": int(t.get("ac", 10)),
+					"attrs": (t.get("attrs", {"might": 0, "finesse": 0, "wits": 0}) as Dictionary).duplicate(),
+					"attack_mod": int(t.get("attack_mod", 0)), "damage": str(t.get("damage", "1d4"))}
+				out["count"] = int(s.get("count", 1))
 		unit_skills.append(out)
 	if not unit_skills.is_empty():
 		unit["skills"] = unit_skills
+	# 回合行为脚本（story/03 §2：every_n_rounds / when_hp_below+once；引用的技能须为本条目自带）
+	if def.has("behavior"):
+		var behavior: Array = []
+		for b: Variant in (def["behavior"] as Array):
+			var bd: Dictionary = b
+			var entry := {"skill": str(bd.get("skill", ""))}
+			if bd.has("every_n_rounds"):
+				entry["every_n_rounds"] = int(bd["every_n_rounds"])
+			elif bd.has("when_hp_below"):
+				entry["when_hp_below"] = float(bd["when_hp_below"])
+				entry["once"] = bool(bd.get("once", false))
+			else:
+				errors.append("遭遇 %s 敌人 %s behavior 条目缺触发器（story/03 §2：every_n_rounds / when_hp_below）"
+					% [encounter_id, inst_id])
+			var known := false
+			for sk2: Variant in unit_skills:
+				if str((sk2 as Dictionary)["id"]) == str(entry["skill"]):
+					known = true
+			if not known:
+				errors.append("遭遇 %s 敌人 %s behavior 引用非自带技能 '%s'（story/03 §2）"
+					% [encounter_id, inst_id, str(entry["skill"])])
+			behavior.append(entry)
+		unit["behavior"] = behavior
 	return unit
 
 ## tech/04 §3 技能条目 → 运行时技能结构（uses_per_encounter→uses；target 枚举映射；

@@ -1,128 +1,669 @@
 [
-  { "id": "N1-1",   "type": "rest",    "mode": "inherit",     "difficulty": null,    "max_units": 0, "node": "N1-1",
-    "note": "自由市广场：休整 / 商店 / 传闻；商店出售半页潮汐表" },
-  { "id": "N1-2b",  "type": "battle",  "mode": "inherit",     "difficulty": "easy",  "max_units": 4, "node": "N1-2b",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "imp1", "ref": "ink_imp" }, { "id": "imp2", "ref": "ink_imp" } ],
+  {
+    "id": "N1-1",
+    "type": "rest",
+    "mode": "inherit",
+    "difficulty": null,
+    "max_units": 0,
+    "node": "N1-1",
+    "note": "自由市广场：休整 / 商店 / 传闻；商店出售半页潮汐表"
+  },
+  {
+    "id": "N1-2b",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "easy",
+    "max_units": 7,
+    "node": "N1-2b",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "imp1",
+        "ref": "ink_imp"
+      },
+      {
+        "id": "imp2",
+        "ref": "ink_imp"
+      },
+      {
+        "id": "imp3",
+        "ref": "ink_imp"
+      },
+      {
+        "id": "swarm1",
+        "ref": "ink_swarm"
+      }
+    ],
     "xp": 80,
-    "note": "封锁巷，调查失败路；数值待定稿" },
-  { "id": "N1-7",   "type": "battle",  "mode": "inherit",     "difficulty": "easy",  "max_units": 5, "node": "N1-7",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "boss", "ref": "ink_fiend" }, { "id": "imp1", "ref": "ink_imp" },
-      { "id": "imp2", "ref": "ink_imp" } ],
-    "pos": { "allies": [[1, 2], [1, 1], [1, 3]], "enemies": [[5, 2], [6, 1], [6, 3]] },
-    "party_advantage": { "flag": "witnessed_revocation", "rounds": 1 },
-    "loot": [ { "item": "ink_core", "n": 1 } ],
+    "note": "封锁巷，调查失败路；定稿阵容：幼体×3+墨魈群×1（winrate 88.5% ∈ 易 85~95）"
+  },
+  {
+    "id": "N1-7",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "easy",
+    "max_units": 5,
+    "node": "N1-7",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "boss",
+        "ref": "ink_fiend"
+      },
+      {
+        "id": "imp1",
+        "ref": "ink_imp"
+      },
+      {
+        "id": "imp2",
+        "ref": "ink_imp"
+      }
+    ],
+    "pos": {
+      "allies": [
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          3
+        ]
+      ],
+      "enemies": [
+        [
+          5,
+          2
+        ],
+        [
+          6,
+          1
+        ],
+        [
+          6,
+          3
+        ]
+      ]
+    },
+    "party_advantage": {
+      "flag": "witnessed_revocation",
+      "rounds": 1
+    },
+    "loot": [
+      {
+        "item": "ink_core",
+        "n": 1
+      }
+    ],
     "xp": 100,
-    "note": "教学 Boss：墨魈（AoE 墨雨溅射 save 随 enemies.json 条目挂载，11 §5.1）" },
-  { "id": "N2S-2",  "type": "escort",  "mode": "inherit",     "difficulty": "medium","max_units": 6, "node": "N2S-2",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" } ],
-    "enemies": [ { "id": "swarm1", "ref": "ink_swarm" }, { "id": "swarm2", "ref": "ink_swarm" },
-      { "id": "imp1", "ref": "ink_imp" } ],
-    "pos": { "allies": [[1, 2], [1, 1], [0, 2]], "enemies": [[5, 1], [5, 3], [6, 2]] },
+    "note": "教学 Boss：墨魈（AoE 墨雨溅射 save 随 enemies.json 条目挂载，11 §5.1）"
+  },
+  {
+    "id": "N2S-2",
+    "type": "escort",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 5,
+    "node": "N2S-2",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "swarm1",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "swarm2",
+        "ref": "ink_swarm"
+      }
+    ],
+    "pos": {
+      "allies": [
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          2
+        ]
+      ],
+      "enemies": [
+        [
+          5,
+          1
+        ],
+        [
+          5,
+          3
+        ],
+        [
+          6,
+          2
+        ]
+      ]
+    },
     "escort": {
-      "unit": { "id": "scribe", "name": "缮写士", "hp": 14, "ac": 12,
-        "attrs": { "might": 0, "finesse": 1, "wits": 1 }, "attack_mod": 0, "damage": "1d4" },
+      "unit": {
+        "id": "scribe",
+        "name": "缮写士",
+        "hp": 14,
+        "ac": 12,
+        "attrs": {
+          "might": 0,
+          "finesse": 1,
+          "wits": 1
+        },
+        "attack_mod": 0,
+        "damage": "1d4"
+      },
       "survive_rounds": 3,
-      "failure_effects": [ { "clock": 1 } ]
+      "failure_effects": [
+        {
+          "clock": 1
+        }
+      ]
     },
     "xp": 120,
-    "note": "护送缮写士完成局部重墨：存活 3 回合或全歼即胜；缮写士倒地 = 目标失败（罚时 +1 仍至 N2S-3，N2S-1 注记）；数值待定稿" },
-  { "id": "N2U-1b", "type": "battle",  "mode": "inherit",     "difficulty": "medium","max_units": 5, "node": "N2U-1b",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "guard1", "ref": "uninked_guard" }, { "id": "guard2", "ref": "uninked_guard" } ],
+    "note": "护送缮写士完成局部重墨：存活 3 回合或全歼即胜；缮写士倒地 = 目标失败（罚时 +1 仍至 N2S-3，N2S-1 注记）；定稿阵容：墨魈群×2（winrate 78.5% ∈ 中 70~80）"
+  },
+  {
+    "id": "N2U-1b",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 6,
+    "node": "N2U-1b",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "guard1",
+        "ref": "uninked_guard"
+      },
+      {
+        "id": "guard2",
+        "ref": "uninked_guard"
+      },
+      {
+        "id": "guard3",
+        "ref": "uninked_guard"
+      }
+    ],
     "xp": 100,
-    "note": "潜行失败路：暴露战（黑羽卫）；数值待定稿" },
-  { "id": "N2U-2",  "type": "hybrid",  "mode": "inherit",     "difficulty": "medium","max_units": 6, "node": "N2U-2",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "tax1", "ref": "tax_guard" }, { "id": "tax2", "ref": "tax_guard" },
-      { "id": "tax3", "ref": "tax_guard" } ],
+    "note": "潜行失败路：暴露战（黑羽卫）；定稿阵容：黑羽卫×3（winrate 80.0% ∈ 中 70~80）"
+  },
+  {
+    "id": "N2U-2",
+    "type": "hybrid",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 6,
+    "node": "N2U-2",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "tax1",
+        "ref": "tax_guard"
+      },
+      {
+        "id": "tax2",
+        "ref": "tax_guard"
+      },
+      {
+        "id": "tax3",
+        "ref": "tax_guard"
+      }
+    ],
     "xp": 120,
-    "note": "战斗 + 抉择：胜利后回节点呈现撕/不撕双出边（效果随边写板，tech/02 §3）；数值待定稿" },
-  { "id": "N2G-2",  "type": "maze",    "mode": "inherit",     "difficulty": "medium","max_units": 4, "node": "N2G-2",
-    "maze": { "beats": [
-      { "type": "check", "skill": "perception", "difficulty": "medium",
-        "text": "浓雾压低了码头。你俯身辨认浮标与缆绳的走向。",
-        "success_effects": [ { "xp": 30 } ], "failure_effects": [ { "clock": 1 } ] },
-      { "type": "ambush", "skill": "stealth", "difficulty": "medium", "enemy": "dock_ambusher",
-        "text": "雾中黑影扑向打捞索——伏击！",
-        "failure_effects": [ { "clock": 1 } ] },
-      { "type": "check", "skill": "history", "difficulty": "easy",
-        "text": "打捞钩带上来的箱子上烙着旧港的印记。",
-        "success_effects": [ { "xp": 20 } ] }
-    ] },
-    "note": "雾码头打捞：探索序列 3 拍（检定/伏击判定/检定），密道道具边按 nodes.json 走；数值待定稿" },
-  { "id": "N2G-2b", "type": "maze",    "mode": "inherit",     "difficulty": "medium","max_units": 4, "node": "N2G-2b",
-    "maze": { "beats": [
-      { "type": "loot", "item": "ink_core", "n": 1,
-        "text": "沉书阁的暗格里，一枚墨核仍在微光中呼吸。" },
-      { "type": "check", "skill": "history", "difficulty": "easy",
-        "text": "你拂去书架上的盐霜，认出誊写庭旧藏的编目。",
-        "success_effects": [ { "xp": 30 } ] }
-    ] },
-    "note": "沉书阁密道：额外战利品（墨核 ×1）；织命者残简 ×1 由节点 on_enter 投放；数值待定稿" },
-  { "id": "N2G-2c", "type": "maze",    "mode": "inherit",     "difficulty": "medium","max_units": 4, "node": "N2G-2c",
-    "maze": { "beats": [
-      { "type": "ambush", "skill": "stealth", "difficulty": "medium", "enemy": "dock_ambusher",
-        "text": "绕行第一场：断桥下的伏击者借雾逼近。",
-        "failure_effects": [ { "clock": 1 } ] },
-      { "type": "ambush", "skill": "perception", "difficulty": "medium", "enemy": "dock_ambusher",
-        "text": "绕行第二场：缆桩后又是一对眼睛。",
-        "failure_effects": [ { "clock": 1 } ] }
-    ] },
-    "note": "无潮汐表的绕行路线：多 2 场遭遇（以伏击判定节拍呈现）；数值待定稿" },
-  { "id": "R1",     "type": "maze",    "mode": "forced_time", "difficulty": "easy",  "max_units": 2, "node": "R1",
-    "maze": { "beats": [
-      { "type": "loot", "item": "ink_core", "n": 1,
-        "text": "褪色民居的桌台上，一枚未竟的墨核静静躺着。" }
-    ] },
-    "note": "拾取/检定房：被撤销者的生活痕迹（幕三接入后走探索序列；数值待定稿）" },
-  { "id": "N2L-1b", "type": "battle",  "mode": "inherit",     "difficulty": "hard",  "max_units": 6, "node": "N2L-1b",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "merc1", "ref": "mercenary" }, { "id": "merc2", "ref": "mercenary" },
-      { "id": "merc3", "ref": "mercenary" } ],
+    "note": "战斗 + 抉择：胜利后回节点呈现撕/不撕双出边（效果随边写板，tech/02 §3）"
+  },
+  {
+    "id": "N2G-2",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 4,
+    "node": "N2G-2",
+    "maze": {
+      "beats": [
+        {
+          "type": "check",
+          "skill": "perception",
+          "difficulty": "medium",
+          "text": "浓雾压低了码头。你俯身辨认浮标与缆绳的走向。",
+          "success_effects": [
+            {
+              "xp": 30
+            }
+          ],
+          "failure_effects": [
+            {
+              "clock": 1
+            }
+          ]
+        },
+        {
+          "type": "ambush",
+          "skill": "stealth",
+          "difficulty": "medium",
+          "enemy": "dock_ambusher",
+          "text": "雾中黑影扑向打捞索——伏击！",
+          "failure_effects": [
+            {
+              "clock": 1
+            }
+          ]
+        },
+        {
+          "type": "check",
+          "skill": "history",
+          "difficulty": "easy",
+          "text": "打捞钩带上来的箱子上烙着旧港的印记。",
+          "success_effects": [
+            {
+              "xp": 20
+            }
+          ]
+        }
+      ]
+    },
+    "note": "雾码头打捞：探索序列 3 拍（检定/伏击判定/检定），密道道具边按 nodes.json 走"
+  },
+  {
+    "id": "N2G-2b",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 4,
+    "node": "N2G-2b",
+    "maze": {
+      "beats": [
+        {
+          "type": "loot",
+          "item": "ink_core",
+          "n": 1,
+          "text": "沉书阁的暗格里，一枚墨核仍在微光中呼吸。"
+        },
+        {
+          "type": "check",
+          "skill": "history",
+          "difficulty": "easy",
+          "text": "你拂去书架上的盐霜，认出誊写庭旧藏的编目。",
+          "success_effects": [
+            {
+              "xp": 30
+            }
+          ]
+        }
+      ]
+    },
+    "note": "沉书阁密道：额外战利品（墨核 ×1）；织命者残简 ×1 由节点 on_enter 投放"
+  },
+  {
+    "id": "N2G-2c",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 4,
+    "node": "N2G-2c",
+    "maze": {
+      "beats": [
+        {
+          "type": "ambush",
+          "skill": "stealth",
+          "difficulty": "medium",
+          "enemy": "dock_ambusher",
+          "text": "绕行第一场：断桥下的伏击者借雾逼近。",
+          "failure_effects": [
+            {
+              "clock": 1
+            }
+          ]
+        },
+        {
+          "type": "ambush",
+          "skill": "perception",
+          "difficulty": "medium",
+          "enemy": "dock_ambusher",
+          "text": "绕行第二场：缆桩后又是一对眼睛。",
+          "failure_effects": [
+            {
+              "clock": 1
+            }
+          ]
+        }
+      ]
+    },
+    "note": "无潮汐表的绕行路线：多 2 场遭遇（以伏击判定节拍呈现）"
+  },
+  {
+    "id": "R1",
+    "type": "maze",
+    "mode": "forced_time",
+    "difficulty": "easy",
+    "max_units": 2,
+    "node": "R1",
+    "maze": {
+      "beats": [
+        {
+          "type": "loot",
+          "item": "ink_core",
+          "n": 1,
+          "text": "褪色民居的桌台上，一枚未竟的墨核静静躺着。"
+        }
+      ]
+    },
+    "note": "拾取/检定房：被撤销者的生活痕迹（幕三接入后走探索序列"
+  },
+  {
+    "id": "N2L-1b",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "hard",
+    "max_units": 6,
+    "node": "N2L-1b",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "merc1",
+        "ref": "mercenary"
+      },
+      {
+        "id": "merc2",
+        "ref": "mercenary"
+      },
+      {
+        "id": "merc3",
+        "ref": "mercenary"
+      }
+    ],
     "xp": 150,
-    "note": "独狼失败路：三方通缉惩罚战（难），战后强制择一链（节点三出边）；数值待定稿" },
-  { "id": "R3",     "type": "battle",  "mode": "forced_time", "difficulty": "medium","max_units": 6, "node": "R3",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "boss", "ref": "ink_fiend" }, { "id": "imp1", "ref": "ink_imp" },
-      { "id": "imp2", "ref": "ink_imp" } ],
+    "note": "独狼失败路：三方通缉惩罚战（难），战后强制择一链（节点三出边）"
+  },
+  {
+    "id": "R3",
+    "type": "battle",
+    "mode": "forced_time",
+    "difficulty": "medium",
+    "max_units": 7,
+    "node": "R3",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "boss",
+        "ref": "ink_fiend"
+      },
+      {
+        "id": "swarm1",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "swarm2",
+        "ref": "ink_swarm"
+      }
+    ],
     "xp": 120,
-    "note": "墨魈巢穴：墨魈 + 幼体 ×2（战役书幕三战斗房）；数值占位待定稿" },
-  { "id": "R4-r",   "type": "battle",  "mode": "forced_time", "difficulty": "medium","max_units": 6, "node": "R4-r",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "swarm1", "ref": "ink_swarm" }, { "id": "swarm2", "ref": "ink_swarm" },
-      { "id": "imp1", "ref": "ink_imp" } ],
+    "note": "墨魈巢穴：墨魈 + 墨魈群 ×2（战役书幕三战斗房）（winrate 70.5% ∈ 中 70~80）"
+  },
+  {
+    "id": "R4-r",
+    "type": "battle",
+    "mode": "forced_time",
+    "difficulty": "medium",
+    "max_units": 7,
+    "node": "R4-r",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "swarm1",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "swarm2",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "swarm3",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "imp1",
+        "ref": "ink_imp"
+      }
+    ],
     "xp": 100,
-    "note": "回廊右路第一场（无黑羽令路径；战役书幕三 右路两场战斗，R4-r → R4-r2 场间无休整）；数值占位待定稿" },
-  { "id": "R4-r2",  "type": "battle",  "mode": "forced_time", "difficulty": "medium","max_units": 5, "node": "R4-r2",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "boss", "ref": "ink_fiend" }, { "id": "swarm1", "ref": "ink_swarm" } ],
+    "note": "回廊右路第一场（无黑羽令路径；战役书幕三 右路两场战斗，R4-r → R4-r2 场间无休整）；定稿阵容：墨魈群×3+幼体×1（winrate 72.5% ∈ 中 70~80）"
+  },
+  {
+    "id": "R4-r2",
+    "type": "battle",
+    "mode": "forced_time",
+    "difficulty": "medium",
+    "max_units": 7,
+    "node": "R4-r2",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "boss",
+        "ref": "ink_fiend"
+      },
+      {
+        "id": "swarm1",
+        "ref": "ink_swarm"
+      },
+      {
+        "id": "swarm2",
+        "ref": "ink_swarm"
+      }
+    ],
     "xp": 120,
-    "note": "回廊右路第二场（R4-r 派生节点链，README 转写决策）；数值占位待定稿" },
-  { "id": "R5",     "type": "battle",  "mode": "forced_time", "difficulty": "hard",  "max_units": 4, "node": "R5",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "warden", "ref": "page_warden" } ],
+    "note": "回廊右路第二场（R4-r 派生节点链，README 转写决策）；定稿阵容：墨魈+墨魈群×2（winrate 70.5% ∈ 中 70~80）"
+  },
+  {
+    "id": "R5",
+    "type": "battle",
+    "mode": "forced_time",
+    "difficulty": "hard",
+    "max_units": 4,
+    "node": "R5",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "warden",
+        "ref": "page_warden"
+      }
+    ],
     "xp": 200,
-    "note": "Boss：守页人（誊写庭自动缮写傀儡，自 arena 守页人精英改造）；战利品（残简+墨核）走节点边效果；回合行为脚本待定稿" },
-  { "id": "N3-7",   "type": "rest",    "mode": "forced_time", "difficulty": null,    "max_units": 0, "node": "N3-7",
-    "note": "空白广场：休整 + 演出；此处起解锁横屏" },
-  { "id": "N4-1",   "type": "battle",  "mode": "inherit",     "difficulty": "hard",  "max_units": 6, "node": "N4-1b",
-    "party": [ { "id": "pc", "ref": "player_blank" }, { "id": "kelan", "ref": "companion_kelan" },
-      { "id": "laofei", "ref": "companion_laofei" } ],
-    "enemies": [ { "id": "avatar", "ref": "tide_avatar" }, { "id": "imp1", "ref": "ink_imp" },
-      { "id": "imp2", "ref": "ink_imp" } ],
-    "enemy_weaken": { "flag": "mercy_shown", "attack_mod": -2 },
-    "loot": [ { "item": "ink_core", "n": 1 } ],
+    "note": "Boss：守页人（誊写庭自动缮写傀儡，自 arena 守页人精英改造）；战利品（残简+墨核）走节点边效果；回合行为脚本已定稿（story/03 §2/§3.1）；winrate 56.0% ∈ 难 50~65"
+  },
+  {
+    "id": "N3-7",
+    "type": "rest",
+    "mode": "forced_time",
+    "difficulty": null,
+    "max_units": 0,
+    "node": "N3-7",
+    "note": "空白广场：休整 + 演出；此处起解锁横屏"
+  },
+  {
+    "id": "N4-1",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "hard",
+    "max_units": 6,
+    "node": "N4-1b",
+    "party": [
+      {
+        "id": "pc",
+        "ref": "player_blank"
+      },
+      {
+        "id": "kelan",
+        "ref": "companion_kelan"
+      },
+      {
+        "id": "laofei",
+        "ref": "companion_laofei"
+      }
+    ],
+    "enemies": [
+      {
+        "id": "avatar",
+        "ref": "tide_avatar"
+      },
+      {
+        "id": "imp1",
+        "ref": "ink_imp"
+      },
+      {
+        "id": "imp2",
+        "ref": "ink_imp"
+      }
+    ],
+    "enemy_weaken": {
+      "flag": "mercy_shown",
+      "attack_mod": -2
+    },
+    "loot": [
+      {
+        "item": "ink_core",
+        "n": 1
+      }
+    ],
     "xp": 300,
-    "note": "最终 Boss：墨潮化身（挂 N4-1b 强攻节点；印戒免战走 N4-1 门节点 item 边）；推荐横屏；手下留情 → 敌方攻击修正 -2（战役书 §5 税吏证词，tech/02 §6 enemy_weaken）；墨核第 3 枚（战役书 §8 共 3 枚）；数值占位待定稿" }
+    "note": "最终 Boss：墨潮化身（挂 N4-1b 强攻节点；印戒免战走 N4-1 门节点 item 边）；推荐横屏；手下留情 → 敌方攻击修正 -2（战役书 §5 税吏证词，tech/02 §6 enemy_weaken）；墨核第 3 枚（战役书 §8 共 3 枚）；winrate 58.5% ∈ 难 50~65"
+  }
 ]

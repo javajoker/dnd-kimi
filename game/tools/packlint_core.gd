@@ -730,14 +730,44 @@ static func _v12_legal_keys(pack: Dictionary) -> Array:
 			_check_save(sk["save"], where, issues)
 	# 敌人内联技能：save 块合法（11 §5.1）；uses/cooldown 为非负整数
 	for eid: String in (pack.get("enemies", {}) as Dictionary).keys():
-		for sk: Variant in (pack["enemies"][eid] as Dictionary).get("skills", []):
+		var edef: Dictionary = pack["enemies"][eid]
+		var own_skills: Array = []
+		for sk: Variant in edef.get("skills", []):
 			var s: Dictionary = sk
+			own_skills.append(str(s.get("id", "")))
 			var where := "enemies.%s.%s" % [eid, str(s.get("id", "?"))]
 			if s.has("attr") and not ATTRS.has(str(s["attr"])):
 				issues.append({"v": "V12", "level": LEVEL_FAIL,
 					"msg": "%s attr '%s' 非法（11 §1 三属性）" % [where, str(s["attr"])]})
 			if s.has("save"):
 				_check_save(s["save"], where, issues)
+			if str(s.get("kind", "")) == "summon":
+				if not (pack.get("enemies", {}) as Dictionary).has(str(s.get("ref", ""))):
+					issues.append({"v": "V12", "level": LEVEL_FAIL,
+						"msg": "%s 召唤技能引用未登记敌人 '%s'（story/03 §3.2）"
+							% [where, str(s.get("ref", ""))]})
+				if int(s.get("count", 0)) < 1:
+					issues.append({"v": "V12", "level": LEVEL_FAIL,
+						"msg": "%s 召唤技能 count<1（story/03 §3.2）" % where})
+		# 回合行为脚本（story/03 §2）：触发器二选一、技能须为本条目自带、阈值/周期合法
+		for b: Variant in edef.get("behavior", []):
+			var bd: Dictionary = b
+			var where := "enemies.%s.behavior" % eid
+			if not bd.has("every_n_rounds") and not bd.has("when_hp_below"):
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s 条目缺触发器（story/03 §2：every_n_rounds / when_hp_below）" % where})
+			if bd.has("every_n_rounds") and int(bd["every_n_rounds"]) < 1:
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s every_n_rounds=%d < 1（story/03 §2）" % [where, int(bd["every_n_rounds"])]})
+			if bd.has("when_hp_below"):
+				var th := float(bd["when_hp_below"])
+				if th <= 0.0 or th >= 1.0:
+					issues.append({"v": "V12", "level": LEVEL_FAIL,
+						"msg": "%s when_hp_below=%.2f 越出 (0,1)（story/03 §2）" % [where, th]})
+			if not own_skills.has(str(bd.get("skill", ""))):
+				issues.append({"v": "V12", "level": LEVEL_FAIL,
+					"msg": "%s 引用非自带技能 '%s'（story/03 §2：skill 引用敌人自带技能）"
+						% [where, str(bd.get("skill", ""))]})
 	# 迷宫节拍检定：技能名在绑定规则包注册 + 难度三档（与检定边同一硬规则，tech/02 §6 maze 块）
 	for eid: String in (pack.get("encounters", {}) as Dictionary).keys():
 		var beats: Array = ((pack["encounters"][eid] as Dictionary).get("maze", {}) as Dictionary).get("beats", [])

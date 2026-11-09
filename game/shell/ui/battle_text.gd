@@ -56,6 +56,14 @@ static func event_log_text(ev: Dictionary, name_of: Callable) -> String:
 			return check_text(p, name_of) + src_tag(p)
 		EventTypes.SKILL_USE:
 			return "%s 发动「%s」%s" % [name_of.call(str(p["unit"])), p["name"], src_tag(p)]
+		EventTypes.BATTLE_SKILL:
+			# Boss 行为脚本技能（story/03 §2）：召唤/转阶段附明细，AoE 明细由随后 check.roll 豁免条目承载
+			var extra := ""
+			if p.has("summoned"):
+				extra = "：召唤 ×%d" % (p["summoned"] as Array).size()
+			elif p.has("attack_mod_after"):
+				extra = "（攻击修正 → %+d）" % int(p["attack_mod_after"])
+			return "%s 发动「%s」%s%s" % [name_of.call(str(p["unit"])), p["name"], extra, src_tag(p)]
 		EventTypes.ITEM_USE:
 			return "%s 使用「%s」→ %s（回复 %d）%s" % [name_of.call(str(p["unit"])), p["item"],
 				name_of.call(str(p["target"])), int(p["healed"]), src_tag(p)]
