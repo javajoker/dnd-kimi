@@ -59,6 +59,7 @@ func _async_shell_tests() -> void:
 	await test_home_hotspots()
 	await test_home_bar_toggle()
 	await test_home_promo()
+	await test_home_real_input()
 	await test_subgame_flow()
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
@@ -4650,4 +4651,69 @@ func test_home_promo() -> void:
 	check(not bool(m.board.read("global.entitlement.arena", false)),
 		"路由全程未点亮权利（写板只发生在购买确认，06 §2.3 写权限仅商店/活动/成就）")
 	m.queue_free()
+	await process_frame
+
+
+# ---------------------------------------------------------------- 主屏真实输入路由（12 §5/§6）
+# 回归锚点：曾发生"主屏点击全灭"——覆盖层吞输入时方法级模拟（pressed.emit / 直调 _gui_input）
+# 仍然全绿，必须用 Viewport.push_input 走真实输入路由（按下+抬起）断言热点与兜底条可达。
+
+## 在视口坐标 pos 注入一次完整左键点按（按下 + 抬起）。
+func _push_click(pos: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = pos
+	root.push_input(down)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = pos
+	root.push_input(up)
+
+func test_home_real_input() -> void:
+	print("[home_real_input]")
+	root.size = Vector2i(390, 760) # 无头根窗默认 64×64：真实命中测试前先落项目竖屏尺寸
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	root.add_child(home)
+	await process_frame
+	await process_frame
+	var navs: Array = []
+	home.navigate.connect(func(id: StringName) -> void: navs.append(id))
+	home.bind(board, 0, false)
+	# ---- 基线：无覆盖层时真实点按热点（潮汐塔 → ② 战役入口，12 §5 ① 表）----
+	var hs_pos := home.scroll.global_position + home.scroll.hotspot_rect(HomeScroll.HOTSPOTS[0]).get_center()
+	_push_click(hs_pos)
+	await process_frame
+	await process_frame
+	check(navs == [&"entry"], "真实输入：点热点 → 导航（push_input 全路由基线，12 §5 ①）")
+	# ---- 首次启动全流程：启动卡（12 §4 第一层）看完/跳过 → 主屏必须恢复可点 ----
+	# 回归：启动卡结束后 TutorialOverlay 根节点残留全屏 STOP 吞掉一切点击。
+	home.show_launch_tutorial()
+	await process_frame
+	home.tutorial.finish_launch()
+	await process_frame
+	navs.clear()
+	_push_click(hs_pos)
+	await process_frame
+	await process_frame
+	check(navs == [&"entry"], "真实输入：启动卡结束后点热点 → 导航（覆盖层不残留吞输入，12 §4/§5）")
+	# ---- 兜底条等价路径：真实点按文字入口（12 §5：骨架与皮肤同信号）----
+	navs.clear()
+	_push_click(home.campaign_button.get_global_rect().get_center())
+	await process_frame
+	await process_frame
+	check(navs == [&"entry"], "真实输入：兜底条按钮点按 → 导航（12 §5 功能等价）")
+	# ---- 兜底条 toggle 把手：真实点按收起/展开（12 §5：把手始终可触达）----
+	_push_click(home.bar_toggle.get_global_rect().get_center())
+	await process_frame
+	await process_frame
+	check(home.is_bar_collapsed() and not home.fallback_bar.visible, "真实输入：toggle 把手收起兜底条（12 §5）")
+	_push_click(home.bar_toggle.get_global_rect().get_center())
+	await process_frame
+	await process_frame
+	check(not home.is_bar_collapsed() and home.fallback_bar.visible, "真实输入：toggle 把手展开还原（12 §5）")
+	home.queue_free()
 	await process_frame

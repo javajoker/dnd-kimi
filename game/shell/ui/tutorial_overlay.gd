@@ -21,6 +21,10 @@ var _page := 0
 var _rec := GestureRecognizer.new()
 
 func _ready() -> void:
+	# 根节点只作 _input 观察容器：IGNORE，永不吞事件（12 §1/§4；与 GestureLayer 同铁律）。
+	# 截留语义由可见子节点自担：启动卡 _card_panel 全屏 STOP（模态），情境遮罩/提示条 PASS。
+	# 回归：根节点默认 STOP + finish_launch 只藏卡不藏根 → 启动卡结束后主屏点击全灭。
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# 半透明遮罩（情境提示用；非模态：PASS，点击穿透底层，12 §4）
 	_dim = ColorRect.new()
