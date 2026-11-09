@@ -7,6 +7,7 @@ extends RefCounted
 # 检定 / 战斗
 const CHECK_ROLL := &"check.roll"
 const BATTLE_ATTACK := &"battle.attack"
+const BATTLE_MOVE := &"battle.move"      # 移动段消耗（11 §4：每回合 移动≤6格+动作+附赠；12 §2.1 拖动移动）
 const BATTLE_DOWN := &"battle.down"      # 单位倒地（11 §5.2/§7）
 const BATTLE_DEAD := &"battle.dead"      # 单位死亡（11 §7 三负）
 const BATTLE_REVIVE := &"battle.revive"  # 扶起/稳住/战后起身（11 §5.2/§7）
@@ -40,6 +41,7 @@ const STORY_ENDING := &"story.ending"    # 结局选定（tech/02 §9）
 # L3 任务/事件运行时（tech/02 §5）：触发 → 事件中心可见；节点完成 → settle 写板
 const QUEST_TRIGGER := &"quest.trigger"
 const QUEST_SETTLE := &"quest.settle"
+const QUEST_ABANDON := &"quest.abandon"  # 放弃可选事件（04 §⑤：写旗标 + 归档历史卷轴）
 
 # 整备（09 §9.1 / tech/02 §2.4：整备选择写入事件流，历史卷轴可追溯"这局带了什么"）
 const LOADOUT_CONFIRM := &"loadout.confirm"

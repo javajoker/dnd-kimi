@@ -9,6 +9,8 @@ extends Control
 signal navigate(screen_id: StringName)
 signal save_requested   # 手动"记录抄本"（07 §4.2 手动时机）
 signal idle_timeout     # 主屏闲置（07 §4.2 兜底快照）
+signal tutorial_done          # 启动卡看完/跳过（12 §4；写板由 main 落）
+signal retrain_requested      # 帮助页「重学教程」（12 §4：可重学；清触发记录由 main 落）
 
 const IDLE_SAVE_SEC := 2.0
 
@@ -23,6 +25,7 @@ var help_button: Button
 var saved_label: Label
 var idle_timer: Timer
 var _help_overlay: PanelContainer
+var tutorial: TutorialOverlay # 启动卡（12 §4 第一层：首次启动 3 页核心手势，可跳过）
 
 func _ready() -> void:
 	_build()
@@ -126,9 +129,21 @@ func _build_help() -> void:
 	close.text = TextsZh.COMMON_BACK
 	close.pressed.connect(_toggle_help)
 	v.add_child(close)
+	var retrain := Button.new() # 重学入口（12 §4：可重学——清触发记录并重放启动卡，写板由 main 落）
+	retrain.text = TextsZh.HELP_RETRAIN
+	retrain.pressed.connect(func() -> void: retrain_requested.emit())
+	v.add_child(retrain)
 
 func _toggle_help() -> void:
 	_help_overlay.visible = not _help_overlay.visible
+
+## 启动卡（12 §4 第一层：首次启动一次性，"跳过"常驻）。
+func show_launch_tutorial() -> void:
+	if tutorial == null:
+		tutorial = TutorialOverlay.new()
+		tutorial.launch_finished.connect(func() -> void: tutorial_done.emit())
+		add_child(tutorial)
+	tutorial.show_launch()
 
 ## 测试探针。
 func is_help_visible() -> bool:

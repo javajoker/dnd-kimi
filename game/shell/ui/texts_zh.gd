@@ -12,12 +12,15 @@ const TAB_CHAR := "角色"
 const CHIP_ATTACK := "攻击"
 const CHIP_FIRST_AID := "急救"
 const CHIP_END_TURN := "结束回合"
+const CHIP_MOVE := "移动" # 移动段（11 §4；12 §2.1 拖动移动的按钮等价路径）
 
 ## 指令集条目 → 芯片/轮盘按钮文案（两壳同源排版；次数余量实时呈现，09 §9.2）。
 static func action_label(a: Dictionary) -> String:
 	match StringName(str(a.get("type", ""))):
 		EncounterSM.CMD_ATTACK:
 			return CHIP_ATTACK
+		EncounterSM.CMD_MOVE:
+			return CHIP_MOVE
 		EncounterSM.CMD_SKILL:
 			var label := str(a.get("name", a.get("skill", "")))
 			if int(a.get("uses", -1)) >= 0:
@@ -42,8 +45,8 @@ const MENU_SAVE_QUIT := "保存并回主屏"
 const MENU_HELP := "手势帮助"
 const MENU_CONFIRM_QUIT := "确认退出？本局进度将丢失（遭遇进行中不存档）"
 
-# 掷骰演出（09 §6）
-const KEY_ROLL_HINT := "点击任意处跳过"
+# 掷骰演出（09 §6；04 §④.7：一切演出可跳过，统一长按 ≥400ms 防误触）
+const KEY_ROLL_HINT := "长按任意处跳过演出"
 const RESULT_SUCCESS := "成功"
 const RESULT_FAIL := "失败"
 const RESULT_CRIT := "大成功！"
@@ -182,12 +185,46 @@ const HISTORY_PROV := "来源：%s · %s"
 const QUESTS_TITLE := "事件中心"
 const QUESTS_ACTIVE := "进行中"
 const QUESTS_DONE := "已完结（归档历史卷轴）"
+const QUESTS_ABANDONED := "已放弃（归档历史卷轴）"
+const QUESTS_ABANDON := "放弃"
 const QUESTS_EMPTY := "（暂无进行中的事件）"
 
-# ⑥ 背包与图鉴（04 §⑥）
+# ⑥ 背包与图鉴（04 §⑥：四重身份筛选 / 图鉴系列进度与集齐奖励预告）
 const INV_TITLE := "背包与图鉴"
 const INV_BAG := "背包"
 const INV_CODEX := "图鉴"
+const INV_FILTER_ALL := "全部"
+const INV_ROLE_NAMES := { # 四重身份（tech/02 §7 roles；10 §1 标签体系）
+	"stat": "数值装备", "check_mod": "检定工具", "branch_key": "分支钥匙", "codex": "图鉴信物",
+}
+const INV_BRANCH_HINT := "它似乎能在某处派上用场……" # 分支钥匙提示（04 §⑥ 示例句式）
+const CODEX_SERIES := { # 系列归世界观层定义（story/01 §9 四大系列；10 §3）
+	"weaver_fragments": "织命者残简", "revoked_registry": "被撤销者名录",
+	"fate_dice": "命骰考", "ashenport_local": "烬港风物志",
+}
+const CODEX_REWARDS := { # 集齐奖励预告（世界观 §9 方向；10 §4 白名单，永不卖数值）
+	"weaver_fragments": "集齐 → 揭示褪墨真相的隐藏剧情线",
+	"revoked_registry": "集齐 → 解锁「追忆」战役（强制竖屏形态）",
+	"fate_dice": "集齐 → 骰子外观（纯演出）",
+	"ashenport_local": "集齐 → 烬港声望与商店折扣",
+}
+const CODEX_PROGRESS := "%s：%d/%d"
+const CODEX_REWARD_LINE := "　预告：%s"
+const CODEX_LOCKED_TITLE := "？？？"
+
+# ⑧ 战报回放（04 §⑧：事件流重演，纯演出不可改结果；最小版 = 节拍日志重演）
+const HISTORY_REPLAY := "重演"
+const REPLAY_TITLE := "战报重演（纯演出 · 不可改结果）"
+const REPLAY_SKIP := "跳过"
+const REPLAY_DONE := "—— 重演终 ——"
+
+# 房间回看（04 §④.2：下滑/点按推进条展开已过房间；只读，已完成检定与战斗不重置）
+const ROOM_REVIEW_TITLE := "已过房间"
+const ROOM_REVIEW_HINT := "（只读回看：已完成的检定与战斗不会重置）"
+
+# 手势反馈（12 §3：抬手落空 = 取消，不产生半状态指令）
+const GESTURE_CANCEL := "落空，已取消"
+const GESTURE_PATH_AIM := "轨迹：%s → %s"
 
 # ⑦ 角色（04 §⑦）
 const CHAR_TITLE := "角色"
@@ -197,15 +234,33 @@ const CHAR_GROWTH := "成长：Lv.%d　经验 %d/%s"
 const CHAR_GROWTH_MAX := "成长：Lv.%d　经验 %d（已满级）"
 const CHAR_GROWTH_ATTRS := "已分配：力 %+d 敏 %+d 智 %+d　未分配点数：%d"
 
-# 帮助页 · 手势图鉴（12 §4：常驻，主动进入）
-# 一期只列已实现手势（点按系；M2 审计 G3：宣称未实现手势 = 虚假承诺）；
-# 12 §1/§2 全表（拖动/横滑/双指/捏合/长按）为后续版本手势层，落地前不得上屏。
+# 帮助页 · 手势图鉴（12 §4：常驻，主动进入；12 §1/§2 全表）
+# 手势层已落地（gesture_recognizer.gd / gesture_layer.gd）：按 12 §1 判定参数全量上屏；
+# 铁律同步上屏：一切手势均有按钮等价路径（12 §1）。
 const HELP_TITLE := "手势图鉴"
+const HELP_RETRAIN := "重学教程"
 const HELP_LINES: Array[String] = [
-	"点按 = 选择 / 确认（选项、按钮、目标）",
+	"点按 = 选择 / 确认（选项、按钮、目标格、目标单位）",
 	"点按芯片 / 轮盘 = 对默认目标使用",
-	"点按敌方 = 指定目标（横屏可点敌格）",
-	"点按日志带 = 展开详情（横屏）",
-	"拖动 / 横滑 / 双指 / 长按等手势将在后续版本开放",
-	"（教程可跳过、可重学、跳过不丢信息）",
+	"长按（≥0.4 秒）= 单位 / 道具详情卡；关键判定演出长按跳过",
+	"拖动己方单位 = 移动（消耗移动段，拖动中显示落点预览）",
+	"拖动轨迹（己方 → 敌方）= 指向性技能：轨迹即弹道预览，松手确认，落空取消",
+	"双指点击（战场 / 主视野）= 结束回合 / 普通检定一键快掷",
+	"横滑（操作台）= 四 Tab 切换（行动 / 骰子 / 日志 / 角色）",
+	"双指捏合 = 战场缩放（全局俯瞰 ↔ 跟随镜头；竖屏松手弹回）",
+	"下滑 / 点按（推进条）= 已过房间回看（只读，已完成检定与战斗不重置）",
+	"（一切手势均有按钮等价路径——手势是效率层，不是唯一通道）",
 ]
+
+# 教程三层（12 §4：可跳过、可重学、跳过不丢信息；触发记录写 global.tutorial.*）
+const TUT_NEXT := "下一页"
+const TUT_SKIP := "跳过"
+const TUT_DISMISS := "点任意处继续"
+const TUT_CARDS: Array[String] = [
+	"【点按】= 选择\n选项、按钮、目标——轻点即定。",
+	"【长按】= 详情\n按住单位或道具片刻，展开它的信息卡。",
+	"【横滑】= 切换\n在底部操作台左右滑动，切换行动 / 骰子 / 日志 / 角色。",
+]
+const TUT_HINT_COMBAT := "拖动己方单位 = 移动；拖到敌方 = 轨迹施法；双指点击 = 结束回合；双指捏合 = 缩放战场。"
+const TUT_HINT_CHECK := "双指点击 = 一键快掷；点按检定按钮亦可。关键判定演出可长按跳过。"
+const TUT_HINT_KEY := "关键判定演出：长按 ≥0.4 秒跳过，跳过不丢信息（内容同步写入日志与卷轴）。"

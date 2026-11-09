@@ -102,6 +102,8 @@ func _ready() -> void:
 		_run_shots_act2()
 	if args.has("--act3-shots"):
 		_run_shots_act3()
+	if args.has("--gap-shots"):
+		_run_shots_gap()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -146,7 +148,36 @@ func _show_home() -> void:
 	home.navigate.connect(_on_home_navigate)
 	home.save_requested.connect(_save_home)
 	home.idle_timeout.connect(_save_idle)
+	home.tutorial_done.connect(func() -> void: _tutorial_mark("boot")) # 启动卡一次性（12 §4）
+	home.retrain_requested.connect(_on_retrain) # 重学入口（12 §4：可重学）
+	if not bool(board.read("global.tutorial.boot", false)):
+		home.show_launch_tutorial() # 首次启动 3 页核心手势卡（12 §4 第一层）
 	router = ShellRouter.new() # 回主屏即离场：壳锁定随单局结束（09 §8）
+
+## 教程触发记录（12 §4：写 global.tutorial.<id>，一次原则，不因重开重复打扰）。
+func _tutorial_mark(id: String) -> void:
+	board.write("global.tutorial.%s" % id, true,
+		{"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "system"})
+
+func _tutorial_seen(id: String) -> bool:
+	return bool(board.read("global.tutorial.%s" % id, false))
+
+## 重学：清全部教程触发记录（重放启动卡 + 情境提示恢复一次），再重放启动卡（12 §4）。
+func _on_retrain() -> void:
+	for key: String in board.keys_with_prefix("global.tutorial."):
+		board.write(key, false, {"event_id": stream.tail(), "node_id": graph.current_id,
+			"pack_id": "system"})
+	_show_home()
+	if current_screen is ScreenHome:
+		(current_screen as ScreenHome).show_launch_tutorial()
+
+## 情境教程（12 §4 第二层：首次进入某情境，每类一次；半透明遮罩+高亮，非模态）。
+func _context_hint(id: String, text: String) -> void:
+	if _tutorial_seen(id):
+		return
+	if shell != null and shell.has_method("show_tutorial_hint"):
+		shell.call("show_tutorial_hint", id, text)
+	_tutorial_mark(id)
 
 func _on_home_navigate(screen_id: StringName) -> void:
 	match screen_id:
@@ -246,6 +277,11 @@ func _present_story_node() -> void:
 	var vm := StoryVM.build(graph, board, pack)
 	_ensure_story_shell()
 	_story_show(vm)
+	# 情境教程：首次检定（12 §4：双指点击快掷；可跳过不丢信息）
+	for e: Variant in vm["edges"]:
+		if bool((e as Dictionary).get("check", false)):
+			_context_hint("first_check", TextsZh.TUT_HINT_CHECK)
+			break
 
 func _story_show(vm: Dictionary) -> void:
 	if shell is EncounterPortrait:
@@ -614,6 +650,12 @@ func _on_event(ev: Dictionary) -> void:
 	if ev["type"] == EventTypes.COMBAT_END and _sub_active and _sub_battling:
 		_sub_on_combat_end(ev["payload"]["result"]) # 子游戏连战路由（04 §6）
 		return
+	if ev["type"] == EventTypes.COMBAT_START:
+		# 情境教程：首次战斗（12 §4：拖动移动 + 轨迹施法 + 双指点击结束回合 + 捏合缩放）
+		_context_hint("combat", TextsZh.TUT_HINT_COMBAT)
+	if ev["type"] == EventTypes.CHECK_ROLL and bool(ev["payload"].get("key", false)):
+		# 情境教程：首次关键判定（可跳过演出，04 §④.7 长按跳过）
+		_context_hint("key_roll", TextsZh.TUT_HINT_KEY)
 	if ev["type"] == EventTypes.COMBAT_END and _in_encounter:
 		_encounter_result = ev["payload"]["result"]
 		_show_settle_deferred()
@@ -672,6 +714,7 @@ func _show_settle() -> void:
 						or fkey == "campaign01.xp_total" \
 						or fkey == "campaign01.gold" or fkey.begins_with("campaign01.hp.") \
 						or fkey.begins_with("campaign01.maze.") \
+						or fkey.begins_with("global.tutorial.") \
 						or fkey.begins_with("global.mode_choice."):
 					continue
 				lines.append("旗标：%s" % fkey)
@@ -716,12 +759,15 @@ func _show_quests() -> void:
 	var screen: ScreenQuests = (load(SCREEN_SCENES[&"quests"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind(graph.quests())
+	screen.abandon_requested.connect(func(qid: String) -> void:
+		graph.abandon_quest(qid) # 放弃写旗标 + 事件在 core（04 §⑤）；放弃后归档历史卷轴
+		_show_quests())
 	screen.back_requested.connect(_show_home)
 
 func _show_inventory() -> void:
 	var screen: ScreenInventory = (load(SCREEN_SCENES[&"inventory"]) as PackedScene).instantiate()
 	_swap(screen)
-	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore())
+	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), pack.get("lore", []))
 	screen.back_requested.connect(_show_home)
 
 func _show_character() -> void:
@@ -1179,6 +1225,31 @@ func _run_shots_act3() -> void:
 	await get_tree().create_timer(0.5).timeout
 	await _shot("/tmp/act3_ending.png")
 	print("[shots] 幕三/终章三张完成：/tmp/act3_mode_lock.png /tmp/act3_branch_gate.png /tmp/act3_ending.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 缺口批截图（手势/教程/图鉴证据 /tmp/gap_*.png，不提交）
+
+## `-- --gap-shots`：启动卡（12 §4 第一层）→ 帮助页手势图鉴全表（12 §4 第三层）→ ⑥ 图鉴页（四系列进度）。
+func _run_shots_gap() -> void:
+	await get_tree().create_timer(1.0).timeout
+	await _shot("/tmp/gap_tutorial.png") # 首次启动：3 页核心手势卡（可跳过）
+	if current_screen is ScreenHome:
+		var home := current_screen as ScreenHome
+		home.tutorial.finish_launch()
+		await get_tree().create_timer(0.2).timeout
+		home._toggle_help()
+		await get_tree().create_timer(0.3).timeout
+		await _shot("/tmp/gap_help.png") # 帮助页：手势图鉴全表 + 重学入口
+		home._toggle_help()
+	# 图鉴页：注入两枚残简演示系列进度（仅截图证据，不写板正规流程——截图后即退出进程）
+	board.unlock_lore("weaver_fragment_01",
+		{"event_id": stream.tail(), "node_id": "", "pack_id": "campaign01"})
+	board.give_item("codex_fragment", 1,
+		{"event_id": stream.tail(), "node_id": "", "pack_id": "campaign01"})
+	_on_home_navigate(&"inventory")
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/gap_codex.png") # ⑥ 图鉴页：四系列进度 + 集齐奖励预告
+	print("[shots] 缺口批三张完成：/tmp/gap_tutorial.png /tmp/gap_help.png /tmp/gap_codex.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）

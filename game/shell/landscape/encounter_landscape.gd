@@ -81,10 +81,15 @@ var key_dice_label: Label
 var key_result_label: Label
 var auto_timer: Timer
 var menu_popup: PopupPanel
+var key_hold_timer: Timer       # 长按 ≥400ms 跳过演出（04 §④.7；12 §1 长按判定参数）
+var gestures: GestureLayer      # 手势层（12 §1~§3：透明覆盖，不吞事件）
+var tutorial: TutorialOverlay   # 情境教程层（12 §4 第二层）
+var path_line: Line2D           # 轨迹施法预览（12 §2.1）
 
 var _cells: Array[PanelContainer] = []
 var _grid_side := -1.0
 var _unit_cells: Dictionary = {}  # id -> Vector2i
+var _moved_cells: Dictionary = {} # id -> Vector2i：拖动移动的呈现层落位（格位是呈现层布局，不进事件流）
 var _unit_colors: Dictionary = {} # id -> Color
 var _selected_target := ""
 var _log_lines: Array[String] = []
@@ -92,6 +97,10 @@ var _key_queue: Array[Dictionary] = []
 var _key_playing := false
 var _key_skip := false
 var _tray_rolling := false
+var _drag_uid := ""               # 拖动中的己方单位（12 §3.1 起点定语义）
+var _drag_action := {}            # 轮盘芯片拖动中的指令集条目（12 §3.6）
+var _zoom := 1.0                  # 捏合缩放累计（0.7~1.6，横屏持续生效；12 §2.1/任务书）
+var _zoom0 := 1.0                 # 本次捏合会话起始倍率
 
 func _ready() -> void:
 	_build_ui()
@@ -99,6 +108,12 @@ func _ready() -> void:
 	auto_timer.wait_time = AUTO_INTERVAL
 	auto_timer.timeout.connect(_on_auto_timeout)
 	add_child(auto_timer)
+	key_hold_timer = Timer.new()
+	key_hold_timer.wait_time = GestureRecognizer.LONG_PRESS_MS / 1000.0
+	key_hold_timer.one_shot = true
+	key_hold_timer.timeout.connect(func() -> void: _key_skip = true)
+	add_child(key_hold_timer)
+	_setup_gestures()
 
 # ---------------------------------------------------------------- UI 构建（五区，09 §4）
 
@@ -303,7 +318,7 @@ func _build_menu() -> void:
 	var b_help := Button.new()
 	b_help.text = TextsZh.MENU_HELP
 	b_help.pressed.connect(func() -> void:
-		_log_line("手势帮助：点按轮盘=默认目标执行；点按敌格选目标；点击日志带展开（一期=点按系，12 §4）"))
+		_log_line("手势帮助：%s" % "\n".join(TextsZh.HELP_LINES)))
 	v.add_child(b_help)
 	add_child(menu_popup)
 
@@ -371,13 +386,16 @@ func _cell_style(bg: Color, border: Color) -> StyleBoxFlat:
 	return sb
 
 ## 单位格位：内容数据可声明 "pos": [x, y]；否则按阵营 + 先攻序确定性落位（呈现层，不进事件流）。
+## 拖动移动的落位是同一呈现层（_moved_cells 覆盖，12 §2.1；移动段消耗经 CMD_MOVE 走 core）。
 func _place_units() -> void:
 	_unit_cells.clear()
 	var enemies: Array[String] = []
 	var party: Array[String] = []
 	for id: String in sm.get_order():
 		var u := sm.get_unit(id)
-		if u.has("pos"):
+		if _moved_cells.has(id):
+			_unit_cells[id] = _moved_cells[id]
+		elif u.has("pos"):
 			var pv: Array = u["pos"]
 			_unit_cells[id] = Vector2i(clampi(int(pv[0]), 0, GRID_COLS - 1),
 				clampi(int(pv[1]), 0, GRID_ROWS - 1))
@@ -428,6 +446,169 @@ func _refresh_grid() -> void:
 		token.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		token.add_theme_color_override("font_color", Color.WHITE)
 		cell.add_child(token)
+
+# ---------------------------------------------------------------- 手势接入（12 §2.1 横屏映射；§3 冲突消解）
+# 手势是效率层：全部手势指令与轮盘/芯片同构（GestureCommands 单源），按钮等价路径全通（12 §1 铁律）。
+
+const MOVE_RANGE := 6 # 移动 ≤6 格（11 §4）；可达性由壳在拖动预览层约束，core 只管移动段消耗
+
+func _setup_gestures() -> void:
+	path_line = Line2D.new()
+	path_line.width = 2.0
+	path_line.default_color = Color(1.0, 0.85, 0.4, 0.8)
+	path_line.visible = false
+	add_child(path_line)
+	tutorial = TutorialOverlay.new()
+	add_child(tutorial)
+	gestures = GestureLayer.new()
+	gestures.rec.target_probe = func(pos: Vector2) -> String: return _unit_id_at(pos)
+	add_child(gestures)
+	gestures.long_pressed.connect(_on_gesture_long_press)
+	gestures.drag_started.connect(_on_gesture_drag_started)
+	gestures.drag_updated.connect(_on_gesture_drag_updated)
+	gestures.dragged.connect(_on_gesture_dragged)
+	gestures.path_cast.connect(_on_gesture_path)
+	gestures.two_finger_tapped.connect(_on_gesture_two_finger_tap)
+	gestures.pinched.connect(_on_gesture_pinch)
+	gestures.pinch_ended.connect(_on_gesture_pinch_ended)
+
+func _in(c: Control, pos: Vector2) -> bool:
+	return c != null and c.visible and c.get_global_rect().has_point(pos)
+
+## 视口坐标 → 战术格（不在图内返回 (-1,-1)）。
+func _cell_at(pos: Vector2) -> Vector2i:
+	if _story or not _in(center_map, pos) or _cells.is_empty():
+		return Vector2i(-1, -1)
+	for i: int in _cells.size():
+		if _cells[i].get_global_rect().has_point(pos):
+			return Vector2i(i % GRID_COLS, i / GRID_COLS)
+	return Vector2i(-1, -1)
+
+func _unit_at_cell(cell: Vector2i) -> String:
+	if cell.x < 0:
+		return ""
+	for id: String in _unit_cells:
+		if _unit_cells[id] == cell:
+			return id
+	return ""
+
+func _unit_id_at(pos: Vector2) -> String:
+	return _unit_at_cell(_cell_at(pos))
+
+## 轮盘芯片命中（12 §3.6：起拖点在芯片上 = 使用拖动）。
+func _chip_action_at(pos: Vector2) -> Dictionary:
+	for child: Node in wheel_box.get_children():
+		if child is Button and (child as Button).has_meta("action") \
+				and (child as Button).get_global_rect().has_point(pos):
+			return (child as Button).get_meta("action")
+	return {}
+
+## 长按单位 = 信息卡半屏弹层（12 §2.1：HP/AC/伤害骰/状态）。
+func _on_gesture_long_press(pos: Vector2) -> void:
+	var uid := _unit_id_at(pos)
+	if uid == "" or sm == null:
+		return
+	var u := sm.get_unit(uid)
+	info_popup.show_info(str(u["name"]), [
+		"HP %d/%d　AC %d" % [int(u["hp"]), int(u["max_hp"]), int(u["ac"])],
+		"伤害骰 %s　攻击修正 %+d" % [str(u["damage"]), int(u["attack_mod"])],
+		"状态：%s" % ("倒地" if bool(u["downed"]) else ("死亡" if bool(u["dead"]) else "正常")),
+		"格位：%s" % str(unit_cell(uid)),
+	])
+
+func _on_gesture_drag_started(info: Dictionary) -> void:
+	_drag_uid = ""
+	_drag_action = {}
+	if sm == null:
+		return
+	var start: Vector2 = info["start"]
+	var chip := _chip_action_at(start)
+	if not chip.is_empty() and not bool(chip.get("disabled", false)):
+		_drag_action = chip
+		return
+	var uid := _unit_id_at(start)
+	if uid != "" and uid == sm.current_actor_id():
+		_drag_uid = uid # 起点定语义：按在己方当前单位上 = 移动/轨迹（12 §3.1）
+
+## 拖动中预览：可达落点高亮 / 轨迹预览（12 §2.1：显示可达范围与落点预览；预览不即时生效）。
+func _on_gesture_drag_updated(info: Dictionary) -> void:
+	if _drag_uid == "" and _drag_action.is_empty():
+		return
+	var pos: Vector2 = info["pos"]
+	path_line.visible = true
+	path_line.points = PackedVector2Array([info["start"], pos])
+	var over := _unit_id_at(pos)
+	if over != "" and sm != null and str(sm.get_unit(over).get("side", "")) == &"enemy":
+		_flash(TextsZh.GESTURE_PATH_AIM % [
+			str(sm.get_unit(_drag_uid)["name"]) if _drag_uid != "" else str(_drag_action.get("name", "")),
+			str(sm.get_unit(over)["name"])])
+
+func _on_gesture_dragged(info: Dictionary) -> void:
+	path_line.visible = false
+	if _drag_uid == "" and _drag_action.is_empty():
+		return
+	var end: Vector2 = info["end"]
+	var over := _unit_id_at(end)
+	if not _drag_action.is_empty():
+		var a := _drag_action
+		_drag_action = {}
+		if over != "":
+			_manual(sm.command_from_action(a, over)) # 芯片拖到目标 = 指定使用（12 §3.6）
+		else:
+			_flash(TextsZh.GESTURE_CANCEL) # 落空 = 取消
+		return
+	var uid := _drag_uid
+	_drag_uid = ""
+	if sm == null:
+		return
+	if over != "" and str(sm.get_unit(over).get("side", "")) == &"enemy":
+		_manual(GestureCommands.cast_at(sm, over)) # 终点落敌 = 施法（12 §3.2）
+		return
+	# 落空格 = 移动（消耗移动段，11 §4）：可达 = 曼哈顿 ≤6 且无占用（壳层约束，core 记移动段）
+	var cell := _cell_at(end)
+	if cell.x >= 0 and _unit_at_cell(cell) == "":
+		var from: Vector2i = unit_cell(uid)
+		if from.x >= 0 and absi(cell.x - from.x) + absi(cell.y - from.y) <= MOVE_RANGE:
+			# 呈现层落位以 core 受理为准（移动段耗尽/被拒 = 不挪子，事件流唯一真相）
+			if _manual(GestureCommands.move_to(sm, "%d,%d" % [cell.x, cell.y])):
+				_moved_cells[uid] = cell
+				_refresh_grid()
+				return
+	_flash(TextsZh.GESTURE_CANCEL) # 不可达/被拒/落空 = 取消（12 §3.2/§3.5）
+
+## 拖动经过 ≥2 语义目标且终点落敌 = 轨迹施法（12 §1 path；与平拖同一出口）。
+func _on_gesture_path(info: Dictionary) -> void:
+	if _drag_uid != "" or not _drag_action.is_empty():
+		_on_gesture_dragged(info)
+
+## 双指点击战场任意处 = 结束回合（12 §2.1）；故事态 = 首个检定边一键快掷（12 §2.2 同语义）。
+func _on_gesture_two_finger_tap(pos: Vector2) -> void:
+	if sm != null and not _story:
+		if _in(center_map, pos):
+			_manual(GestureCommands.end_turn(sm))
+		return
+	if _story and story_cb.has("edge") and _in(center_map, pos):
+		var idx := 0
+		for e: Variant in _vm.get("edges", []):
+			if bool((e as Dictionary).get("check", false)):
+				story_cb["edge"].call(idx)
+				return
+			idx += 1
+
+## 捏合 = 战术格缩放 0.7~1.6（12 §2.1：8×5 全景 ↔ 局部跟随），横屏持续生效。
+func _on_gesture_pinch(ratio: float, center: Vector2) -> void:
+	if not _in(center_map, center):
+		return
+	_zoom = clampf(_zoom0 * ratio, 0.7, 1.6)
+	grid.pivot_offset = grid.size * 0.5
+	grid.scale = Vector2.ONE * _zoom
+
+func _on_gesture_pinch_ended(_ratio: float, _center: Vector2) -> void:
+	_zoom0 = _zoom
+
+## 情境教程提示（12 §4 第二层；触发记录写板由 main 负责）。
+func show_tutorial_hint(id: String, text: String) -> void:
+	tutorial.show_hint(id, text)
 
 # ---------------------------------------------------------------- 绑定与事件订阅（壳唯一输入：事件流 + 只读 getter）
 
@@ -615,6 +796,7 @@ func _refresh_wheel() -> void:
 		var b := Button.new()
 		b.text = TextsZh.action_label(a)
 		b.disabled = bool(a["disabled"])
+		b.set_meta("action", a) # 芯片拖动 = 指定目标使用（12 §3.6）
 		var action := a
 		b.pressed.connect(func() -> void: press_action(action))
 		wheel_box.add_child(b)
@@ -647,13 +829,15 @@ func debug_step_auto() -> void:
 	if not cmd.is_empty():
 		sm.submit_command(cmd)
 
-func _manual(cmd: Dictionary) -> void:
+## 手操命令：先接管托管（09 §9.3 一键接管即时生效），再走统一 Command 通道；返回 core 是否受理。
+func _manual(cmd: Dictionary) -> bool:
 	if cmd.is_empty():
-		return
+		return false
 	if auto_on:
 		set_auto(false) # 一键接管即时生效（09 §9.3）
 	if sm != null:
-		sm.submit_command(cmd)
+		return sm.submit_command(cmd)
+	return false
 
 # ---------------------------------------------------------------- 托管（09 §9.3：节拍下限 shell 侧 Timer ≥0.8s，1×/2×）
 
@@ -727,9 +911,18 @@ func _play_key_roll(p: Dictionary) -> void:
 		key_overlay.visible = false
 	_key_playing = false
 
+## 长按 ≥400ms 跳过（04 §④.7：一切演出可跳过（长按），防误触；12 §1 长按判定参数）。
 func _on_key_overlay_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
-		_key_skip = true
+	if event is InputEventMouseButton:
+		if (event as InputEventMouseButton).pressed:
+			key_hold_timer.start()
+		elif not key_hold_timer.is_stopped():
+			key_hold_timer.stop()
+	elif event is InputEventScreenTouch:
+		if (event as InputEventScreenTouch).pressed:
+			key_hold_timer.start()
+		elif not key_hold_timer.is_stopped():
+			key_hold_timer.stop()
 
 # ---------------------------------------------------------------- 日志带（下缘 5%，点击展开半屏）
 

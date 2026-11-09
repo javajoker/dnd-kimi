@@ -34,9 +34,10 @@ const CMD_ATTACK := &"attack"
 const CMD_SKILL := &"skill"
 const CMD_ITEM := &"item"
 const CMD_FIRST_AID := &"first_aid"
+const CMD_MOVE := &"move"          # 移动段（11 §4：每回合 移动≤6格 与动作/附赠并行；12 §2.1 拖动移动）
 const CMD_END_TURN := &"end_turn"
 const CMD_RETREAT := &"retreat"
-const COMMAND_TYPES: Array[StringName] = [CMD_ATTACK, CMD_SKILL, CMD_ITEM, CMD_FIRST_AID, CMD_END_TURN, CMD_RETREAT]
+const COMMAND_TYPES: Array[StringName] = [CMD_ATTACK, CMD_SKILL, CMD_ITEM, CMD_FIRST_AID, CMD_MOVE, CMD_END_TURN, CMD_RETREAT]
 const COMMAND_KEYS: Array[String] = ["type", "actor", "target", "skill", "item", "source"]
 
 var board: Board
@@ -164,6 +165,7 @@ func _add_unit(def: Dictionary, side: StringName) -> void:
 	u["death_saves"] = {"s": 0, "f": 0}
 	u["action_used"] = false
 	u["bonus_used"] = false
+	u["move_used"] = false # 移动段（11 §4：每回合一段，与动作/附赠并行）
 	_units[str(u["id"])] = u
 
 # ---------------------------------------------------------------- 回合循环（11 §4/§5/§5.2）
@@ -179,6 +181,7 @@ func _begin_party_phase() -> void:
 			# 护送对象不占行动轮、不可被指令（tech/02 §6 escort 块）
 			u["action_used"] = false
 			u["bonus_used"] = false
+			u["move_used"] = false # 移动段随回合重置（11 §4）
 			_party_pending.append(id)
 	stream.emit(EventTypes.TURN_START, {"round": _round, "side": "party",
 		"actor": current_actor_id()}, &"core", node_id)
@@ -339,6 +342,10 @@ func _validate(cmd: Dictionary) -> String:
 			return ""
 		CMD_RETREAT:
 			return "" if _retreat_allowed else "no_retreat_edge"
+		CMD_MOVE:
+			if bool(u["move_used"]):
+				return "move_used" # 移动段每回合一段（11 §4）
+			return ""
 		CMD_ATTACK:
 			if bool(u["action_used"]):
 				return "action_used"
@@ -393,6 +400,12 @@ func _resolve(cmd: Dictionary) -> void:
 			_resolve_item(u, cmd, src)
 		CMD_FIRST_AID:
 			_resolve_first_aid(u, str(cmd["target"]), src)
+		CMD_MOVE:
+			# 移动段消耗（11 §4）；落点是呈现层布局（壳维护格位，不进事件流），
+			# dest 仅作溯源记录（"x,y" 格位或 stance 描述），core 不校验距离（≤6 格由壳在拖动预览层约束）
+			u["move_used"] = true
+			stream.emit(EventTypes.BATTLE_MOVE, {"unit": u["id"], "name": u["name"],
+				"dest": str(cmd.get("target", "")), "source": src}, &"core", node_id)
 		CMD_END_TURN:
 			u["action_used"] = true
 			u["bonus_used"] = true
@@ -728,6 +741,10 @@ func get_available_actions() -> Array[Dictionary]:
 	out.append({"type": CMD_FIRST_AID, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
 		"disabled": fa_reason != "", "reason": fa_reason,
 		"target_kind": "downed_ally", "default_target": downed})
+	# 移动（11 §4：每回合一段移动段；按钮等价路径=消耗移动段调整站位，12 §1 铁律）
+	out.append({"type": CMD_MOVE, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
+		"disabled": bool(u["move_used"]), "reason": "move_used" if bool(u["move_used"]) else "",
+		"target_kind": "cell", "default_target": ""})
 	# 结束回合
 	out.append({"type": CMD_END_TURN, "skill": "", "item": "", "name": "", "uses": -1, "count": -1,
 		"disabled": false, "reason": "", "target_kind": "none", "default_target": ""})

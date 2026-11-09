@@ -78,6 +78,13 @@ var key_dice_label: Label
 var key_result_label: Label
 var auto_timer: Timer
 var menu_popup: PopupPanel
+var key_hold_timer: Timer          # 长按 ≥400ms 跳过演出（04 §④.7 防误触；12 §1 长按判定参数）
+var gestures: GestureLayer         # 手势层（12 §1~§3；透明覆盖，不吞事件，按钮等价路径不受影响）
+var tutorial: TutorialOverlay      # 情境教程层（12 §4 第二层：半透明遮罩+高亮，非模态）
+var path_line: Line2D              # 轨迹施法预览（12 §2.1：轨迹即弹道预览）
+var review_popup: PanelContainer   # 房间回看弹层（04 §④.2：只读回看）
+var review_list: VBoxContainer
+var review_detail: Label
 
 var _profile: StringName = &"explore"
 var _selected_target := ""
@@ -87,6 +94,10 @@ var _key_queue: Array[Dictionary] = []
 var _key_playing := false
 var _key_skip := false
 var _tray_rolling := false
+var _rooms_snapshot := {}          # 推进条数据快照（回看用：{ids, titles, current}）
+var _drag_uid := ""                # 拖动中的己方单位（12 §3.1 起点定语义）
+var _drag_action := {}             # 快捷栏芯片拖动中的指令集条目（12 §3.6）
+var _zoom := 1.0                   # 捏合缩放（竖屏：松手弹回 04 §④.4）
 
 func _ready() -> void:
 	_build_ui()
@@ -94,6 +105,12 @@ func _ready() -> void:
 	auto_timer.wait_time = AUTO_INTERVAL
 	auto_timer.timeout.connect(_on_auto_timeout)
 	add_child(auto_timer)
+	key_hold_timer = Timer.new() # 长按跳过计时（12 §1：≥400ms）
+	key_hold_timer.wait_time = GestureRecognizer.LONG_PRESS_MS / 1000.0
+	key_hold_timer.one_shot = true
+	key_hold_timer.timeout.connect(func() -> void: _key_skip = true)
+	add_child(key_hold_timer)
+	_setup_gestures()
 	apply_breathing(&"explore")
 
 # ---------------------------------------------------------------- UI 构建
@@ -263,12 +280,250 @@ func _build_menu() -> void:
 	var b_help := Button.new()
 	b_help.text = TextsZh.MENU_HELP
 	b_help.pressed.connect(func() -> void:
-		_log_line("手势帮助：点按芯片=默认目标使用；点按选项/按钮=确认（一期=点按系，12 §4）"))
+		_log_line("手势帮助：%s" % "\n".join(TextsZh.HELP_LINES)))
 	v.add_child(b_help)
 	add_child(menu_popup)
 
 func _open_menu() -> void:
 	menu_popup.popup_centered(Vector2i(300, 160))
+
+# ---------------------------------------------------------------- 手势接入（12 §2.2 竖屏映射；§3 冲突消解）
+# 手势是效率层：全部手势指令与芯片/按钮同构（GestureCommands 单源），一切手势保留按钮等价路径。
+
+func _setup_gestures() -> void:
+	path_line = Line2D.new() # 轨迹预览（12 §2.1：轨迹即弹道预览）
+	path_line.width = 2.0
+	path_line.default_color = Color(1.0, 0.85, 0.4, 0.8)
+	path_line.visible = false
+	add_child(path_line)
+	_build_review_popup()
+	tutorial = TutorialOverlay.new() # 情境教程层（12 §4；触发记录写板由 main 负责）
+	add_child(tutorial)
+	gestures = GestureLayer.new()
+	gestures.rec.target_probe = func(pos: Vector2) -> String: return _unit_id_at(pos)
+	add_child(gestures)
+	gestures.tapped.connect(_on_gesture_tap)
+	gestures.long_pressed.connect(_on_gesture_long_press)
+	gestures.drag_started.connect(_on_gesture_drag_started)
+	gestures.drag_updated.connect(_on_gesture_drag_updated)
+	gestures.dragged.connect(_on_gesture_dragged)
+	gestures.path_cast.connect(_on_gesture_path)
+	gestures.two_finger_tapped.connect(_on_gesture_two_finger_tap)
+	gestures.pinched.connect(_on_gesture_pinch)
+	gestures.pinch_ended.connect(_on_gesture_pinch_ended)
+	gestures.h_swiped.connect(_on_gesture_h_swipe)
+	gestures.v_swiped.connect(_on_gesture_v_swipe)
+
+func _in(c: Control, pos: Vector2) -> bool:
+	return c != null and c.visible and c.get_global_rect().has_point(pos)
+
+## 命中测试：主视野单位卡（12 §3.1 起点定语义）。返回单位 id，空位返回 ""。
+func _unit_id_at(pos: Vector2) -> String:
+	if sm == null or _story:
+		return ""
+	for row: HBoxContainer in [enemy_row, party_row]:
+		for child: Node in row.get_children():
+			if child is Button and (child as Button).has_meta("unit_id") \
+					and (child as Button).get_global_rect().has_point(pos):
+				return str((child as Button).get_meta("unit_id"))
+	return ""
+
+## 快捷栏芯片命中（12 §3.6：起拖点在芯片上 = 使用拖动）。
+func _chip_action_at(pos: Vector2) -> Dictionary:
+	for child: Node in quickbar.get_children():
+		if child is Button and (child as Button).has_meta("action") \
+				and (child as Button).get_global_rect().has_point(pos):
+			return (child as Button).get_meta("action")
+	return {}
+
+## 点按推进条 = 回看（04 §④.2；下滑手势的按钮等价路径，12 §1 铁律）。
+func _on_gesture_tap(pos: Vector2) -> void:
+	if _story and _in(progress_row, pos):
+		_open_room_review()
+
+## 长按单位 = 信息卡半屏弹层（12 §2.2：HP/AC/伤害骰/状态）。
+func _on_gesture_long_press(pos: Vector2) -> void:
+	var uid := _unit_id_at(pos)
+	if uid == "" or sm == null:
+		return
+	var u := sm.get_unit(uid)
+	info_popup.show_info(str(u["name"]), [
+		"HP %d/%d　AC %d" % [int(u["hp"]), int(u["max_hp"]), int(u["ac"])],
+		"伤害骰 %s　攻击修正 %+d" % [str(u["damage"]), int(u["attack_mod"])],
+		"状态：%s" % ("倒地" if bool(u["downed"]) else ("死亡" if bool(u["dead"]) else "正常")),
+		"先攻位次：%d" % (sm.get_order().find(uid) + 1),
+	])
+
+func _on_gesture_drag_started(info: Dictionary) -> void:
+	_drag_uid = ""
+	_drag_action = {}
+	if sm == null:
+		return
+	var start: Vector2 = info["start"]
+	var chip := _chip_action_at(start)
+	if not chip.is_empty() and not bool(chip.get("disabled", false)):
+		_drag_action = chip # 芯片拖动 = 指定目标使用（12 §3.6）
+		return
+	var uid := _unit_id_at(start)
+	if uid != "" and uid == sm.current_actor_id():
+		_drag_uid = uid # 拖动己方单位（当前行动单位）= 移动/轨迹（12 §3.1）
+
+## 拖动中预览：轨迹虚线（12 §2.1）/ 落点提示；预览不即时生效，抬手确认（12 §3.2）。
+func _on_gesture_drag_updated(info: Dictionary) -> void:
+	if _drag_uid == "" and _drag_action.is_empty():
+		return
+	var pos: Vector2 = info["pos"]
+	path_line.visible = true
+	path_line.points = PackedVector2Array([info["start"], pos])
+	var over := _unit_id_at(pos)
+	if over != "" and sm != null and str(sm.get_unit(over).get("side", "")) == &"enemy":
+		_flash(TextsZh.GESTURE_PATH_AIM % [
+			_unit_name(_drag_uid) if _drag_uid != "" else str(_drag_action.get("name", "")),
+			_unit_name(over)])
+
+func _on_gesture_dragged(info: Dictionary) -> void:
+	path_line.visible = false
+	if _drag_uid == "" and _drag_action.is_empty():
+		return
+	var end: Vector2 = info["end"]
+	var over := _unit_id_at(end)
+	# 芯片拖动 → 目标单位 = 指定使用；落空 = 取消（12 §3.6）
+	if not _drag_action.is_empty():
+		var a := _drag_action
+		_drag_action = {}
+		if over != "":
+			_manual(sm.command_from_action(a, over))
+		else:
+			_flash(TextsZh.GESTURE_CANCEL)
+		return
+	var uid := _drag_uid
+	_drag_uid = ""
+	if sm == null:
+		return
+	if over != "" and str(sm.get_unit(over).get("side", "")) == &"enemy":
+		_manual(GestureCommands.cast_at(sm, over)) # 终点落敌 = 施法（12 §3.2）
+		return
+	# 落在空位：纵向拖动 = 调整站位（12 §2.2 前压/后撤），消耗移动段（11 §4）
+	var d: Vector2 = info["delta"]
+	if absf(d.y) > GestureRecognizer.DRAG_MIN_PT:
+		_manual(GestureCommands.move_to(sm, "stance:forward" if d.y < 0.0 else "stance:back"))
+	else:
+		_flash(TextsZh.GESTURE_CANCEL)
+
+## 拖动经过 ≥2 语义目标且终点落敌 = 轨迹施法（12 §1 path；与平拖同一出口）。
+func _on_gesture_path(info: Dictionary) -> void:
+	if _drag_uid != "" or not _drag_action.is_empty():
+		_on_gesture_dragged(info)
+
+## 双指点击：战斗 = 结束回合；故事态 = 首个检定边一键快掷（12 §2.2）。
+func _on_gesture_two_finger_tap(pos: Vector2) -> void:
+	if not _in(main_view, pos):
+		return
+	if sm != null and not _story:
+		_manual(GestureCommands.end_turn(sm))
+		return
+	if _story and story_cb.has("edge"):
+		var idx := 0
+		for e: Variant in _vm.get("edges", []):
+			if bool((e as Dictionary).get("check", false)):
+				story_cb["edge"].call(idx)
+				return
+			idx += 1
+
+## 捏合 = 全局俯瞰 ↔ 跟随镜头；竖屏松手弹回（04 §④.4）。
+func _on_gesture_pinch(ratio: float, center: Vector2) -> void:
+	if not _in(main_view, center):
+		return
+	_zoom = clampf(ratio, 0.7, 1.6)
+	main_view.pivot_offset = main_view.size * 0.5
+	main_view.scale = Vector2.ONE * _zoom
+
+func _on_gesture_pinch_ended(_ratio: float, center: Vector2) -> void:
+	if _zoom == 1.0:
+		return
+	var tw := create_tween()
+	tw.tween_property(main_view, "scale", Vector2.ONE, 0.2) # 松手弹回（04 §④.4）
+	_zoom = 1.0
+
+## 横滑操作台 = 四 Tab 循环切换（12 §2.2；13 §3 Tab 循环）。
+func _on_gesture_h_swipe(dir: int, pos: Vector2) -> void:
+	if _in(console_panel, pos) and tabs.get_tab_count() > 0:
+		tabs.current_tab = posmod(tabs.current_tab + dir, tabs.get_tab_count())
+
+## 下滑推进条 = 已过房间回看（04 §④.2）。
+func _on_gesture_v_swipe(dir: int, pos: Vector2) -> void:
+	if dir > 0 and _story and _in(progress_row, pos):
+		_open_room_review()
+
+## 情境教程提示（12 §4 第二层；触发记录写板由 main 负责，壳只呈现）。
+func show_tutorial_hint(id: String, text: String) -> void:
+	tutorial.show_hint(id, text)
+
+# ---------------------------------------------------------------- 房间回看（04 §④.2：已过点亮可回看；只读，已完成不重置）
+
+func _build_review_popup() -> void:
+	review_popup = PanelContainer.new()
+	review_popup.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	review_popup.visible = false
+	add_child(review_popup)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	review_popup.add_child(v)
+	var title := Label.new()
+	title.text = TextsZh.ROOM_REVIEW_TITLE
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 20)
+	v.add_child(title)
+	var hint := Label.new()
+	hint.text = TextsZh.ROOM_REVIEW_HINT
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+	v.add_child(hint)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	v.add_child(scroll)
+	review_list = VBoxContainer.new()
+	review_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(review_list)
+	review_detail = Label.new()
+	review_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	review_detail.custom_minimum_size = Vector2(0, 90)
+	v.add_child(review_detail)
+	var close := Button.new()
+	close.text = TextsZh.COMMON_BACK
+	close.pressed.connect(func() -> void: review_popup.visible = false)
+	v.add_child(close)
+
+## 展开已过房间列表（只读回看：已完成检定与战斗不重置，04 §④.2）。
+func _open_room_review() -> void:
+	for child: Node in review_list.get_children():
+		child.queue_free()
+	review_detail.text = ""
+	var ids: Array = _rooms_snapshot.get("ids", [])
+	var titles: Dictionary = _rooms_snapshot.get("titles", {})
+	var current := int(_rooms_snapshot.get("current", 0))
+	for i: int in mini(current, ids.size()): # 已过房间（不含当前/未来）
+		var rid := str(ids[i])
+		var b := Button.new()
+		b.text = "%d. %s" % [i + 1, str(titles.get(rid, rid))]
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.pressed.connect(func() -> void: _review_room(rid))
+		review_list.add_child(b)
+	if review_list.get_child_count() == 0:
+		var l := Label.new()
+		l.text = "（尚无已过房间）"
+		review_list.add_child(l)
+	review_popup.visible = true
+
+## 点房间 = 回看其摘要（只读 pack 数据，不触碰图状态、不写板）。
+func _review_room(rid: String) -> void:
+	var titles: Dictionary = _rooms_snapshot.get("titles", {})
+	var node: Dictionary = (_pack.get("nodes", {}) as Dictionary).get(rid, {})
+	review_detail.text = "【%s】\n%s" % [str(titles.get(rid, rid)), str(node.get("summary", ""))]
+
+## 测试探针：回看弹层可见性。
+func is_review_visible() -> bool:
+	return review_popup.visible
 
 # ---------------------------------------------------------------- 绑定与事件订阅（壳唯一输入：事件流 + 只读 getter）
 
@@ -470,6 +725,8 @@ func get_band_ratios() -> Array[float]:
 # ---------------------------------------------------------------- 房间推进条（04 §④.2）
 
 func set_rooms(room_ids: Array, current_index: int, titles: Dictionary = {}) -> void:
+	_rooms_snapshot = {"ids": room_ids.duplicate(), "titles": titles.duplicate(),
+		"current": current_index} # 回看数据（04 §④.2）
 	for child: Node in progress_row.get_children():
 		if child != menu_button:
 			child.queue_free()
@@ -520,14 +777,16 @@ func _refresh_quickbar() -> void:
 	actor_label.text = "【%s】" % str(sm.get_unit(sm.current_actor_id())["name"])
 	quickbar.add_child(actor_label)
 	for a: Dictionary in actions:
-		_add_chip(TextsZh.action_label(a), bool(a["disabled"]), func() -> void: press_action(a))
+		var chip := _add_chip(TextsZh.action_label(a), bool(a["disabled"]), func() -> void: press_action(a))
+		chip.set_meta("action", a) # 芯片拖动 = 指定目标使用（12 §3.6）
 
-func _add_chip(label: String, disabled: bool, on_press: Callable) -> void:
+func _add_chip(label: String, disabled: bool, on_press: Callable) -> Button:
 	var b := Button.new()
 	b.text = label
 	b.disabled = disabled
 	b.pressed.connect(on_press)
 	quickbar.add_child(b)
+	return b
 
 ## 手操命令：先接管托管（09 §9.3 一键接管即时生效），再走统一 Command 通道。
 func _manual(cmd: Dictionary) -> void:
@@ -637,9 +896,19 @@ func _play_key_roll(p: Dictionary) -> void:
 		_restore_breathing()
 	_key_playing = false
 
+## 长按 ≥400ms 跳过（04 §④.7：一切演出可跳过（长按），防误触；12 §1 长按判定参数）：
+## 按下开始计时，到时即跳；未到时抬手 = 不跳过。
 func _on_key_overlay_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
-		_key_skip = true
+	if event is InputEventMouseButton:
+		if (event as InputEventMouseButton).pressed:
+			key_hold_timer.start()
+		elif not key_hold_timer.is_stopped():
+			key_hold_timer.stop()
+	elif event is InputEventScreenTouch:
+		if (event as InputEventScreenTouch).pressed:
+			key_hold_timer.start()
+		elif not key_hold_timer.is_stopped():
+			key_hold_timer.stop()
 
 ## 调试/截图入口：与事件驱动同一演出管线。
 func debug_show_key_roll(payload: Dictionary) -> void:
@@ -682,6 +951,7 @@ func _unit_button(u: Dictionary) -> Button:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(104, 64)
 	b.text = "%s\nHP %d/%d" % [u["name"], int(u["hp"]), int(u["max_hp"])]
+	b.set_meta("unit_id", str(u["id"])) # 手势命中测试（12 §3.1 起点定语义）
 	if bool(u["dead"]):
 		b.disabled = true
 		b.modulate = Color(0.35, 0.35, 0.35)

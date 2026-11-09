@@ -29,6 +29,8 @@ func _init() -> void:
 	test_loadout()
 	test_growth()
 	test_quest_runtime()
+	test_quest_abandon()
+	test_gesture_recognizer()
 	test_battle_data_driven()
 	test_hp_persistence()
 	test_escort_sm()
@@ -56,6 +58,7 @@ func _async_shell_tests() -> void:
 	await test_act3_forced_mode()
 	await test_main_flow()
 	await test_character_nav()
+	await test_gap_features()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -1091,9 +1094,15 @@ func test_portrait_shell() -> void:
 		"全屏时状态栏/操作台退屏（04 §④.1 关键判定行）")
 	var mb := InputEventMouseButton.new()
 	mb.pressed = true
+	var mb_up := InputEventMouseButton.new()
+	mb_up.pressed = false
 	portrait._on_key_overlay_input(mb)
+	portrait._on_key_overlay_input(mb_up) # 短按 <400ms 抬手：不跳过（04 §④.7 防误触）
 	await create_timer(0.3).timeout
-	check(not portrait.key_overlay.visible, "关键演出可点击跳过（09 §6/04 §④.7）")
+	check(portrait.key_overlay.visible, "短按不跳过演出（04 §④.7：跳过统一长按 ≥400ms）")
+	portrait._on_key_overlay_input(mb) # 按住不放
+	await create_timer(0.6).timeout # ≥400ms 触发跳过（12 §1 长按判定参数；自然播完需 ~1.8s，可区分）
+	check(not portrait.key_overlay.visible, "关键演出长按 ≥400ms 跳过（04 §④.7/12 §1）")
 	await process_frame
 	await process_frame
 	check(_ratios_close(portrait.get_band_ratios(), [0.12, 0.55, 0.33]), "演出结束呼吸回落战斗档")
@@ -1228,9 +1237,15 @@ func test_landscape_shell() -> void:
 	check(land.key_overlay.visible, "关键判定全屏覆盖（横屏，09 §6）")
 	var mb := InputEventMouseButton.new()
 	mb.pressed = true
+	var mb_up := InputEventMouseButton.new()
+	mb_up.pressed = false
 	land._on_key_overlay_input(mb)
+	land._on_key_overlay_input(mb_up) # 短按 <400ms 抬手：不跳过（04 §④.7 防误触）
 	await create_timer(0.3).timeout
-	check(not land.key_overlay.visible, "关键演出可点击跳过（09 §6）")
+	check(land.key_overlay.visible, "横屏短按不跳过演出（04 §④.7）")
+	land._on_key_overlay_input(mb)
+	await create_timer(0.6).timeout
+	check(not land.key_overlay.visible, "横屏关键演出长按 ≥400ms 跳过（09 §6/04 §④.7）")
 	# 托管节拍下限（09 §9.3）
 	check(land.auto_timer.wait_time == 0.8, "托管 1× 节拍 0.8s")
 	land.set_speed(2)
@@ -3008,13 +3023,17 @@ func test_ui_screens() -> void:
 	var rows := 0
 	var first_btn: Button = null
 	var key_marked := false
-	for child: Node in hi.list_box.get_children():
-		if child is Button:
-			rows += 1
-			if first_btn == null:
-				first_btn = child
-			if (child as Button).text.contains("★"):
-				key_marked = true
+	for row: Node in hi.list_box.get_children(): # 行 = HBoxContainer（主按钮 + 战斗行附「重演」钮）
+		if not (row is HBoxContainer):
+			continue
+		var b := row.get_child(0) as Button
+		if b == null:
+			continue
+		rows += 1
+		if first_btn == null:
+			first_btn = b
+		if b.text.contains("★"):
+			key_marked = true
 	check(rows == stream.size() and rows >= 2, "历史卷轴：事件流条目全量入轴（04 §⑧）")
 	check(first_btn != null and first_btn.text.contains("check.roll"),
 		"历史卷轴：倒序（最新在上，04 §⑧ 时间轴）")
@@ -3023,9 +3042,12 @@ func test_ui_screens() -> void:
 	check(hi.detail_label.text.contains("检定明细") and hi.detail_label.text.contains("DC 10"),
 		"展开明细：检定 d20 明细（骰值+修正=结果 vs 难度，04 §⑧）")
 	var flag_btn: Button = null
-	for child: Node in hi.list_box.get_children():
-		if child is Button and (child as Button).text.contains("flag.write"):
-			flag_btn = child
+	for row: Node in hi.list_box.get_children():
+		if not (row is HBoxContainer):
+			continue
+		var b := row.get_child(0) as Button
+		if b != null and b.text.contains("flag.write"):
+			flag_btn = b
 	flag_btn.pressed.emit()
 	check(hi.detail_label.text.contains("N0-3a") and hi.detail_label.text.contains("campaign01"),
 		"旗标溯源：来源节点回链状态板（07 §1/§6）")
@@ -3041,9 +3063,10 @@ func test_ui_screens() -> void:
 	qs.bind([{"id": "dock_tales", "name": "码头异闻", "objective": "完成 N0-2 检定", "node": "N0-2",
 		"state": "triggered"}])
 	var q_text := ""
-	for child: Node in qs.list_box.get_children():
-		if child is Label:
-			q_text += (child as Label).text
+	for row: Node in qs.list_box.get_children():
+		for child: Node in row.get_children():
+			if child is Label:
+				q_text += (child as Label).text
 	check(q_text.contains("码头异闻") and q_text.contains(TextsZh.QUESTS_ACTIVE), "事件中心：进行中事件列表（04 §⑤）")
 	qs.queue_free()
 	var iv: ScreenInventory = (load("res://shell/ui/screen_inventory.tscn") as PackedScene).instantiate()
@@ -3053,8 +3076,8 @@ func test_ui_screens() -> void:
 	iv.bind(board.get_inv(), pack["items"], board.get_lore())
 	var iv_text := ""
 	for child: Node in iv.bag_box.get_children():
-		if child is Label:
-			iv_text += (child as Label).text
+		if child is Button: # 条目 = 按钮（点按 = 详情弹层，04 §⑥）
+			iv_text += (child as Button).text
 	check(iv_text.contains("墨核 ×1"), "背包图鉴：global.inv 只读列表（04 §⑥）")
 	iv.queue_free()
 	var ch: ScreenCharacter = (load("res://shell/ui/screen_character.tscn") as PackedScene).instantiate()
@@ -3555,4 +3578,473 @@ func test_character_nav() -> void:
 	await process_frame
 	check(m.current_screen is ScreenHome, "战役中角色→返回→主屏")
 	m.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 手势识别器（12 §1 判定参数边界；§3 冲突消解）
+
+func test_gesture_recognizer() -> void:
+	print("[gesture_recognizer]")
+	var V := func(x: float, y: float) -> Vector2: return Vector2(x, y)
+	# ---- 点按：按下-抬起 <300ms 且位移 <10pt ----
+	var rec := GestureRecognizer.new()
+	var taps: Array = []
+	rec.tapped.connect(func(p: Vector2) -> void: taps.append(p))
+	rec.press(0, V.call(0, 0), 0)
+	rec.release(0, V.call(0, 0), 299)
+	check(taps.size() == 1, "点按：299ms 原位 = tap（<300ms）")
+	rec.press(0, V.call(0, 0), 0)
+	rec.release(0, V.call(0, 0), 300)
+	check(taps.size() == 1, "点按边界：300ms 不判点按（<300ms 严格）")
+	rec.press(0, V.call(0, 0), 0)
+	rec.release(0, V.call(9.9, 0), 100)
+	check(taps.size() == 2, "点按边界：位移 9.9pt 仍判点按（<10pt）")
+	# ---- 长按：≥400ms 且位移 <10pt，到时即触发（不等抬手）----
+	var longs: Array = []
+	rec.long_pressed.connect(func(p: Vector2) -> void: longs.append(p))
+	rec.press(0, V.call(50, 50), 0)
+	rec.poll(399)
+	check(longs.is_empty(), "长按边界：399ms 未触发（≥400ms）")
+	rec.poll(400)
+	check(longs.size() == 1, "长按：400ms 触发（12 §1）")
+	rec.release(0, V.call(50, 50), 500)
+	check(taps.size() == 2, "长按后抬手不再补点按（查看语义已消费）")
+	# ---- 拖动：位移 >10pt；横滑 水平 >60pt 且垂直 <30pt（12 §1）----
+	var drags: Array = []
+	var hsw: Array = []
+	var vsw: Array = []
+	var rec2 := GestureRecognizer.new()
+	rec2.dragged.connect(func(i: Dictionary) -> void: drags.append(i))
+	rec2.h_swiped.connect(func(d: int, p: Vector2) -> void: hsw.append(d))
+	rec2.v_swiped.connect(func(d: int, p: Vector2) -> void: vsw.append(d))
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(10, 0), 10)
+	rec2.release(0, V.call(10, 0), 100)
+	check(drags.is_empty() and hsw.is_empty(), "拖动边界：位移 10pt 不判拖动（>10pt 严格）")
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(11, 0), 10)
+	rec2.release(0, V.call(11, 0), 100)
+	check(drags.size() == 1, "拖动：位移 >10pt（12 §1）")
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(61, 29), 10)
+	rec2.release(0, V.call(61, 29), 100)
+	check(hsw.size() == 1 and hsw[0] == 1, "横滑：水平 61pt 垂直 29pt = h_swipe 向右（12 §1）")
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(60, 10), 10)
+	rec2.release(0, V.call(60, 10), 100)
+	check(hsw.size() == 1, "横滑边界：水平 60pt 不判横滑（>60pt 严格）")
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(61, 30), 10)
+	rec2.release(0, V.call(61, 30), 100)
+	check(hsw.size() == 1, "横滑边界：垂直 30pt 不判横滑（<30pt 严格）")
+	rec2.press(0, V.call(0, 0), 0)
+	rec2.move(0, V.call(29, 61), 10)
+	rec2.release(0, V.call(29, 61), 100)
+	check(vsw.size() == 1 and vsw[0] == 1, "下滑：垂直 61pt 水平 29pt = v_swipe 向下（04 §④.6 推进条回看）")
+	# ---- 双指点击：<300ms 且各点位移 <10pt 且间距变化 <15pt（12 §1/§3.3）----
+	var rec3 := GestureRecognizer.new()
+	var tft: Array = []
+	rec3.two_finger_tapped.connect(func(p: Vector2) -> void: tft.append(p))
+	rec3.press(0, V.call(0, 0), 0)
+	rec3.press(1, V.call(100, 0), 50) # 同窗容差内（>1 帧不判双指的容差 50ms）
+	rec3.release(0, V.call(0, 0), 200)
+	rec3.release(1, V.call(100, 0), 210)
+	check(tft.size() == 1, "双指点击：同窗 + 299ms 内 + 间距不变（12 §1/§3.3）")
+	var taps3: Array = []
+	rec3.tapped.connect(func(p: Vector2) -> void: taps3.append(p))
+	rec3.press(0, V.call(0, 0), 0)
+	rec3.press(1, V.call(100, 0), 51) # 超窗：先后落点 >1 帧不判双指（12 §3.3）
+	rec3.release(0, V.call(0, 0), 100)
+	check(taps3.size() == 1, "双指边界：第二指晚 51ms → 不判双指，单指点按保留（12 §3.3）")
+	rec3.release(1, V.call(100, 0), 120)
+	check(taps3.size() == 2, "未配对第二指独立点按（不阻塞单指，12 §3.3）")
+	# 间距变化 <15pt 边界（与捏合区分）：双指各移 <10pt 但相向合拢使间距变化压边界
+	var rec4 := GestureRecognizer.new()
+	var tft4: Array = []
+	rec4.two_finger_tapped.connect(func(p: Vector2) -> void: tft4.append(p))
+	rec4.press(0, V.call(0, 0), 0)
+	rec4.press(1, V.call(100, 0), 0)
+	rec4.move(0, V.call(7.45, 0), 50)
+	rec4.move(1, V.call(92.55, 0), 50) # 间距 100→85.1，变化 14.9pt
+	rec4.release(0, V.call(7.45, 0), 100)
+	check(tft4.size() == 1, "双指点击边界：间距变化 14.9pt 仍判双指点击（<15pt）")
+	rec4.release(1, V.call(92.55, 0), 110)
+	rec4.press(0, V.call(0, 0), 0)
+	rec4.press(1, V.call(100, 0), 0)
+	rec4.move(0, V.call(7.5, 0), 50)
+	rec4.move(1, V.call(92.5, 0), 50) # 间距 100→85，变化恰 15pt
+	rec4.release(0, V.call(7.5, 0), 100)
+	rec4.release(1, V.call(92.5, 0), 110)
+	check(tft4.size() == 1, "双指点击边界：间距变化 15pt 不判双指点击（<15pt 严格）")
+	# ---- 捏合：双触点间距变化 >20%（12 §1）----
+	var rec5 := GestureRecognizer.new()
+	var pinches: Array = []
+	rec5.pinched.connect(func(r: float, c: Vector2) -> void: pinches.append(r))
+	rec5.press(0, V.call(0, 0), 0)
+	rec5.press(1, V.call(100, 0), 0)
+	rec5.move(1, V.call(120, 0), 50)
+	check(pinches.is_empty(), "捏合边界：间距变化 20% 不触发（>20% 严格）")
+	rec5.move(1, V.call(121, 0), 60)
+	check(pinches.size() == 1 and pinches[0] > 1.2, "捏合：间距变化 >20% 触发并播报倍率（12 §1）")
+	# ---- 轨迹：拖动经过 ≥2 个语义目标点（12 §1 path；探针由壳注入）----
+	var rec6 := GestureRecognizer.new()
+	rec6.target_probe = func(p: Vector2) -> String: return "a" if p.x < 50.0 else "b"
+	var paths: Array = []
+	var drags6: Array = []
+	rec6.path_cast.connect(func(i: Dictionary) -> void: paths.append(i))
+	rec6.dragged.connect(func(i: Dictionary) -> void: drags6.append(i))
+	rec6.press(0, V.call(0, 0), 0)
+	rec6.move(0, V.call(30, 0), 10) # 越过拖动阈值，途经目标 a
+	rec6.move(0, V.call(60, 0), 20) # 途经目标 b
+	rec6.release(0, V.call(60, 0), 100)
+	check(paths.size() == 1 and (paths[0]["targets"] as Array) == ["a", "b"],
+		"轨迹：途经 2 个语义目标 = path（12 §1）")
+	rec6.press(0, V.call(0, 0), 0)
+	rec6.move(0, V.call(40, 0), 10)
+	rec6.release(0, V.call(40, 0), 100)
+	check(drags6.size() == 1 and paths.size() == 1, "轨迹边界：途经 1 个目标 = 平拖（≥2 才判 path）")
+	# ---- 打断：按抬手于空位处理 = 取消（12 §3.5）----
+	var rec7 := GestureRecognizer.new()
+	var drags7: Array = []
+	rec7.dragged.connect(func(i: Dictionary) -> void: drags7.append(i))
+	rec7.press(0, V.call(0, 0), 0)
+	rec7.move(0, V.call(30, 0), 10)
+	rec7.cancel_all() # 来电/切后台
+	rec7.release(0, V.call(30, 0), 100)
+	check(drags7.is_empty() and rec7.is_idle(), "打断 = 取消：不产生半状态指令（12 §3.5）")
+
+# ---------------------------------------------------------------- 事件中心放弃（04 §⑤：写旗标 + 事件 → 归档历史卷轴）
+
+func test_quest_abandon() -> void:
+	print("[quest_abandon]")
+	var pack := _load_campaign01()
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var g := StoryGraph.new(board, Rng.new(1), pack)
+	g._enter("N1-8") # hidden lone_wolf（rep 全 0 满足隐形门槛）随节点进入触发
+	var before := g.quest_badge_count()
+	g._scan_choice_quests({"label": "誊写庭委托"}) # choice 触发 archive_quest（tech/02 §5）
+	var qs := g.quests()
+	var aq := {}
+	for q: Variant in qs:
+		if str((q as Dictionary)["id"]) == "archive_quest":
+			aq = q
+	check(not aq.is_empty() and str(aq["state"]) == "triggered" and bool(aq["optional"]),
+		"choice 触发 = 可选事件（04 §⑤ 放弃范围）")
+	check(g.quest_badge_count() == before + 1, "触发计入角标")
+	check(g.abandon_quest("archive_quest"), "放弃可选事件受理（04 §⑤）")
+	check(bool(board.read("campaign01.quest_abandoned.archive_quest")),
+		"放弃写旗标 campaign01.quest_abandoned.*（04 §⑤，07 §1 溯源）")
+	check(stream.query_by_type(EventTypes.QUEST_ABANDON).size() == 1,
+		"quest.abandon 事件入流（归档历史卷轴，04 §⑤）")
+	check(g.quest_badge_count() == before, "放弃后不计角标")
+	check(not g.abandon_quest("archive_quest"), "重复放弃拒绝（幂等）")
+	# auto 触发的主线事件不可放弃
+	var g2 := StoryGraph.new(board, Rng.new(1), pack)
+	g2._enter("N0-2") # dock_tales auto 触发
+	check(not g2.abandon_quest("dock_tales"), "auto 主线事件不可放弃（仅可选事件，04 §⑤）")
+	# 放弃状态随图快照持久（07 §4.1）
+	var snap := g.serialize()
+	var g3 := StoryGraph.new(board, Rng.new(1), pack)
+	g3.deserialize(snap)
+	var kept := false
+	for q: Variant in g3.quests():
+		if str((q as Dictionary)["id"]) == "archive_quest":
+			kept = str((q as Dictionary)["state"]) == "abandoned"
+	check(kept, "放弃状态随存档快照往返（07 §4 兼容）")
+
+# ---------------------------------------------------------------- 缺口批 shell 集成（12 §1~§4；04 §④.2/§④.7/§⑤/§⑥/§⑧）
+
+func test_gap_features() -> void:
+	print("[gap_features]")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(11), "campaign01")
+	var agent := AutoAgent.new()
+	var portrait: EncounterPortrait = (load("res://shell/portrait/encounter_portrait.tscn") as PackedScene).instantiate()
+	root.add_child(portrait)
+	await process_frame
+	await process_frame
+	portrait.bind(sm, agent)
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	# 驱动到 pc 行动
+	var guard := 0
+	while sm.current_actor_id() != "pc" and guard < 6:
+		guard += 1
+		sm.submit_command(_cmd(EncounterSM.CMD_END_TURN, sm.current_actor_id()))
+	await process_frame
+	var uid := sm.current_actor_id()
+	var enemy := sm.first_alive_enemy()
+
+	# ---- 双壳手势 → 同构 Command（09 §9.3 同通道；12 §2 场景映射同一指令）----
+	# 横屏对照壳（同一指令集单源）
+	var stream2 := EventStream.new()
+	var board2 := Board.new(stream2)
+	var sm2 := EncounterSM.new(board2, stream2, Rng.new(11), "campaign01")
+	var agent2 := AutoAgent.new()
+	var land: EncounterLandscape = (load("res://shell/landscape/encounter_landscape.tscn") as PackedScene).instantiate()
+	root.add_child(land)
+	await process_frame
+	await process_frame
+	land.bind(sm2, agent2)
+	sm2.enter("N1-7")
+	sm2.transition(EncounterSM.S_EXPLORE)
+	sm2.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	var guard2 := 0
+	while sm2.current_actor_id() != "pc" and guard2 < 6:
+		guard2 += 1
+		sm2.submit_command(_cmd(EncounterSM.CMD_END_TURN, sm2.current_actor_id()))
+	await process_frame
+	# 双指点击 = 结束回合：两壳手势处理器产出同构命令（GestureCommands 单源）
+	var cmd_p := GestureCommands.end_turn(sm)
+	var cmd_l := GestureCommands.end_turn(sm2)
+	check(cmd_p == cmd_l and cmd_p["type"] == EncounterSM.CMD_END_TURN,
+		"双壳手势 → 同构 Command：双指点击 = 结束回合（09 §9.3/12 §2）")
+	# 轨迹施法：两壳同一出口（首个敌指向技能，目标同一敌人）
+	var cast_p := GestureCommands.cast_at(sm, enemy)
+	var cast_l := GestureCommands.cast_at(sm2, sm2.first_alive_enemy())
+	check(cast_p == cast_l and cast_p["type"] == EncounterSM.CMD_SKILL
+		and str(cast_p["skill"]) == "inkbolt" and str(cast_p["target"]) == enemy,
+		"双壳手势 → 同构 Command：拖到敌方 = 轨迹施法（12 §2.1/§2.2）")
+	# 移动命令同构
+	var mv_p := GestureCommands.move_to(sm, "3,1")
+	var mv_l := GestureCommands.move_to(sm2, "3,1")
+	check(mv_p == mv_l and mv_p["type"] == EncounterSM.CMD_MOVE,
+		"双壳手势 → 同构 Command：拖动己方 = 移动（消耗移动段，11 §4）")
+
+	# ---- 竖屏手势接入（12 §2.2）----
+	# 双指点击主视野 = 结束回合（真实走手势处理器 → _manual → submit_command）
+	# （pc 是本轮最后一名待行动单位：结束回合 → 敌方回合 → 第 2 轮，09 §5.2 轮替即证据）
+	var main_center: Vector2 = portrait.main_view.get_global_rect().get_center()
+	portrait._on_gesture_two_finger_tap(main_center)
+	await process_frame
+	check(sm.round_no() == 2, "竖屏：双指点击主视野 = 结束回合（12 §2.2；轮替发生）")
+	# 移动段：手势移动一次受理，第二次拒绝（11 §4 移动段每回合一段）
+	check(sm.submit_command(GestureCommands.move_to(sm, "stance:forward")), "移动段：首次移动受理（11 §4）")
+	check(not sm.submit_command(GestureCommands.move_to(sm, "stance:back")),
+		"移动段：第二次移动拒绝 move_used（11 §4）")
+	check(stream.query_by_type(EventTypes.BATTLE_MOVE).size() == 1, "battle.move 事件入流（溯源 dest）")
+	# 移动段耗尽后拖动手势被 core 拒绝（不污染逻辑状态，tech/01 §6.2）
+	var moves_before := stream.query_by_type(EventTypes.BATTLE_MOVE).size()
+	portrait._drag_uid = sm.current_actor_id()
+	portrait._on_gesture_dragged({"start": Vector2.ZERO, "end": Vector2(-9999, -9999), "delta": Vector2(-30, -30)})
+	check(stream.query_by_type(EventTypes.BATTLE_MOVE).size() == moves_before,
+		"移动段耗尽：拖动拒绝（command.rejected，tech/01 §6.2）")
+	# 横滑切 Tab（12 §2.2：四 Tab 循环）
+	var tab0: int = portrait.tabs.current_tab
+	portrait._on_gesture_h_swipe(1, portrait.console_panel.get_global_rect().get_center())
+	check(portrait.tabs.current_tab == tab0 + 1, "竖屏：横滑操作台 = 切 Tab（12 §2.2）")
+	portrait._on_gesture_h_swipe(1, portrait.console_panel.get_global_rect().get_center())
+	portrait._on_gesture_h_swipe(1, portrait.console_panel.get_global_rect().get_center())
+	portrait._on_gesture_h_swipe(1, portrait.console_panel.get_global_rect().get_center())
+	check(portrait.tabs.current_tab == tab0, "横滑四 Tab 循环一周（13 §3 Tab 循环）")
+	# 长按单位 = 详情半屏卡（12 §2.2）
+	portrait._on_gesture_long_press(portrait.enemy_row.get_child(0).get_global_rect().get_center())
+	check(portrait.info_popup.visible and portrait.info_popup.body_label.text.contains("AC"),
+		"竖屏：长按单位 = 详情半屏卡（HP/AC/伤害骰/状态，12 §2.1）")
+	portrait.info_popup.hide()
+	# 捏合：松手弹回（04 §④.4）
+	portrait._on_gesture_pinch(0.5, main_center)
+	check(absf(portrait._zoom - 0.7) < 0.001, "竖屏捏合缩放下限 0.7（任务书 0.7~1.6）")
+	portrait._on_gesture_pinch_ended(1.0, main_center)
+	check(portrait._zoom == 1.0, "竖屏捏合松手弹回（04 §④.4）")
+
+	# ---- 横屏手势接入（12 §2.1）----
+	# 拖动己方单位 → 空格 = 移动（呈现层落位 + 移动段消耗）
+	var pc_cell := land.unit_cell("pc")
+	var dest := Vector2i(mini(pc_cell.x + 2, EncounterLandscape.GRID_COLS - 1), pc_cell.y)
+	if land._unit_at_cell(dest) != "":
+		dest = Vector2i(maxi(pc_cell.x - 2, 0), pc_cell.y)
+	var dest_center: Vector2 = land._cells[dest.y * EncounterLandscape.GRID_COLS + dest.x].get_global_rect().get_center()
+	var pc_center: Vector2 = land._cells[pc_cell.y * EncounterLandscape.GRID_COLS + pc_cell.x].get_global_rect().get_center()
+	land._on_gesture_drag_started({"start": pc_center, "pos": pc_center})
+	land._on_gesture_dragged({"start": pc_center, "end": dest_center, "delta": dest_center - pc_center})
+	await process_frame
+	check(land.unit_cell("pc") == dest, "横屏：拖到可达空格 = 呈现层落位（12 §2.1 落点预览）")
+	check(stream2.query_by_type(EventTypes.BATTLE_MOVE).size() == 1
+		and str(stream2.query_by_type(EventTypes.BATTLE_MOVE)[0]["payload"]["dest"]) == "%d,%d" % [dest.x, dest.y],
+		"横屏：拖动移动消耗移动段（battle.move 带格位溯源，11 §4）")
+	# 拖出 6 格外 = 取消（可达性壳层约束；pc 在底排，(7,0) 曼哈顿 ≥8 且敌方只占 x=1/3/5）
+	var pc_cell2 := land.unit_cell("pc")
+	var far := Vector2i(7, 0)
+	check(land._unit_at_cell(far) == "", "横屏拖测前提：远格无占用")
+	var far_center: Vector2 = land._cells[far.y * EncounterLandscape.GRID_COLS + far.x].get_global_rect().get_center()
+	var pc_center2: Vector2 = land._cells[pc_cell2.y * EncounterLandscape.GRID_COLS + pc_cell2.x].get_global_rect().get_center()
+	land._on_gesture_drag_started({"start": pc_center2, "pos": pc_center2})
+	land._on_gesture_dragged({"start": pc_center2, "end": far_center, "delta": far_center - pc_center2})
+	check(land.unit_cell("pc") == pc_cell2, "横屏：落点不可达/超 6 格 = 取消（12 §3.2；11 §4 ≤6 格）")
+	# 双指点击战场 = 结束回合（pc 已是本轮最后一名：轮替至第 2 轮即证据）
+	land._on_gesture_two_finger_tap(land.center_map.get_global_rect().get_center())
+	await process_frame
+	check(sm2.round_no() == 2, "横屏：双指点击战场 = 结束回合（12 §2.1；轮替发生）")
+	# 捏合 = 缩放 0.7~1.6 持续生效（12 §2.1）
+	land._on_gesture_pinch(3.0, land.center_map.get_global_rect().get_center())
+	check(absf(land._zoom - 1.6) < 0.001, "横屏捏合缩放上限 1.6（任务书 0.7~1.6）")
+	land._on_gesture_pinch_ended(3.0, land.center_map.get_global_rect().get_center())
+	land._on_gesture_pinch(0.1, land.center_map.get_global_rect().get_center())
+	check(absf(land._zoom - 0.7) < 0.001, "横屏捏合缩放下限 0.7")
+	# 长按格内单位 = 详情卡
+	land._on_gesture_long_press(land.center_map.get_global_rect().get_center())
+	# 中心未必有单位；对 pc 格长按
+	var pc_cell3 := land.unit_cell("pc")
+	var pc_center3: Vector2 = land._cells[pc_cell3.y * EncounterLandscape.GRID_COLS + pc_cell3.x].get_global_rect().get_center()
+	land._on_gesture_long_press(pc_center3)
+	check(land.info_popup.visible and land.info_popup.body_label.text.contains("HP"),
+		"横屏：长按单位 = 详情半屏卡（12 §2.1）")
+	land.info_popup.hide()
+	portrait.queue_free()
+	land.queue_free()
+	await process_frame
+
+	# ---- 房间推进条回看（04 §④.2：只读，已完成不重置）----
+	var stream3 := EventStream.new()
+	var board3 := Board.new(stream3)
+	var pack3 := _load_campaign01()
+	var pv: EncounterPortrait = (load("res://shell/portrait/encounter_portrait.tscn") as PackedScene).instantiate()
+	root.add_child(pv)
+	await process_frame
+	await process_frame
+	pv.bind_story(stream3, board3, pack3, {"edge": func(_i: int) -> void: pass})
+	pv.set_rooms(["N0-1", "N0-2", "N1-1", "N1-2"], 2,
+		{"N0-1": "潮醒", "N0-2": "雨夜码头", "N1-1": "广场", "N1-2": "褪色现场"})
+	var ev_before := stream3.size()
+	pv._open_room_review()
+	check(pv.is_review_visible(), "推进条：下滑/点按展开已过房间列表（04 §④.2）")
+	check(pv.review_list.get_child_count() == 2, "回看列表 = 已过房间（不含当前/未来剪影）")
+	(pv.review_list.get_child(0) as Button).pressed.emit()
+	check(pv.review_detail.text.contains("潮醒"), "点房间 = 回看其摘要（04 §④.2）")
+	check(stream3.size() == ev_before and board3.get_doom_clock() == 0,
+		"回看只读：不产事件、不写板（已完成检定与战斗不重置，04 §④.2）")
+	pv.review_popup.visible = false
+	pv.queue_free()
+	await process_frame
+
+	# ---- 教程三层（12 §4）----
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	root.add_child(home)
+	await process_frame
+	var done: Array = []
+	home.tutorial_done.connect(func() -> void: done.append(true))
+	home.show_launch_tutorial()
+	check(home.tutorial.is_launch_visible(), "启动卡：首次启动 3 页核心手势卡（12 §4 第一层）")
+	home.tutorial.next_page()
+	home.tutorial.next_page()
+	check(home.tutorial._page == 2, "启动卡翻页（右滑/下一页）")
+	home.tutorial.next_page() # 末页再进 = 完成
+	check(done.size() == 1 and not home.tutorial.is_launch_visible(), "启动卡可看完离开（可跳过常驻）")
+	# 一次原则写板（12 §4：global.tutorial.* 全局白名单，任何包可写）
+	var board4 := Board.new(EventStream.new())
+	check(board3.write("global.tutorial.boot", true,
+		{"event_id": 1, "node_id": "", "pack_id": "system"}), "教程触发记录写板（global.tutorial.* 白名单，07 §3）")
+	check(board3.write("global.tutorial.combat", true,
+		{"event_id": 1, "node_id": "", "pack_id": "campaign01"}), "教程记录任何包可写（07 §3 白名单）")
+	check(board4.write("global.tutorial.boot", true,
+		{"event_id": 1, "node_id": "", "pack_id": "system"}), "教程写板独立板同样受理")
+	# 帮助页：手势图鉴全表 + 重学入口（12 §4 第三层）
+	home._toggle_help()
+	var help_text := ""
+	for child: Node in home._help_overlay.get_child(0).get_children():
+		if child is Label:
+			help_text += (child as Label).text
+	check(help_text.contains("拖动") and help_text.contains("双指点击") and help_text.contains("捏合")
+		and help_text.contains("横滑") and help_text.contains("长按"),
+		"帮助页：手势图鉴恢复 12 §1 全表（13 §1 帮助入口 ✅ 化）")
+	var retrain: Array = []
+	home.retrain_requested.connect(func() -> void: retrain.append(true))
+	var retrain_btn: Button = null
+	for child: Node in home._help_overlay.get_child(0).get_children():
+		if child is Button and (child as Button).text == TextsZh.HELP_RETRAIN:
+			retrain_btn = child
+	check(retrain_btn != null, "帮助页：重学入口存在（12 §4 可重学）")
+	retrain_btn.pressed.emit()
+	check(retrain.size() == 1, "重学入口上报（清记录由 main 落板）")
+	home._toggle_help()
+	home.queue_free()
+	await process_frame
+
+	# ---- 事件中心放弃 UI（04 §⑤）----
+	var qs5: ScreenQuests = (load("res://shell/ui/screen_quests.tscn") as PackedScene).instantiate()
+	root.add_child(qs5)
+	await process_frame
+	qs5.bind([
+		{"id": "archive_quest", "name": "档案馆委托", "objective": "送信", "node": "N2S-1",
+			"state": "triggered", "optional": true},
+		{"id": "dock_tales", "name": "码头异闻", "objective": "听说法", "node": "N0-2",
+			"state": "triggered", "optional": false},
+		{"id": "old", "name": "旧事", "objective": "", "node": "N0-1", "state": "settled", "optional": true},
+	])
+	check(qs5.abandon_button_count() == 1, "仅进行中的可选事件带「放弃」（04 §⑤）")
+	var abandoned: Array = []
+	qs5.abandon_requested.connect(func(qid: String) -> void: abandoned.append(qid))
+	for row: Node in qs5.list_box.get_children():
+		for child: Node in row.get_children():
+			if child is Button and (child as Button).text == TextsZh.QUESTS_ABANDON:
+				(child as Button).pressed.emit()
+	check(abandoned == ["archive_quest"], "放弃上报 quest_id（写旗标由 core 落）")
+	qs5.queue_free()
+	await process_frame
+
+	# ---- 背包图鉴完整版（04 §⑥；10 §1/§3/§4）----
+	var iv: ScreenInventory = (load("res://shell/ui/screen_inventory.tscn") as PackedScene).instantiate()
+	root.add_child(iv)
+	await process_frame
+	var inv := {"heal_potion": 2, "codex_fragment": 1}
+	iv.bind(inv, _load_campaign01()["items"], ["weaver_fragment_01"], _load_campaign01()["lore"])
+	var n_all := iv.bag_entry_count()
+	check(n_all == 2, "背包：全部身份条目入列（04 §⑥）")
+	# 四重身份筛选：codex 只剩信物
+	iv._filter = "codex"
+	iv._render_bag()
+	await process_frame # queue_free 延迟回收：隔帧再计数
+	check(iv.bag_entry_count() == 1, "背包：按四重身份筛选（图鉴信物，10 §1）")
+	iv._filter = ""
+	iv._render_bag()
+	await process_frame
+	# 道具详情（04 §⑥ 详情弹层：属性/检定修正/分支提示）
+	iv.show_item_detail("codex_fragment")
+	check(iv.info_popup.visible and iv.info_popup.body_label.text.contains(TextsZh.INV_BRANCH_HINT),
+		"道具详情：分支钥匙提示（04 §⑥「某处派上用场」句式）")
+	iv.info_popup.hide()
+	# 图鉴四系列进度 + 集齐奖励预告（worldview §9；10 §4）
+	var codex_text := ""
+	for child: Node in iv.codex_box.get_children():
+		if child is Label:
+			codex_text += (child as Label).text + "\n"
+	check(codex_text.contains("织命者残简：1/4") and codex_text.contains("被撤销者名录：0/2")
+		and codex_text.contains("烬港风物志：0/1") and codex_text.contains("命骰考：0/0"),
+		"图鉴：四系列进度（lore.json × global.lore，10 §3）")
+	check(codex_text.contains("集齐") and codex_text.contains("隐藏剧情线"),
+		"图鉴：集齐奖励预告（10 §4 白名单，永不卖数值）")
+	check(codex_text.contains("残简·其一") and codex_text.contains(TextsZh.CODEX_LOCKED_TITLE),
+		"图鉴：已解锁 Lore 条目呈题，未解锁占位（04 §⑥）")
+	iv.queue_free()
+	await process_frame
+
+	# ---- 战报回放最小版（04 §⑧：事件流重演，纯演出不可改结果）----
+	var stream6 := EventStream.new()
+	var board6 := Board.new(stream6)
+	stream6.emit(EventTypes.COMBAT_START, {"order": ["pc", "imp1"]}, &"core", "N1-7")
+	stream6.emit(EventTypes.BATTLE_ATTACK, {"attacker": "pc", "target": "imp1", "hit": true,
+		"damage": 5, "rolls": [12], "keep": 12, "atk_mod": 2, "target_ac": 10,
+		"crit": false, "fumble": false,
+		"attacker_name": "白页者", "target_name": "小墨妖", "damage_rolls": [5]}, &"core", "N1-7")
+	stream6.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 1}, &"core", "N1-7")
+	var hi6: ScreenHistory = (load("res://shell/ui/screen_history.tscn") as PackedScene).instantiate()
+	root.add_child(hi6)
+	await process_frame
+	hi6.bind(stream6, board6)
+	var ev6_before := stream6.size()
+	hi6.start_replay(1)
+	await create_timer(1.8).timeout # 3 拍 × 0.5s 播完
+	check(hi6.is_replay_visible() and hi6.replay_text().contains("白页者"),
+		"战报重演：事件流按节拍重放进只读战报视图（04 §⑧，最小版=节拍日志重演）")
+	check(stream6.size() == ev6_before and board6.keys_with_prefix("").is_empty(),
+		"重演只读：不产事件、不写板（纯演出，不可改结果）")
+	hi6._replay_close()
+	hi6.queue_free()
 	await process_frame

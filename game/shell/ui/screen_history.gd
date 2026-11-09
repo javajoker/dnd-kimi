@@ -1,20 +1,30 @@
 # ⑧ 历史卷轴（docs/framework/04-UI-UX设计文档.md §⑧；07 §6：历史卷轴 = 事件流视图 + 溯源回链状态板）
 # - 事件流倒序时间轴；每条可展开明细：检定 d20 明细（骰值+修正=结果 vs 难度）、旗标溯源（来源节点）；
-# - 关键判定标记（09 §6 key=true）；筛选与战报回放为呈现方向，最小版标注随内容接入补全（04 §⑧）。
+# - 关键判定标记（09 §6 key=true）；筛选留白；
+# - 战报回放（04 §⑧）：战斗条目「重演」= 事件流按节拍重放进只读战报视图——
+#   最小版形态 = 节拍日志重演（BattleText 同一文案源，0.5s/拍，可跳过），纯演出、不可改结果：
+#   只读事件流，不产生任何命令/写板。
 class_name ScreenHistory
 extends Control
 
 signal back_requested
 
 const PAGE_SIZE := 40
+const REPLAY_BEAT := 0.5 # 节拍（秒/拍）
 
 var list_box: VBoxContainer
 var detail_label: RichTextLabel
 var back_button: Button
+var replay_panel: PanelContainer
+var replay_view: RichTextLabel
+var replay_hint: Label
+var _replay_timer: Timer
 
 var _stream: EventStream
 var _board: Board
 var _name_resolver: Callable = Callable()
+var _replay_lines: Array[String] = []
+var _replay_idx := 0
 
 func _ready() -> void:
 	_build()
@@ -41,15 +51,11 @@ func _build() -> void:
 	detail_label.fit_content = true
 	detail_label.custom_minimum_size = Vector2(0, 110)
 	v.add_child(detail_label)
-	var wip := Label.new()
-	wip.text = "（筛选 / 战报回放 %s）" % TextsZh.COMMON_WIP
-	wip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	wip.add_theme_color_override("font_color", Color(0.55, 0.55, 0.6))
-	v.add_child(wip)
 	back_button = Button.new()
 	back_button.text = TextsZh.COMMON_BACK
 	back_button.pressed.connect(func() -> void: back_requested.emit())
 	v.add_child(back_button)
+	_build_replay()
 
 ## 绑定事件流与状态板（只读）。name_resolver = func(unit_id) -> String（可选）。
 func bind(stream: EventStream, board: Board, name_resolver: Callable = Callable()) -> void:
@@ -74,11 +80,22 @@ func _refresh() -> void:
 			break
 		shown += 1
 		var ev: Dictionary = events[i]
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		list_box.add_child(row)
 		var b := Button.new()
 		b.text = _row_text(ev)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.pressed.connect(func() -> void: detail_label.text = _detail_text(ev))
-		list_box.add_child(b)
+		row.add_child(b)
+		if StringName(ev["type"]) == EventTypes.COMBAT_START:
+			# 战报回放（04 §⑧：重要战斗的事件流重演，纯演出不可改结果）
+			var rb := Button.new()
+			rb.text = TextsZh.HISTORY_REPLAY
+			var start_id := int(ev["id"])
+			rb.pressed.connect(func() -> void: start_replay(start_id))
+			row.add_child(rb)
 
 ## 行摘要：序号 + 类型 + 关键标记 + 简述。
 func _row_text(ev: Dictionary) -> String:
@@ -143,3 +160,88 @@ func _name(id: String) -> String:
 static func _is_key_roll(p: Dictionary) -> bool:
 	var kv: Variant = p.get("key", false)
 	return kv is bool and bool(kv)
+
+# ---------------------------------------------------------------- 战报回放（04 §⑧：最小版 = 节拍日志重演，纯演出不可改结果）
+
+func _build_replay() -> void:
+	replay_panel = PanelContainer.new()
+	replay_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	replay_panel.visible = false
+	add_child(replay_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	replay_panel.add_child(v)
+	var title := Label.new()
+	title.text = TextsZh.REPLAY_TITLE
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 20)
+	v.add_child(title)
+	replay_view = RichTextLabel.new()
+	replay_view.bbcode_enabled = false
+	replay_view.scroll_following = true
+	replay_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	v.add_child(replay_view)
+	replay_hint = Label.new()
+	replay_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	replay_hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+	v.add_child(replay_hint)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(row)
+	var skip := Button.new() # 跳过 = 直接播完（不丢信息，04 §④.7 同原则）
+	skip.text = TextsZh.REPLAY_SKIP
+	skip.pressed.connect(func() -> void: _replay_finish())
+	row.add_child(skip)
+	var close := Button.new()
+	close.text = TextsZh.COMMON_BACK
+	close.pressed.connect(func() -> void: _replay_close())
+	row.add_child(close)
+	_replay_timer = Timer.new()
+	_replay_timer.wait_time = REPLAY_BEAT
+	_replay_timer.timeout.connect(_replay_tick)
+	add_child(_replay_timer)
+
+## 重演一场战斗：截取 combat.start → 其后的 combat.end 之间的事件段，按节拍重放（只读）。
+func start_replay(start_id: int) -> void:
+	_replay_lines.clear()
+	_replay_idx = 0
+	for ev: Dictionary in _stream.all():
+		if int(ev["id"]) < start_id:
+			continue
+		var line := BattleText.event_log_text(ev, _name)
+		if line != "":
+			_replay_lines.append(line)
+		if StringName(ev["type"]) == EventTypes.COMBAT_END:
+			break
+	replay_view.text = ""
+	replay_hint.text = ""
+	replay_panel.visible = true
+	if _replay_lines.is_empty():
+		_replay_finish()
+	else:
+		_replay_timer.start()
+
+func _replay_tick() -> void:
+	if _replay_idx >= _replay_lines.size():
+		_replay_finish()
+		return
+	replay_view.append_text(_replay_lines[_replay_idx] + "\n")
+	_replay_idx += 1
+
+func _replay_finish() -> void:
+	_replay_timer.stop()
+	while _replay_idx < _replay_lines.size():
+		replay_view.append_text(_replay_lines[_replay_idx] + "\n")
+		_replay_idx += 1
+	replay_hint.text = TextsZh.REPLAY_DONE
+
+func _replay_close() -> void:
+	_replay_timer.stop()
+	replay_panel.visible = false
+
+## 测试探针。
+func is_replay_visible() -> bool:
+	return replay_panel.visible
+
+func replay_text() -> String:
+	return replay_view.get_parsed_text()

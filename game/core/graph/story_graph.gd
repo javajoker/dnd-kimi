@@ -388,7 +388,7 @@ func _scan_triggers() -> void:
 # 触发 → quest.trigger 事件 + 事件中心可见；节点完成（离开）→ 按 settle 写板 + quest.settle 事件。
 # 已完结事件由事件中心归档至历史卷轴（04 §⑤：事件流即档案）。
 
-## 事件中心数据源：[{id, name, objective, node, state}]（state: triggered/settled）。
+## 事件中心数据源：[{id, name, objective, node, state, optional}]（state: triggered/settled/abandoned）。
 func quests() -> Array:
 	var out: Array = []
 	for qid: String in _quests:
@@ -396,9 +396,29 @@ func quests() -> Array:
 		var def: Dictionary = q["def"]
 		out.append({"id": qid, "name": str(def.get("name", qid)),
 			"objective": str(def.get("objective", "")), "node": str(def.get("node", "")),
-			"state": str(q["state"])})
+			"state": str(q["state"]), "optional": is_optional_quest(def)})
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a["id"]) < str(b["id"]))
 	return out
+
+## 可选事件判定（04 §⑤「放弃可选事件」）：choice/hidden 触发 = 玩家自择介入；
+## auto/doom_clock 触发 = 主线推移事件，不可放弃。
+static func is_optional_quest(def: Dictionary) -> bool:
+	return ["choice", "hidden"].has(str((def.get("trigger", {}) as Dictionary).get("type", "")))
+
+## 放弃可选事件（04 §⑤：写旗标 + 事件 → 归档历史卷轴）。仅进行中（triggered）可选事件可放弃；
+## 放弃后 state=abandoned（不再结算 settle、不计角标），旗标 <pack>.quest_abandoned.<id> 落板可溯源。
+func abandon_quest(qid: String) -> bool:
+	if not _quests.has(qid):
+		return false
+	var q: Dictionary = _quests[qid]
+	if str(q["state"]) != "triggered" or not is_optional_quest(q["def"]):
+		return false
+	q["state"] = "abandoned"
+	var ev := board.stream.emit(EventTypes.QUEST_ABANDON, {"id": qid,
+		"name": str((q["def"] as Dictionary).get("name", qid))}, &"graph", current_id)
+	board.write("%s.quest_abandoned.%s" % [pack_id, qid], true,
+		{"event_id": ev["id"], "node_id": current_id, "pack_id": pack_id})
+	return true
 
 ## 事件中心角标数：已触发未完结（04 §⑤ 主屏角标）。
 func quest_badge_count() -> int:
