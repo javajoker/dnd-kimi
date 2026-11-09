@@ -14,7 +14,8 @@
 # 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --m3-shots` 子游戏截图；
 # `-- --m4-shots` 锁定态/购买弹层截图；`-- --skin-shots` 外观页/换肤骰子截图（06 §7）；
 # `-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图；
-# `-- --text-shots` 长文本外置呈现截图 /tmp/text_*.png（tech/02 §1.1，不提交）。
+# `-- --text-shots` 长文本外置呈现截图 /tmp/text_*.png（tech/02 §1.1，不提交）；
+# `-- --font-shot` 整备「稳守」预设卡字体证据 /tmp/font_fixed.png（04 §7，不提交）。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -139,6 +140,8 @@ func _ready() -> void:
 		_run_shots_ls()
 	if args.has("--text-shots"):
 		_run_shots_text()
+	if args.has("--font-shot"):
+		_run_shot_font()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -206,6 +209,7 @@ func _swap(screen: Control) -> void:
 	elif shell != null:
 		shell.visible = false
 	current_screen = screen
+	UITheme.attach(screen) # 主题经 Control 链下发（根为普通 Node，Window.theme 穿不透）
 	add_child(screen)
 
 # ---------------------------------------------------------------- 窗口形态（09 §8 战役级横竖屏边界）
@@ -433,6 +437,7 @@ func _ensure_story_shell() -> void:
 			else TextsZh.STORY_MODE_UNLOCK
 	if shell == null:
 		shell = (load(SHELL_SCENES[want]) as PackedScene).instantiate()
+		UITheme.attach(shell as Control)
 		add_child(shell)
 		shell.set("on_save_quit", Callable(self, "_on_save_quit"))
 		router.lock_encounter(want) # 形态整场锁定（09 §3/§8：战役开始即定壳）
@@ -1125,6 +1130,7 @@ func _ensure_sub_shell() -> void:
 	_set_window_orientation(_sub_mode) # 子游戏同遵战役级边界（09 §8：整备/叙事/战斗/结算同形态）
 	if shell == null:
 		shell = (load(SHELL_SCENES[_sub_mode]) as PackedScene).instantiate()
+		UITheme.attach(shell as Control)
 		add_child(shell)
 		router.lock_encounter(_sub_mode) # 形态整场锁定（09 §3/§8）
 	if current_screen != null and current_screen != shell:
@@ -1336,18 +1342,15 @@ func _collect_pct() -> float:
 func _item_name(item_id: String) -> String:
 	return str((pack.get("items", {}) as Dictionary).get(item_id, {}).get("name", item_id))
 
-# ---------------------------------------------------------------- 中文字体（macOS 系统字体回退，仅为可读性）
+# ---------------------------------------------------------------- 中文字体（04 §7：内置 Noto Sans SC + 默认主题，系统字体仅开发兜底）
 
 func _setup_cjk_font() -> void:
-	for path: String in ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
-			"/System/Library/Fonts/STHeiti Light.ttc", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"]:
-		if FileAccess.file_exists(path):
-			var ff := FontFile.new()
-			if ff.load_dynamic_font(path) == OK:
-				ThemeDB.fallback_font = ff
-				print("[main] CJK 字体：", path)
-				return
-	push_warning("[main] 未找到系统中文字体，界面文字可能无法渲染")
+	if UITheme.apply(get_window()):
+		print("[main] 内置中文字体已设为默认主题：", UITheme.FONT_REGULAR)
+	elif UITheme.regular != null:
+		push_warning("[main] 内置中文字体缺失，回退系统字体（仅开发兜底，不入发布形态）")
+	else:
+		push_warning("[main] 未找到任何中文字体，界面文字可能无法渲染")
 
 # ---------------------------------------------------------------- 截图模式（节点流程证据 /tmp，不提交）
 
@@ -1424,6 +1427,30 @@ func _run_shots_text() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _shot("/tmp/text_ending.png") # 结局屏：E1 演出全文 3~5 句（content 摘要兜底不外显）
 	print("[shots] 长文本两屏完成：/tmp/text_story.png /tmp/text_ending.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 字体修复证据截图（/tmp，不提交）
+
+## `-- --font-shot`：竖屏整备 → 套用「稳守」预设卡 → /tmp/font_fixed.png（曾现 CJK 豆腐块的界面）。
+func _run_shot_font() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	graph._enter("N1-7") # 战斗节点 → 竖屏整备（预设卡 = 右列，09 §9.3）
+	_present_node()
+	await get_tree().create_timer(0.5).timeout
+	var lo := current_screen as ScreenLoadout
+	for b: Node in lo.preset_box.get_children(): # 按文案找预设，不假设顺序
+		if (b as Button).text.contains("稳守"):
+			(b as Button).pressed.emit()
+			break
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/font_fixed.png")
+	print("[shots] 字体修复证据：/tmp/font_fixed.png（整备·稳守预设卡）")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- 成长截图（角色界面⑦成长区证据 /tmp，不提交）

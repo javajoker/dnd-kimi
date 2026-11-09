@@ -50,6 +50,7 @@ func _init() -> void:
 	test_entitlements()
 	test_ops_config()
 	test_cosmetics()
+	test_font()
 	test_ngplus_inheritance()
 	call_deferred("_async_shell_tests")
 
@@ -3338,6 +3339,41 @@ func test_ops_config() -> void:
 		"策略切换内容零改动：限免开/关两态 packs/arena 逐文件一致（白皮书 §10.4 运营轨不动内容图）")
 
 # ---------------------------------------------------------------- 外观系统（06 §3/§7 外观商品位；07 §3 v1.2；10 §4 v1.1）
+
+func test_font() -> void:
+	print("[font] 内置中文字体与默认主题（04 §7 字体阅读层级落地）")
+	for path: String in [UITheme.FONT_REGULAR, UITheme.FONT_BOLD]:
+		check(FileAccess.file_exists(path), "字体文件入版本管理：%s" % path)
+		var ff := FontFile.new()
+		check(ff.load_dynamic_font(path) == OK, "字体可加载：%s" % path)
+		check(ff.has_char("稳".unicode_at(0)) and ff.has_char("魈".unicode_at(0)),
+			"字体含 CJK 字形（稳/魈）：%s" % path)
+	check(UITheme.apply(root), "内置字体应用成功（非系统字体兜底）")
+	check(root.theme != null and root.theme.default_font == UITheme.regular,
+		"默认主题生效且默认字体 = 内置 Noto Sans SC（根窗口挂接，全树继承）")
+	check(root.theme.default_font_size == UITheme.SIZE_BODY,
+		"默认主题字号 = 正文档（SIZE_BODY）")
+	var size := UITheme.regular.get_string_size("稳守烬港残页墨魈誊写庭",
+		HORIZONTAL_ALIGNMENT_LEFT, -1.0, UITheme.SIZE_BODY)
+	check(size.x > 0.0, "「稳守烬港残页墨魈誊写庭」渲染宽度 > 0（无豆腐块）")
+	# 主题挂接通道（推迟到首帧后：_init 阶段主题上下文尚未就绪）
+	call_deferred("_test_font_attach")
+
+## 主题挂接通道：普通 Node 祖先会截断 Window.theme 下发（main.tscn 根为 Node），
+## 故界面/壳实例必须经 UITheme.attach 挂接——本断言锁定该语义防回归。
+func _test_font_attach() -> void:
+	await process_frame
+	var plain := Node.new()
+	root.add_child(plain)
+	var host := Control.new()
+	plain.add_child(host)
+	UITheme.attach(host)
+	var probe := Label.new()
+	probe.text = "稳守"
+	host.add_child(probe)
+	check(probe.get_theme_font("font") == UITheme.regular,
+		"attach 挂接后控件解析到内置字体（普通 Node 祖先不截断主题链）")
+	plain.queue_free()
 
 func test_cosmetics() -> void:
 	print("[cosmetics]")
