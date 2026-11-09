@@ -65,6 +65,7 @@ func _async_shell_tests() -> void:
 	await test_act2_hybrid_flow()
 	await test_act3_forced_mode()
 	await test_mode_boundary()
+	await test_loadout_settle_landscape()
 	await test_main_flow()
 	await test_character_nav()
 	await test_gap_features()
@@ -3208,6 +3209,9 @@ func test_act2_hybrid_flow() -> void:
 	check(m._in_encounter, "撕页行动战斗开始（税吏卫队）")
 	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 2}, &"core", "N2U-2")
 	await create_timer(1.6).timeout
+	check(m.current_screen is ScreenSettle, "hybrid 胜利 → ⑨ 结算屏（04 §⑨：胜利必经结算）")
+	(m.current_screen as ScreenSettle).go_next.emit() # 下一遭遇 → 多边出边呈现战后抉择
+	await process_frame
 	var sh := m.shell as EncounterPortrait
 	var opts := " ".join(sh.story_option_texts())
 	check(m.graph.current_id == "N2U-2" and not m._in_encounter
@@ -3906,9 +3910,222 @@ func test_mode_boundary() -> void:
 	m2.queue_free()
 	await process_frame
 
+# ---------------------------------------------------------------- 横屏专版：整备与结算布局（04 §④.8；09 §8 形态注入；竖屏回归不变）
+
+func test_loadout_settle_landscape() -> void:
+	print("[loadout_settle_landscape]")
+	root.size = Vector2i(1280, 720) # 横屏窗口尺寸：布局断言需真实落版
+	# ---- 横屏整备：三段横列 + 队伍状态条置顶（04 §④.8）----
+	var lo: ScreenLoadout = (load("res://shell/ui/screen_loadout.tscn") as PackedScene).instantiate()
+	lo.set_form(ShellRouter.MODE_SPACE)
+	root.add_child(lo)
+	await process_frame
+	await process_frame
+	check(lo.is_landscape_layout(), "横屏整备：三段横列布局启用（04 §④.8）")
+	check(lo.party_bar != null and lo.skill_box != null and lo.item_box != null
+		and lo.preset_label != null and lo.confirm_button != null,
+		"横屏整备控件齐备：队伍条/技能列/道具列/预设卡/开战")
+	check(lo.skill_box.get_parent() == lo.col_skills and lo.item_box.get_parent() == lo.col_items
+		and lo.attr_box.get_parent() == lo.col_items,
+		"横屏整备：左技能列 / 中道具+属性点（04 §④.8）")
+	check(lo.preset_label.get_parent() == lo.col_right and lo.confirm_button.get_parent() == lo.col_right
+		and lo.back_button.get_parent() == lo.col_right,
+		"横屏整备：右预设与开战列（04 §④.8）")
+	check(lo.cols.get_child(0) == lo.col_skills and lo.cols.get_child(1) == lo.col_items
+		and lo.cols.get_child(2) == lo.col_right, "横屏整备：三段次序 技能→道具→预设开战")
+	check(lo.confirm_button.custom_minimum_size.y >= 64, "大号开战按钮居拇指右手区（04 §④.8）")
+	lo.bind({"skill_slots": 2, "item_slots": 1}, {"skills": [
+			{"id": "s1", "name": "技能一"}, {"id": "s2", "name": "技能二"}, {"id": "s3", "name": "技能三"}],
+		"items": [{"id": "heal_potion", "name": "补给药水", "count": 2}],
+		"attr_points": 1, "attr_alloc": {"might": 0, "finesse": 0, "wits": 0},
+		"party": [{"id": "pc", "name": "白页者", "hp": 14, "max_hp": 18}]})
+	await process_frame
+	var party_texts := ""
+	for c: Node in lo.party_bar.get_children():
+		if c is Label:
+			party_texts += (c as Label).text
+	check(party_texts.contains("白页者") and party_texts.contains("14/18"),
+		"队伍状态条置顶：HP 概览实数据（04 §④.8，04 §3.1 同口径）")
+	# 功能等价：同数据同操作路径（toggle → 预设卡摘要 → confirm 信号）
+	lo._toggle_skill("s1")
+	lo._toggle_skill("s2")
+	lo._toggle_skill("s3") # 第 3 个超槽：不进入选择
+	check(lo.picked_skills() == ["s1", "s2"], "横屏整备：技能槽位限制与竖屏一致（09 §9.1）")
+	await process_frame
+	check(lo.preset_label.text.contains("技能一") and lo.preset_label.text.contains("技能二"),
+		"预设卡实时反映当前选择（04 §④.8 预设与开战）")
+	lo._toggle_item("heal_potion")
+	var lo_sel: Array = []
+	lo.confirmed.connect(func(sel: Dictionary) -> void: lo_sel.append(sel))
+	lo._on_confirm()
+	check(lo_sel.size() == 1 and (lo_sel[0]["skills"] as Array) == ["s1", "s2"]
+		and (lo_sel[0]["items"] as Array) == ["heal_potion"],
+		"横屏整备确认上报：与竖屏同信号同载荷（功能等价）")
+	lo.queue_free()
+	await process_frame
+	# ---- 系统预设一键套用（09 §9.3；tech/02 §2.4 presets，数据驱动）----
+	var pack := _load_campaign01()
+	var pcfg := Loadout.resolve_config(pack, "N1-7")
+	var presets: Array = pcfg.get("presets", [])
+	check(presets.size() == 3 and str(presets[0]["name"]) == "强攻" and str(presets[1]["name"]) == "稳守"
+		and str(presets[2]["name"]) == "均衡", "系统预设随包发布：强攻/稳守/均衡（09 §9.3，改 manifest 即变）")
+	var cands := {"skills": [
+			{"id": "inkbolt", "name": "墨术飞矢"}, {"id": "inkshield", "name": "墨盾格挡"},
+			{"id": "inklance", "name": "墨枪突刺"}],
+		"items": [{"id": "heal_potion", "name": "补给药水", "count": 2}],
+		"attr_points": 0, "basic_attacks": ["slash"]}
+	var lo3: ScreenLoadout = (load("res://shell/ui/screen_loadout.tscn") as PackedScene).instantiate()
+	lo3.set_form(ShellRouter.MODE_SPACE)
+	root.add_child(lo3)
+	await process_frame
+	lo3.bind(pcfg, cands)
+	await process_frame
+	check(lo3.preset_box.get_child_count() == 3, "横屏右列预设卡：三预设可点击（04 §④.8 预设与开战）")
+	(lo3.preset_box.get_child(0) as Button).pressed.emit() # 强攻 = slash(普攻恒带) + inkbolt + heal_potion
+	check(lo3.picked_skills() == ["inkbolt"] and lo3.picked_items() == ["heal_potion"],
+		"预设强攻一键套用：普攻 slash 恒带不占槽（tech/04 §2），墨术飞矢+补给药水填槽")
+	check(lo3.hint_label.text.is_empty(), "普攻引用不触发未备齐提示（tech/04 §2 已习得）")
+	await process_frame
+	check(lo3.preset_label.text.contains("墨术飞矢") and lo3.preset_label.text.contains("补给药水"),
+		"套用后预设卡摘要同步")
+	(lo3.preset_box.get_child(2) as Button).pressed.emit() # 均衡 = inkbolt + inkshield + heal_potion
+	check(lo3.picked_skills() == ["inkbolt", "inkshield"], "预设均衡填充：墨术飞矢+墨盾格挡")
+	lo3._toggle_skill("inkbolt") # 套用后逐槽微调
+	check(lo3.picked_skills() == ["inkshield"], "套用后可逐槽微调（09 §9.3：预设只是选择记录）")
+	lo3.bind(pcfg, {"skills": cands["skills"], "items": [], "attr_points": 0, "basic_attacks": ["slash"]})
+	await process_frame
+	(lo3.preset_box.get_child(1) as Button).pressed.emit() # 稳守（无 heal_potion 持有）
+	check(lo3.picked_items().is_empty() and lo3.hint_label.text.contains("heal_potion"),
+		"未持有道具跳过 + 提示（09 §9.3）")
+	lo3.queue_free()
+	await process_frame
+	# 竖屏预设行：同配置同套用（两形态等价）
+	var lo4: ScreenLoadout = (load("res://shell/ui/screen_loadout.tscn") as PackedScene).instantiate()
+	root.add_child(lo4)
+	await process_frame
+	lo4.bind(pcfg, cands)
+	await process_frame
+	check(lo4.preset_box != null and lo4.preset_box.get_child_count() == 3,
+		"竖屏预设行：三预设同配置呈现（09 §9.3）")
+	(lo4.preset_box.get_child(0) as Button).pressed.emit()
+	check(lo4.picked_skills() == ["inkbolt"] and lo4.picked_items() == ["heal_potion"],
+		"竖屏预设套用与横屏等价（同数据同操作路径）")
+	lo4.queue_free()
+	await process_frame
+	# ---- 横屏结算：双区 + 逐项念板 + 胜利演出（04 §④.8）----
+	var st: ScreenSettle = (load("res://shell/ui/screen_settle.tscn") as PackedScene).instantiate()
+	st.set_form(ShellRouter.MODE_SPACE)
+	root.add_child(st)
+	await process_frame
+	await process_frame
+	check(st.is_landscape_layout() and st.lines_box != null and st.side_zone != null,
+		"横屏结算：左念板列表 + 右加点与出口双区（04 §④.8）")
+	st.bind({"title": "午夜墨雨", "result": "victory", "lines": ["经验 +100", "获得：墨核 ×1"],
+		"saved": true, "attr_points": 1, "attrs": {"might": 0, "finesse": 0, "wits": 0}})
+	await process_frame
+	check(st.lines_box.get_child_count() == 3, "横屏结算：逐项念板列表（标题行 + 2 条目）")
+	check((st.lines_box.get_child(1) as Label).text == "经验 +100", "念板逐条独立呈现（逐条入场前提）")
+	check(st.summary_text.text.contains("经验 +100") and st.summary_text.text.contains("墨核"),
+		"横屏结算：汇总全文与竖屏同口径（同数据探针）")
+	check(st.attr_box.get_parent() == st.side_zone and st.home_button.get_parent() == st.side_zone
+		and st.history_button.get_parent() == st.side_zone, "横屏结算：右侧成长加点区与出口按钮")
+	check(st.victory_banner.visible, "胜利演出横铺中央（04 §④.8）")
+	await create_timer(1.8).timeout # 演出 0.2+0.35+0.5+0.3s + 念板逐条入场落定
+	check(not st.victory_banner.visible, "胜利演出收拢到结算布局（播完隐去，04 §④.8）")
+	check((st.lines_box.get_child(1) as Label).modulate.a > 0.99, "念板条目逐条入场动画落定")
+	var allocs: Array = []
+	st.allocate.connect(func(a: String) -> void: allocs.append(a))
+	for c: Node in st.attr_box.get_children():
+		if c is Button and not (c as Button).disabled:
+			(c as Button).pressed.emit()
+			break
+	check(allocs.size() == 1, "横屏结算：成长加点上报与竖屏同路径（11 §6）")
+	st.bind({"title": "午夜墨雨", "result": "victory", "lines": [], "saved": true,
+		"attr_points": 0, "attrs": {}, "celebrate": false})
+	await process_frame
+	check(not st.victory_banner.visible, "celebrate=false：同场重绑不重播胜利演出（加点刷新路径）")
+	st.bind({"title": "午夜墨雨", "result": "defeat", "lines": ["经验 +10"], "saved": true,
+		"attr_points": 0, "attrs": {}})
+	await process_frame
+	check(not st.victory_banner.visible, "败北结算无胜利演出（结果分级）")
+	st.queue_free()
+	await process_frame
+	# ---- 竖屏回归：默认形态布局不变（04 §④.8：竖屏布局不变）----
+	root.size = Vector2i(390, 760)
+	var lo2: ScreenLoadout = (load("res://shell/ui/screen_loadout.tscn") as PackedScene).instantiate()
+	root.add_child(lo2)
+	await process_frame
+	check(not lo2.is_landscape_layout() and lo2.party_bar == null and lo2.preset_label == null,
+		"竖屏整备回归：居中纵列不变（无横屏容器）")
+	lo2.queue_free()
+	var st2: ScreenSettle = (load("res://shell/ui/screen_settle.tscn") as PackedScene).instantiate()
+	root.add_child(st2)
+	await process_frame
+	check(not st2.is_landscape_layout() and st2.lines_box == null and st2.victory_banner == null,
+		"竖屏结算回归：居中纵列不变（无横屏容器）")
+	check(st2.next_button != null and not st2.next_button.visible,
+		"竖屏结算回归：无 has_next 时下一遭遇出口隐藏（04 §⑨）")
+	st2.queue_free()
+	await process_frame
+	# ---- main 级接线：横屏战役整备/结算形态注入（09 §8 + 04 §④.8）----
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	m._on_home_navigate(&"entry")
+	await process_frame
+	(m.current_screen as ScreenEntry).pick_mode(ShellRouter.MODE_SPACE)
+	(m.current_screen as ScreenEntry).start_requested.emit()
+	await process_frame
+	await process_frame
+	m.graph._enter("N1-7")
+	m._present_node()
+	await process_frame
+	var mlo := m.current_screen as ScreenLoadout
+	check(mlo != null and mlo.is_landscape_layout() and m.window_orientation == ShellRouter.MODE_SPACE,
+		"横屏战役：整备三段横列随战役形态注入（04 §④.8/09 §8）")
+	await process_frame
+	var party_ok := false
+	for c: Node in mlo.party_bar.get_children():
+		if c is Label and (c as Label).text.contains("白页者"):
+			party_ok = true
+	check(party_ok, "横屏战役整备：队伍状态条实数据（graph.party_status）")
+	mlo._on_confirm()
+	await create_timer(1.4).timeout
+	# ---- 胜利必经结算：横屏双区 + 胜利演出 + 下一遭遇出口（04 §⑨/§④.8）----
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", m.graph.current_id)
+	await create_timer(1.6).timeout
+	var mst := m.current_screen as ScreenSettle
+	check(mst != null and mst.is_landscape_layout() and m.window_orientation == ShellRouter.MODE_SPACE,
+		"横屏战役：胜利结算双区随战役形态注入（04 §⑨/§④.8/09 §8）")
+	check(mst.victory_banner.visible, "横屏战役：胜利演出横铺中央（04 §④.8）")
+	check(mst.next_button.visible, "横屏战役：胜利结算下一遭遇出口（04 §⑨/§④.8）")
+	mst.go_next.emit()
+	await process_frame
+	check(m.graph.current_id == "N1-8" and m.current_screen == m.shell,
+		"下一遭遇 → 战后边推进 N1-8 并呈现节点（tech/02 §3）")
+	# ---- 败北路：结算无下一遭遇出口（失败/撤退路径不变）----
+	m.graph._enter("N1-7")
+	m._present_node()
+	await process_frame
+	(m.current_screen as ScreenLoadout)._on_confirm()
+	await create_timer(1.4).timeout
+	m.stream.emit(EventTypes.COMBAT_END, {"result": &"defeat", "rounds": 2}, &"core", m.graph.current_id)
+	await create_timer(1.6).timeout
+	var mst2 := m.current_screen as ScreenSettle
+	check(mst2 != null and mst2.is_landscape_layout() and not mst2.next_button.visible,
+		"横屏战役：败北结算无下一遭遇出口（失败/撤退路径不变）")
+	check(mst2.lines_box.get_child_count() >= 2, "横屏结算念板实数据逐项呈现")
+	mst2.go_home.emit()
+	await process_frame
+	m.queue_free()
+	await process_frame
+	root.size = Vector2i(390, 760) # 还原竖屏基准，不影响后续用例
+
 # ---------------------------------------------------------------- main 节点流程集成（tech/01 §10；04 §3.1/§④.2/§④.3/§⑨；07 §4.2；09 §6/§7）
 
-## main 流程战斗快捷通道：整备确认 → 遭遇 → 模拟胜利（真实战斗数值由 encounter_sm/包数据通道覆盖）。
+## main 流程战斗快捷通道：整备确认 → 遭遇 → 模拟胜利 → ⑨ 结算「下一遭遇」（04 §⑨：胜利必经结算；
+## 真实战斗数值由 encounter_sm/包数据通道覆盖）。
 func _main_win_battle(m: Node) -> void:
 	var lo := m.current_screen as ScreenLoadout
 	lo._toggle_skill("inkbolt")
@@ -3917,6 +4134,8 @@ func _main_win_battle(m: Node) -> void:
 	await create_timer(1.4).timeout
 	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", m.graph.current_id)
 	await create_timer(1.6).timeout
+	(m.current_screen as ScreenSettle).go_next.emit() # 下一遭遇：沿故事图边推进（04 §⑨）
+	await process_frame
 
 func test_main_flow() -> void:
 	print("[main_flow]")
@@ -4099,9 +4318,17 @@ func test_main_flow() -> void:
 		{"event_id": m.stream.tail(), "node_id": "N1-7", "pack_id": "campaign01"})
 	m.stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", "N1-7")
 	await create_timer(1.6).timeout
+	# ---- 胜利必经结算（04 §⑨：念板 + 快照 + 三出口）----
+	check(m.current_screen is ScreenSettle, "战斗胜利 → ⑨ 结算屏（04 §⑨：胜利必经结算，元循环落笔处）")
+	check(FileAccess.file_exists(save_path), "胜利结算落快照（07 §4.2 主快照点；快照在战后节点，继续不重打）")
+	var vst := m.current_screen as ScreenSettle
+	check(vst.next_button.visible and vst.home_button.visible and vst.history_button.visible,
+		"胜利结算三出口：下一遭遇 / 回主屏 / 查看卷轴（04 §⑨/§④.8）")
+	check(vst.summary_text.text.contains("经验 +300"), "胜利念板：经验逐项呈现（04 §⑨）")
+	vst.go_next.emit()
+	await process_frame
 	# ---- branch（N1-8）：独狼隐藏边按声望显隐 ----
-	check(m.graph.current_id == "N1-8", "战斗胜利 → 战后边回图到 branch N1-8（tech/02 §3）")
-	check(not (m.current_screen is ScreenSettle), "战后不直接结算：回到节点流程")
+	check(m.graph.current_id == "N1-8", "下一遭遇 → 战后边回图到 branch N1-8（tech/02 §3）")
 	var sh2 := m.shell as EncounterPortrait
 	var branch_opts := " ".join(sh2.story_option_texts())
 	check(branch_opts.contains("誊写庭委托") and branch_opts.contains("断墨会委托")

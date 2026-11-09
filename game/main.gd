@@ -78,6 +78,8 @@ var _maze: MazeRunner = null      # 进行中的探索序列核（core 渐进执
 var _maze_outcome := ""           # 上一拍结果摘要（拼进下一拍文本）
 var _history_origin: StringName = &"home"
 var _settle_lines: Array[String] = [] # 结算汇总缓存（卷轴往返 / 加点刷新复用）
+var _settle_celebrated := false # 本场胜利演出已播（04 §④.8：加点/卷轴往返重绑不重播）
+var _sub_settle_celebrated := false # 子游戏结算同理
 var _shots := false
 
 func _ready() -> void:
@@ -127,6 +129,8 @@ func _ready() -> void:
 		_run_shot_promo()
 	if args.has("--mode-shots"):
 		_run_shots_mode()
+	if args.has("--ls-shots"):
+		_run_shots_ls()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -631,6 +635,7 @@ func _enter_encounter() -> void:
 		_begin_encounter({"skills": [], "items": ["heal_potion"], "attr_alloc": {}}) # 空选择 = BattleDef 缺省
 		return
 	var screen: ScreenLoadout = (load(SCREEN_SCENES[&"loadout"]) as PackedScene).instantiate()
+	screen.set_form(_story_mode()) # 整备横屏专版（04 §④.8：横屏三段横列 + 队伍状态条置顶）
 	_swap(screen)
 	screen.bind(cfg, _loadout_candidates())
 	screen.confirmed.connect(_on_loadout_confirmed.bind(cfg))
@@ -651,7 +656,21 @@ func _loadout_candidates() -> Dictionary:
 	return {"skills": skill_pool, "items": items,
 		"attr_points": Growth.attr_points(board), # 成长簿记归全局键（tech/04 §8）
 		"attrs": Growth.attrs_map(board), # 已分配值（单项 +3 封顶判定用，11 §6）
-		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0}}
+		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0},
+		"party": graph.party_status(), # 横屏整备队伍状态条置顶（04 §④.8；04 §3.1 状态栏带同口径）
+		"basic_attacks": _basic_attacks()} # 普攻恒定携带（tech/04 §2；预设套用不占槽，09 §9.3）
+
+## 队伍普攻清单（tech/04 §2 basic_attack 亦属已习得）：预设含普攻 = 视为已携带，不占整备槽位。
+func _basic_attacks() -> Array:
+	var out: Array = []
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c: Dictionary = pack["characters"][cid]
+		if not ["player_template", "companion"].has(str(c.get("kind", ""))):
+			continue
+		var ba := str(c.get("basic_attack", ""))
+		if not ba.is_empty() and not out.has(ba):
+			out.append(ba)
+	return out
 
 ## 玩家模板条目（tech/04 §2 kind=player_template；找不到 = 包数据缺陷，返回空字典由组装层报错）。
 func _player_template() -> Dictionary:
@@ -767,20 +786,18 @@ func _show_settle_deferred() -> void:
 	_in_encounter = false
 	if _encounter_result == &"victory":
 		_battles_won += 1
-		# 战斗是图内节点：胜利后走战后边回图（tech/02 §3 节点边结算）；
-		# 多条出边（hybrid 战后抉择 N2U-2 撕/不撕、通缉战 N2L-1b 强制择链）
-		# → 呈现节点选项由玩家抉择（tech/02 §6 hybrid），单出边自动推进
 		var edges := graph.available_edges()
 		if edges.is_empty():
 			_end_slice()
 			return
+		# 胜利必经结算（04 §⑨：单局的句点，元循环的落笔处）——先念板+快照，再由玩家择出口。
+		# 唯一出边先推进再落快照（07 §4.2：快照落在战后节点，「继续」不重打已胜之仗）；
+		# 多条出边（hybrid 战后抉择 N2U-2 撕/不撕、通缉战 N2L-1b 强制择链）留在战斗节点，
+		# 由结算「下一遭遇」呈现故事态抉择（tech/02 §6 hybrid）。
 		if edges.size() == 1:
 			graph.take_edge(edges[0])
-			_present_node()
-		else:
-			# 多条出边（hybrid 战后抉择 N2U-2 撕/不撕、通缉战 N2L-1b 强制择链）：
-			# 呈现战斗节点的故事态选项由玩家抉择——不得再进 _present_node（type=battle 会重进遭遇）
-			_present_story_node()
+		_save("settle")
+		_show_settle()
 	elif _encounter_result == &"objective_failed":
 		# 护送目标失败：罚时等代价已按 escort.failure_effects 写板（core，tech/02 §6），
 		# 仍走节点唯一出边——罚时替代全灭（N2S-1 注记就近处理，08 §2 失败即分支）
@@ -834,21 +851,36 @@ func _show_settle() -> void:
 		lines.append("成长：属性点 +%d" % attr_gained)
 	lines.append("时间钟：%d 格" % board.get_doom_clock())
 	_settle_lines = lines
+	_settle_celebrated = false # 新一场结算：胜利演出恢复首播（04 §④.8）
 	_bind_settle()
 
 func _bind_settle() -> void:
 	_set_window_orientation(_story_mode()) # 结算在所选形态下呈现（09 §8）；从⑧卷轴返回时恢复战役形态
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
+	screen.set_form(_story_mode()) # 结算横屏专版（04 §④.8：左念板列表 + 右加点与出口）
 	_swap(screen)
 	screen.bind({"title": TextsZh.STORY_SLICE_END if _encounter_result == &"slice" else _battle_title,
 		"result": String(_encounter_result), "lines": _settle_lines,
 		"saved": true, "attr_points": Growth.attr_points(board),
-		"attrs": Growth.attrs_map(board)})
+		"attrs": Growth.attrs_map(board),
+		"has_next": _encounter_result == &"victory", # 下一遭遇出口（04 §⑨：胜利结算三出口）
+		"celebrate": not _settle_celebrated}) # 胜利演出每场首播（04 §④.8；加点刷新重绑不重播）
+	_settle_celebrated = true
 	screen.allocate.connect(_on_settle_allocate)
 	screen.go_home.connect(_show_home)
+	screen.go_next.connect(_on_settle_next)
 	screen.go_history.connect(func() -> void:
 		_history_origin = &"settle"
 		_show_history())
+
+## 胜利结算「下一遭遇」（04 §⑨）：唯一出边已在进结算前推进，此处呈现战后节点；
+## 多条出边（hybrid 战后抉择）呈现战斗节点的故事态选项——不得 _present_node（type=battle 会重进遭遇，tech/02 §6）。
+func _on_settle_next() -> void:
+	var edges := graph.available_edges()
+	if edges.size() > 1 and str(graph.current().get("type", "")) == "battle":
+		_present_story_node()
+		return
+	_present_node()
 
 func _on_settle_allocate(attr: String) -> void:
 	var prov := {"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": "campaign01"}
@@ -1067,6 +1099,7 @@ func _sub_enter_battle() -> void:
 	var cfg := _sub.loadout_config()
 	if not cfg.is_empty() and _sub.run_wins == 0:
 		var screen: ScreenLoadout = (load(SCREEN_SCENES[&"loadout"]) as PackedScene).instantiate()
+		screen.set_form(_sub_mode) # 子游戏整备同形态（09 §8；04 §④.8 横屏专版）
 		_swap(screen)
 		screen.bind(cfg, _sub.loadout_candidates())
 		screen.confirmed.connect(_on_sub_loadout_confirmed.bind(cfg))
@@ -1129,6 +1162,7 @@ func _sub_finish(result: StringName) -> void:
 	var summary := _sub.finish_run(result) # 最佳连战纪录取大写板
 	_save("settle")
 	_sub_settle_cache = _sub_settle_lines(summary, result)
+	_sub_settle_celebrated = false # 新一场结算：胜利演出恢复首播（04 §④.8）
 	_sub_bind_settle()
 
 var _sub_settle_cache: Dictionary = {}
@@ -1173,8 +1207,12 @@ func _sub_settle_lines(summary: Dictionary, result: StringName) -> Dictionary:
 func _sub_bind_settle() -> void:
 	_set_window_orientation(_sub_mode) # 子游戏结算同形态（09 §8）
 	var screen: ScreenSettle = (load(SCREEN_SCENES[&"settle"]) as PackedScene).instantiate()
+	screen.set_form(_sub_mode) # 子游戏结算横屏专版（04 §④.8/§6：子游戏复用框架界面）
 	_swap(screen)
-	screen.bind(_sub_settle_cache)
+	var sub_summary := _sub_settle_cache.duplicate()
+	sub_summary["celebrate"] = not _sub_settle_celebrated # 胜利演出首播；加点刷新重绑不重播
+	_sub_settle_celebrated = true
+	screen.bind(sub_summary)
 	# 子游戏结算屏同接成长分配（tech/04 §8 规则3：结算屏分配；概念设计 §8 待裁决 3 随全局簿记结构消解）
 	screen.allocate.connect(func(attr: String) -> void:
 		if Growth.new(board).alloc(attr, {"event_id": stream.tail(),
@@ -1544,6 +1582,34 @@ func _run_shots_mode() -> void:
 	await get_tree().create_timer(2.2).timeout # 探索演出 1s + 战斗铺开
 	await _shot("/tmp/mode_battle.png")
 	print("[shots] 战役级横竖屏边界两张完成：/tmp/mode_story.png /tmp/mode_battle.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 横屏专版截图（04 §④.8 整备/结算布局证据 /tmp，不提交）
+
+## `-- --ls-shots`：横屏战役 → 整备三段横列（预设卡套用）→ 战斗 → 胜利结算（横幅横铺 → 收拢双区）。
+func _run_shots_ls() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_SPACE)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	graph._enter("N1-7") # 战斗节点 → 横屏整备（04 §④.8：三段横列 + 队伍状态条置顶）
+	_present_node()
+	await get_tree().create_timer(0.5).timeout
+	var lo := current_screen as ScreenLoadout
+	(lo.preset_box.get_child(0) as Button).pressed.emit() # 一键套用「强攻」（09 §9.3）
+	await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/ls_loadout.png")
+	lo._on_confirm()
+	await get_tree().create_timer(2.2).timeout # 探索演出 1s + 战斗铺开
+	stream.emit(EventTypes.COMBAT_END, {"result": &"victory", "rounds": 3}, &"core", graph.current_id)
+	await get_tree().create_timer(1.5).timeout # 结算 1.2s 后出现，胜利横幅横铺中央（04 §④.8）
+	await _shot("/tmp/ls_settle.png")
+	await get_tree().create_timer(1.3).timeout # 横幅收拢 → 双区 + 下一遭遇出口（04 §⑨）
+	await _shot("/tmp/ls_settle_next.png")
+	print("[shots] 横屏专版三张完成：/tmp/ls_loadout.png /tmp/ls_settle.png /tmp/ls_settle_next.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- 主屏运营位截图（06 §6 home_promo 投放证据 /tmp，不提交）

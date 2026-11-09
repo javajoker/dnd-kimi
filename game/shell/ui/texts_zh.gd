@@ -66,6 +66,7 @@ const SETTLE_RETREAT := "撤退"
 const SETTLE_QUIT := "退出"
 const SETTLE_HOME := "回主屏"
 const SETTLE_HISTORY := "查看卷轴"
+const SETTLE_NEXT := "下一遭遇" # 04 §⑨/§④.8：胜利结算三出口之一（沿故事图边推进）
 const SETTLE_SAVED := "抄本已记录。" # 07 §4.2 结算快照（溯源在代码注释，条款号不上屏，M2 审计 G7）
 const SETTLE_ATTR_TITLE := "成长加点（属性点可留到下次整备）"
 const SETTLE_ATTR_KEEP := "留到下次整备"
@@ -177,6 +178,11 @@ const LOADOUT_ITEMS := "道具携带（槽位 %d）"
 const LOADOUT_ATTRS := "未分配属性点：%d"
 const LOADOUT_CONFIRM := "确认出发"
 const LOADOUT_FULL := "（槽位已满）"
+# 横屏专版（04 §④.8：三段横列 + 队伍状态条置顶 + 预设卡）
+const LOADOUT_PRESET_TITLE := "预设"
+const LOADOUT_PRESET_EMPTY := "（尚未选择，点选预设或逐项挑选）"
+const LOADOUT_PRESET_MISSING := "预设未备齐（已跳过）：%s" # 09 §9.3：未习得/未持有跳过并提示
+const LOADOUT_PARTY_ITEM := "%s HP %d/%d"
 
 # ⑧ 历史卷轴（04 §⑧）
 const HISTORY_TITLE := "历史卷轴"

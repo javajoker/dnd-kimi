@@ -12,7 +12,12 @@
     "recommend": { "N4-1": "space" }
   },
   "namespace": "campaign01",
-  "loadout": { "enabled": true, "item_slots": 2, "skill_slots": 2, "respec": false },
+  "loadout": { "enabled": true, "item_slots": 2, "skill_slots": 2, "respec": false,
+    "presets": [
+      { "id": "aggressive", "name": "强攻", "skills": ["slash", "inkbolt"], "items": ["heal_potion"] },
+      { "id": "steady", "name": "稳守", "skills": ["slash", "inkshield"], "items": ["heal_potion"] },
+      { "id": "balanced", "name": "均衡", "skills": ["inkbolt", "inkshield"], "items": ["heal_potion"] }
+    ] },
   "recommended_level": [1, 4],
   "estimated_hours": "6-9",
   "node_budget": 35,

@@ -127,7 +127,15 @@ func loadout_candidates() -> Dictionary:
 		var it: Dictionary = pack["items"][iid]
 		if it.has("use") and board.has_item(iid):
 			items.append({"id": iid, "name": str(it.get("name", iid)), "count": board.item_count(iid)})
+	var basics: Array = []
+	for cid: String in (pack.get("characters", {}) as Dictionary).keys():
+		var c2: Dictionary = pack["characters"][cid]
+		var ba := str(c2.get("basic_attack", ""))
+		if not ba.is_empty() and not basics.has(ba):
+			basics.append(ba) # 普攻恒定携带（tech/04 §2；预设套用不占槽，09 §9.3）
 	return {"skills": skill_pool, "items": items,
 		# 成长簿记归框架全局键（tech/04 §8）：子游戏整备同口径分配（概念设计 §8 待裁决 3 结构消解）
 		"attr_points": Growth.attr_points(board), "attrs": Growth.attrs_map(board),
-		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0}}
+		"attr_alloc": {"might": 0, "finesse": 0, "wits": 0},
+		"party": graph.party_status(), # 横屏整备队伍状态条（04 §④.8，与战役同口径）
+		"basic_attacks": basics}
