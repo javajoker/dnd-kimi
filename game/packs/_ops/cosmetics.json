@@ -24,6 +24,13 @@
       "grant": {"kind": "shop"},
       "shop": {"price_text": "¥6"},
       "palette": {"face": "#d08a4e", "edge": "#5e3a1e", "pip": "#2a160b"}
+    },
+    {
+      "id": "scribe_dice",
+      "name": "执笔者之骰",
+      "desc": "NG+ E3 新篇专属授予（战役书 §11：隐藏结局的奖励是身份与演出，不给属性）——新执笔者的第一副骰面，墨未干。",
+      "grant": {"kind": "ngplus_ending", "ending": "E3"},
+      "palette": {"face": "#f4efe0", "edge": "#2e3a5c", "pip": "#8c1f2f"}
     }
   ]
 }

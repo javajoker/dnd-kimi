@@ -13,7 +13,9 @@ static func build(graph: StoryGraph, board: Board, pack: Dictionary) -> Dictiona
 		"id": nid,
 		"type": str(node.get("type", "")),
 		"title": str(node.get("title", nid)),
-		"text": str(node.get("summary", "")), # tech/02 §3：title/summary 为节点显示文本（无段落字段，见交付留白）
+		# tech/02 §3：title/summary 为节点显示文本（无段落字段，见交付留白）；
+		# text_variants 旗标变体优先（战役书 §11 多周目开局独白/追忆滤镜，纯呈现差异）
+		"text": node_text(node, board, str(pack.get("pack_id", ""))),
 		"clock": board.get_doom_clock(),
 		"forecast": graph.next_clock_trigger(),   # 最近逼近项（状态栏带角标）
 		"forecasts": graph.clock_forecasts(),      # 全部逼近项（时间钟弹层，04 §3.1）
@@ -43,6 +45,19 @@ static func build(graph: StoryGraph, board: Board, pack: Dictionary) -> Dictiona
 	vm["room_index"] = graph.visit_log.size() - 1
 	vm["room_titles"] = titles
 	return vm
+
+## 节点呈现文本：text_variants（tech/02 §3）按声明序取首个成立旗标的 text 替换 summary；
+## flag 省略前缀解析为本包命名空间（与 §4.6 条件同一口径）；纯呈现差异，不进图遍历与事件流判定。
+static func node_text(node: Dictionary, board: Board, ns: String) -> String:
+	var text := str(node.get("summary", ""))
+	for v: Variant in node.get("text_variants", []):
+		var fid := str((v as Dictionary).get("flag", ""))
+		if fid.is_empty():
+			continue
+		var key := fid if "." in fid or ns.is_empty() else "%s.%s" % [ns, fid]
+		if board != null and bool(board.read(key, false)):
+			return str((v as Dictionary).get("text", text))
+	return text
 
 ## 选项/检定按钮文案：检定带技能·难度·DC·修正（04 §④.3 检定房一键快掷）；
 ## 触及声望的选项带 faction 角标（任务书：对话选项带声望角标；数据来源 = 边效果 ∪ 目标节点 on_enter ∪ requires）。

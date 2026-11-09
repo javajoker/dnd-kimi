@@ -524,31 +524,18 @@ func _present_ending() -> void:
 	screen.ngplus_requested.connect(_on_ngplus_start)
 	screen.go_home.connect(_show_home)
 
-## 开始二周目（战役书 §8 投放第 4 枚残简 = 多周目继承 ×1；§9 E4：失败非终局、收集与图鉴进度保留）：
-## 保留 global.lore（图鉴）与 global.entitlement.*（权利），周目数 +1（campaign01.ngplus 簿记，
-## meta.ngplus/playthrough 数据源），其余状态重置后从入口节点重新开图（bot NG+ 语义同口径）。
+## 开始二周目（战役书 §11 多周目继承清单·定稿；tech/02 §2.7 manifest.ngplus 数据驱动）：
+## 继承内容唯一依据 = 战役包 manifest.ngplus（carries 共通 + per_ending 按结局解锁），
+## 本函数不写死任何继承内容——改 manifest 即变；执行落 core（NgPlus.apply，bot NG+ 语义同口径）。
 func _on_ngplus_start() -> void:
-	var lore: Array = board.get_lore()
-	var ents := {}
-	for key: String in board.keys_with_prefix("global.entitlement."):
-		ents[key] = board.read(key)
-	var cos := {}
-	for key: String in board.keys_with_prefix("global.cosmetic."):
-		cos[key] = board.read(key) # 外观旗标随周目保留（已获权利不降级，白皮书 §10.4）
-	var ng := int(board.read("campaign01.ngplus", 0)) + 1
+	var old_board := board
 	board = Board.new(stream)
 	entitlements = Entitlements.new(board, stream)
 	entitlements.apply_activities(ops_config)
 	cosmetics = Cosmetics.new(board, stream)
-	var sys_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "system"}
-	for key: String in ents.keys():
-		board.write(key, ents[key], sys_prov) # 权利保留（global.entitlement.* 仅 system 可写，07 §3）
-	for key: String in cos.keys():
-		board.write(key, cos[key], sys_prov) # 外观旗标保留（global.cosmetic.* 仅 system 可写，07 §3 v1.2）
-	var pack_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "campaign01"}
-	board.write("global.lore", lore, pack_prov) # 图鉴保留（07 §2 全局白名单，任何包可写）
-	board.write("campaign01.ngplus", ng, pack_prov) # 周目数簿记（包命名空间）
-	board.give_item("codex_fragment", 1, pack_prov) # 多周目继承 ×1（战役书 §8 投放第 4 枚）
+	var ngplus_conf: Dictionary = ((_pack_host.get("manifest", {}) as Dictionary)
+		.get("ngplus", {})) # tech/02 §2.6：宿主原包 manifest 为唯一继承依据
+	NgPlus.apply(old_board, board, stream, cosmetics, ngplus_conf, str(_pack_host.get("pack_id", "")))
 	graph = StoryGraph.new(board, rng, _pack_host) # 从宿主原包重建（tech/02 §2.6：宿主数据不动）
 	_graft_discovered_arcs() # 支线随新周目重新注入（权利随新板再判定，06 §3.1）
 	if shell != null:

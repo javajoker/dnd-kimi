@@ -374,6 +374,16 @@ static func _v4_flag_closure(pack: Dictionary) -> Array:
 			if not read.has(fid):
 				read[fid] = []
 			read[fid].append("encounters.%s.%s" % [enc_id, field])
+	# 节点文本变体读取亦算图内消费（tech/02 §3 text_variants：战役书 §11 多周目演出差异落点）
+	for nid: String in (pack.get("nodes", {}) as Dictionary).keys():
+		var node: Dictionary = pack["nodes"][nid]
+		for v: Variant in node.get("text_variants", []):
+			var vfid := str((v as Dictionary).get("flag", ""))
+			if vfid.is_empty() or "." in vfid:
+				continue
+			if not read.has(vfid):
+				read[vfid] = []
+			read[vfid].append("nodes.%s.text_variants" % nid)
 	# 台账比对
 	var declared := {}
 	for f: Variant in pack.get("flags", []):

@@ -28,7 +28,10 @@ static func run(pack: Dictionary, seed: int, ngplus: bool = false, lone_wolf: bo
 	var graph := StoryGraph.new(board, rng, pack)
 	if ngplus:
 		var prov := {"event_id": 0, "node_id": "ngplus_boot", "pack_id": "system"}
-		board.give_item("codex_fragment", 1, prov) # 战役书 §8：多周目继承 ×1
+		# 多周目残简继承：数据驱动读 manifest.ngplus.carries（tech/02 §2.7；战役书 §11），缺省 1
+		var carries: Dictionary = ((pack.get("manifest", {}) as Dictionary)
+			.get("ngplus", {}) as Dictionary).get("carries", {})
+		board.give_item("codex_fragment", int(carries.get("codex_fragment", 1)), prov)
 		# 多周目羁绊继承：上一周目图内投放所得（TP1 验收裁决 2；不含注入数值）
 		var prev := run(pack, seed + 1, false, false)
 		var prev_bond := int(prev.get("bond_max", 0))

@@ -11,12 +11,22 @@
       "id": "N0-1", "act": "SL-0", "type": "scene",
       "title": "潮醒",
       "summary": "你在烬港的潮声中醒来，怀里没有抄本。",
+      "text_variants": [
+        { "flag": "unlock_scribe_identity",
+          "text": "你在烬港的潮声中醒来，怀里没有抄本。墨在你指尖待命——你是执笔者，港城的下一页由你落笔。" },
+        { "flag": "ngplus_memory_view",
+          "text": "你在烬港的潮声中醒来，怀里没有抄本。可你记得潮声退去时港城的样子——残页在记忆里微微发烫，这一次你看得更清楚。" }
+      ],
       "edges": [ { "type": "choice", "label": "起身", "to": "N0-2" } ]
     },
     {
       "id": "N0-2", "act": "SL-0", "type": "check",
       "title": "消失的码头名",
       "summary": "检定教学：辨认正在褪去的码头名。",
+      "text_variants": [
+        { "flag": "ngplus_memory_view",
+          "text": "检定教学：辨认正在褪去的码头名。上一周目你没看清的那一笔，这一回在你眼里多停了一瞬。" }
+      ],
       "edges": [ {
         "type": "check", "skill": "perception", "difficulty": "easy",
         "success": "N0-3a", "failure": "N0-3b"
@@ -374,12 +384,14 @@
     {
       "id": "E1", "act": "SL-4", "type": "ending", "title": "重墨",
       "summary": "结局演出 + 尾声结算。",
-      "on_enter": [ { "write": "ending_e1", "value": true } ], "edges": []
+      "on_enter": [ { "write": "ending_e1", "value": true },
+        { "write": "unlock_elysium_rumor", "value": true } ], "edges": []
     },
     {
       "id": "E2", "act": "SL-4", "type": "ending", "title": "自由灰",
       "summary": "结局演出 + 尾声结算。",
-      "on_enter": [ { "write": "ending_e2", "value": true } ], "edges": []
+      "on_enter": [ { "write": "ending_e2", "value": true },
+        { "write": "unlock_wastes_rumor", "value": true } ], "edges": []
     },
     {
       "id": "E3", "act": "SL-4", "type": "ending", "title": "新篇",

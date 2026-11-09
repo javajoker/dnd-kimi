@@ -49,6 +49,7 @@ func _init() -> void:
 	test_entitlements()
 	test_ops_config()
 	test_cosmetics()
+	test_ngplus_inheritance()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
@@ -339,7 +340,7 @@ func test_pack_loader() -> void:
 		and n17.has("pos") and n17.has("party_advantage"),
 		"N1-7 遭遇登记 party/enemies/pos/party_advantage（tech/02 §6 扩展字段）")
 	check((pack["endings"] as Array).size() == 4, "结局表 E1~E4")
-	check((pack["flags"] as Array).size() == 14, "旗标台账 14 条（终章接入补：结局旗标 ×4 + 多周目解锁占位 ×2）")
+	check((pack["flags"] as Array).size() == 16, "旗标台账 16 条（结局旗标 ×4 + 多周目解锁 ×4：传闻钩子 ×2 落地，战役书 §11）")
 	check((pack["events"] as Array).size() == 10, "事件清单 10 条")
 	check((pack["lore"] as Array).size() == 7, "图鉴条目 7 条")
 	# 字段缺省容错（tech/02 §11）：N0-1 未声明 on_enter/on_complete 应补默认空数组
@@ -2429,6 +2430,118 @@ func _play_ending(pack: Dictionary, setup: Dictionary, r2_success: bool = true) 
 		"图边结局 %s 与 endings.json 求值 %s 互证一致（tech/02 §9）" % [g.current_id, by_table])
 	return {"ending": g.current_id, "board": b}
 
+# ---------------------------------------------------------------- 多周目继承数据驱动（tech/02 §2.7 manifest.ngplus；战役书 §11 定稿清单）
+
+## 继承唯一依据 = manifest.ngplus（carries 共通 + per_ending 按结局解锁）；改配置即变，代码零继承硬编码。
+func test_ngplus_inheritance() -> void:
+	print("[ngplus_inheritance]")
+	var pack := _load_campaign01()
+	var conf: Dictionary = (pack["manifest"] as Dictionary).get("ngplus", {})
+	check(not conf.is_empty()
+		and int((conf.get("carries", {}) as Dictionary).get("codex_fragment", 0)) == 1
+		and (conf.get("per_ending", {}) as Dictionary).size() == 4,
+		"manifest.ngplus 块登记：carries 共通清单 + E1~E4 per_ending（tech/02 §2.7；战役书 §11）")
+	var sysw := {"event_id": 0, "node_id": "", "pack_id": "system"}
+	var mk_old := func(ending_flag: String) -> Dictionary: # 旧板：图鉴/权利/外观/强度齐备，刚达成指定结局
+		var s := EventStream.new()
+		var b := Board.new(s)
+		var p := {"event_id": 0, "node_id": "E1", "pack_id": "campaign01"}
+		b.write("campaign01." + ending_flag, true, p)
+		b.unlock_lore("weaver_fragment_01", p)
+		b.give_item("codex_fragment", 4, p)
+		b.give_item("ink_core", 1, p) # 战利品：不应继承
+		b.write("global.entitlement.arena", true, sysw)
+		b.write("global.cosmetic.owned.salvage_copper", true, sysw)
+		Growth.new(b).grant_xp(500, p) # 强度数值：不应继承
+		return {"stream": s, "board": b}
+	var mk_new := func() -> Dictionary:
+		var s := EventStream.new()
+		var b := Board.new(s)
+		return {"stream": s, "board": b, "cos": Cosmetics.new(b, s)}
+	# ---- E1 重墨：缮写圣城传闻旗标 ----
+	var o1: Dictionary = mk_old.call("ending_e1")
+	var n1: Dictionary = mk_new.call()
+	var r1: Dictionary = NgPlus.apply(o1["board"], n1["board"], n1["stream"], n1["cos"], conf, "campaign01")
+	check(str(r1["ending"]) == "E1"
+		and bool((n1["board"] as Board).read("campaign01.unlock_elysium_rumor")),
+		"NG+ E1：传闻旗标 unlock_elysium_rumor 继承（战役书 §11 E1，仅叙事钩子）")
+	check((n1["board"] as Board).item_count("codex_fragment") == 1, "NG+ E1：共通残简 ×1（E1 无追加）")
+	# ---- E2 自由灰：裂页荒原传闻旗标 ----
+	var o2: Dictionary = mk_old.call("ending_e2")
+	var n2: Dictionary = mk_new.call()
+	var r2e: Dictionary = NgPlus.apply(o2["board"], n2["board"], n2["stream"], n2["cos"], conf, "campaign01")
+	check(str(r2e["ending"]) == "E2"
+		and bool((n2["board"] as Board).read("campaign01.unlock_wastes_rumor")),
+		"NG+ E2：传闻旗标 unlock_wastes_rumor 继承（战役书 §11 E2）")
+	# ---- E3 新篇：执笔者之骰皮肤 + 身份旗标；共通保留全核；强度重置 ----
+	var o3: Dictionary = mk_old.call("ending_e3")
+	var n3: Dictionary = mk_new.call()
+	var nb3 := n3["board"] as Board
+	var r3e: Dictionary = NgPlus.apply(o3["board"], nb3, n3["stream"], n3["cos"], conf, "campaign01")
+	check(str(r3e["ending"]) == "E3" and str(r3e["skin"]) == "scribe_dice"
+		and (n3["cos"] as Cosmetics).is_owned("scribe_dice"),
+		"NG+ E3：执笔者之骰皮肤授予（战役书 §11 E3：外观位，纯演出）")
+	check(bool(nb3.read("campaign01.unlock_scribe_identity")),
+		"NG+ E3：执笔者身份旗标继承（开局独白差异驱动源）")
+	var skin_prov := nb3.provenance_of("global.cosmetic.owned.scribe_dice")
+	check(str(skin_prov.get("granted_by", "")) == "ngplus" and str(skin_prov.get("pack_id", "")) == "system",
+		"NG+ 皮肤授予溯源：granted_by=ngplus + system 写权限（06 §7 / 07 §3 v1.2）")
+	check(nb3.has_lore("weaver_fragment_01"), "NG+ 共通：图鉴保留（global.lore）")
+	check(bool(nb3.read("global.entitlement.arena")), "NG+ 共通：权利保留（global.entitlement.*）")
+	check(bool(nb3.read("global.cosmetic.owned.salvage_copper")), "NG+ 共通：外观保留（已获不降级）")
+	check(int(nb3.read("campaign01.ngplus", 0)) == 1, "NG+ 共通：周目数 +1（playthrough 簿记键）")
+	check(Growth.xp(nb3) == 0 and nb3.get_doom_clock() == 0 and nb3.get_alignment() == 50
+		and not nb3.has_item("ink_core"),
+		"NG+ 不继承强度数值：成长/时钟/倾向/战利品重置（战役书 §11 平衡原则）")
+	# ---- E4 褪墨吞港：追忆视角旗标 + 残简再 ×1（共通 1 + 追加 1 = 2）----
+	var o4: Dictionary = mk_old.call("ending_e4")
+	var n4: Dictionary = mk_new.call()
+	var r4e: Dictionary = NgPlus.apply(o4["board"], n4["board"], n4["stream"], n4["cos"], conf, "campaign01")
+	check(str(r4e["ending"]) == "E4"
+		and bool((n4["board"] as Board).read("campaign01.ngplus_memory_view"))
+		and (n4["board"] as Board).item_count("codex_fragment") == 2,
+		"NG+ E4：追忆视角旗标 + 残简再 ×1（战役书 §11 E4：失败结局的补偿是叙事深度）")
+	check(not (n4["cos"] as Cosmetics).is_owned("scribe_dice"), "NG+ E4：执笔者之骰不授予（E3 专属）")
+	# ---- 数据驱动实证：改配置即变（不动代码）----
+	var conf2: Dictionary = conf.duplicate(true)
+	(conf2["carries"] as Dictionary)["codex_fragment"] = 3
+	((conf2["per_ending"] as Dictionary)["E4"] as Dictionary)["codex_fragment"] = 2
+	var o5: Dictionary = mk_old.call("ending_e4")
+	var n5: Dictionary = mk_new.call()
+	NgPlus.apply(o5["board"], n5["board"], n5["stream"], n5["cos"], conf2, "campaign01")
+	check((n5["board"] as Board).item_count("codex_fragment") == 5,
+		"数据驱动：改 manifest 残简配置（3+2）即变，代码零改动")
+	var n6: Dictionary = mk_new.call()
+	NgPlus.apply((mk_old.call("ending_e1") as Dictionary)["board"], n6["board"],
+		n6["stream"], n6["cos"], {}, "campaign01")
+	check((n6["board"] as Board).item_count("codex_fragment") == 0
+		and not bool((n6["board"] as Board).read("campaign01.unlock_elysium_rumor", false)),
+		"ngplus 块缺省 = 不继承（tech/02 §2.7 缺省语义）")
+	# ---- 序章文本变体（tech/02 §3 text_variants：E3 独白 / E4 追忆滤镜，纯呈现）----
+	var prov := {"event_id": 0, "node_id": "", "pack_id": "campaign01"}
+	var sv := EventStream.new()
+	var bv := Board.new(sv)
+	var gv := StoryGraph.new(bv, Rng.new(7), pack)
+	gv.start()
+	check(gv.current_id == "N0-1", "序章入口 N0-1")
+	var base_text := str(StoryVM.build(gv, bv, pack)["text"])
+	check(base_text.contains("怀里没有抄本") and not base_text.contains("执笔者"),
+		"无变体旗标：N0-1 默认文本（summary）")
+	bv.write("campaign01.unlock_scribe_identity", true, prov)
+	check(str(StoryVM.build(gv, bv, pack)["text"]).contains("执笔者"),
+		"E3 执笔者：N0-1 开局独白差异（text_variants，战役书 §11）")
+	var sv2 := EventStream.new()
+	var bv2 := Board.new(sv2)
+	var gv2 := StoryGraph.new(bv2, Rng.new(7), pack)
+	gv2.start()
+	bv2.write("campaign01.ngplus_memory_view", true, prov)
+	check(str(StoryVM.build(gv2, bv2, pack)["text"]).contains("微微发烫"),
+		"E4 追忆：N0-1 褪色滤镜文案（text_variants，战役书 §11）")
+	gv2.take_edge(gv2.available_edges()[0])
+	check(gv2.current_id == "N0-2"
+		and str(StoryVM.build(gv2, bv2, pack)["text"]).contains("多停了一瞬"),
+		"E4 追忆：N0-2 文本变体（序章演出差异第二拍）")
+
 # ---------------------------------------------------------------- 全流程一局：N0-1 → E4 + 快照可续（07 §4；战役书 §9 E4 失败非终局）
 
 ## R3 → E4 图级直走（独狼/无道具线：R4 fallback 右路两场、N4-1 fallback 强攻）；沿途真实战斗胜利。
@@ -3140,7 +3253,7 @@ func test_cosmetics() -> void:
 	var stream := EventStream.new()
 	var board := Board.new(stream)
 	var reg := Cosmetics.load_registry()
-	check(reg.size() == 3, "皮肤注册表数据驱动加载：金墨/褪墨灰/拾遗铜辉（06 §7 运营侧数据文件）")
+	check(reg.size() == 4, "皮肤注册表数据驱动加载：金墨/褪墨灰/拾遗铜辉/执笔者之骰（06 §7 运营侧数据文件；战役书 §11 E3 外观位）")
 	var cos := Cosmetics.new(board, stream, reg)
 	check(cos.default_skin_id() == "gilded_ink", "默认皮肤=金墨（注册表 default 指定，非代码写死）")
 	check(cos.is_owned("gilded_ink") and cos.equipped_id() == "gilded_ink", "起手即有默认皮肤且为当前装备")
@@ -4498,6 +4611,8 @@ func test_main_flow() -> void:
 	check(m.graph.current_id == "E1" and m.graph.is_at_ending(), "抵达结局 E1 重墨（tech/02 §9）")
 	check(bool(m.board.read("campaign01.ending_e1")),
 		"结局写板：ending_e1（ending 节点 on_enter，flags.json 台账 V4 闭环）")
+	check(bool(m.board.read("campaign01.unlock_elysium_rumor")),
+		"结局写板：unlock_elysium_rumor（E1 on_enter，战役书 §11 E1 传闻钩子，V4 闭环）")
 	check(bool(m.board.read("campaign01.campaign01_cleared")),
 		"结局写板：campaign01_cleared（last_page settle 于离开 N4-2，战役书 §6）")
 	# 结局屏：四分型文案 + 多周目钩子（endings.json；壳不再创作）
@@ -4515,7 +4630,7 @@ func test_main_flow() -> void:
 	check(bool(m.board.read("campaign01.cleared"))
 		and bool(m.board.read("global.entitlement.arena")),
 		"通关成就点亮：campaign01.cleared → entitlement.arena（06 §2.1）")
-	# ---- 多周目：开始二周目 → NG+ 继承（战役书 §8 投放第 4 枚 / §9 失败非终局）----
+	# ---- 多周目：开始二周目 → NG+ 继承（战役书 §11 定稿清单；tech/02 §2.7 manifest.ngplus 数据驱动）----
 	var lore_before: int = m.board.get_lore().size()
 	es.ngplus_button.pressed.emit()
 	await process_frame
@@ -4525,6 +4640,13 @@ func test_main_flow() -> void:
 	check(m.board.item_count("codex_fragment") == 1, "NG+：继承织命者残简 ×1（战役书 §8 投放第 4 枚）")
 	check(m.board.get_lore().size() == lore_before, "NG+：图鉴保留（global.lore，战役书 §9）")
 	check(bool(m.board.read("global.entitlement.arena")), "NG+：权利保留（global.entitlement.*，07 §3）")
+	check(bool(m.board.read("campaign01.unlock_elysium_rumor")),
+		"NG+ E1 per_ending：缮写圣城传闻旗标继承（manifest.ngplus 数据驱动，tech/02 §2.7）")
+	check(not bool(m.board.read("campaign01.ngplus_memory_view", false))
+		and not bool(m.board.read("campaign01.unlock_scribe_identity", false)),
+		"NG+ E1：追忆/执笔者旗标不继承（per_ending 以刚达成结局为触发，不累加）")
+	check(str(StoryVM.build(m.graph, m.board, m.pack)["text"]).contains("怀里没有抄本"),
+		"NG+ E1 序章：无变体旗标 → N0-1 默认文本（text_variants 纯呈现）")
 	check(Growth.xp(m.board) == 0 and m.board.get_doom_clock() == 0
 		and m.board.get_alignment() == 50 and not m.board.has_item("ink_core"),
 		"NG+：其余状态重置（成长/时钟/倾向/战利品）")
@@ -5226,7 +5348,7 @@ func test_cosmetics_ui() -> void:
 	await process_frame
 	iv.bind({"heal_potion": 1}, _load_campaign01()["items"], [], _load_campaign01()["lore"])
 	iv.bind_cosmetics(reg, ["gilded_ink"], "gilded_ink")
-	check(iv.cosmetic_entry_count() == 3, "外观页：皮肤列表按注册表入列（06 §6 外观页挂 ⑥ 背包图鉴）")
+	check(iv.cosmetic_entry_count() == 4, "外观页：皮肤列表按注册表入列（06 §6 外观页挂 ⑥ 背包图鉴；含执笔者之骰）")
 	check(iv.cosmetic_button_text("gilded_ink") == TextsZh.COSMETIC_UNEQUIP, "当前装备皮肤 → 卸下按钮")
 	check(iv.cosmetic_button_text("faded_ink_gray") == TextsZh.COSMETIC_NOT_OWNED,
 		"未获得（集齐途径）灰显：呈现获得条件，不出购买入口")

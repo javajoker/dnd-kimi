@@ -21,5 +21,20 @@
   "recommended_level": [1, 4],
   "estimated_hours": "6-9",
   "node_budget": 35,
+  "ngplus": {
+    "carries": {
+      "lore": true,
+      "entitlements": true,
+      "cosmetics": true,
+      "codex_fragment": 1,
+      "playthrough": "campaign01.ngplus"
+    },
+    "per_ending": {
+      "E1": { "flags": ["unlock_elysium_rumor"] },
+      "E2": { "flags": ["unlock_wastes_rumor"] },
+      "E3": { "flags": ["unlock_scribe_identity"], "dice_skin": "scribe_dice" },
+      "E4": { "flags": ["ngplus_memory_view"], "codex_fragment": 1 }
+    }
+  },
   "source_doc": "docs/story/02-战役书-烬港残页.md"
 }

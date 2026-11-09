@@ -238,6 +238,8 @@ static func cosmetic_source_line(def: Dictionary) -> String:
 			return "图鉴「命骰考」集齐奖励"
 		"shop":
 			return "守门人的印龛 · %s" % str((def.get("shop", {}) as Dictionary).get("price_text", ""))
+		"ngplus_ending":
+			return "多周目继承 · 结局 %s 专属" % str(g.get("ending", ""))
 	return ""
 ## 皮肤购买弹层文案（与战役购买同一叙事化手法，06 §3.1；shop_line 是战役句式，皮肤另起一句）。
 static func cosmetic_shop_line(skin_name: String, price_text: String) -> String:
