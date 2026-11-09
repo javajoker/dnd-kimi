@@ -1118,12 +1118,16 @@ func test_portrait_shell() -> void:
 	mb.pressed = true
 	var mb_up := InputEventMouseButton.new()
 	mb_up.pressed = false
+	# 注入假时钟：长按判定与真实帧计时解耦（防抖）；判定参数仍是 12 §1 的 ≥400ms
+	var fake_ms: Array = [1_000_000]
+	portrait.hold_clock = func() -> int: return int(fake_ms[0])
 	portrait._on_key_overlay_input(mb)
 	portrait._on_key_overlay_input(mb_up) # 短按 <400ms 抬手：不跳过（04 §④.7 防误触）
 	await create_timer(0.3).timeout
 	check(portrait.key_overlay.visible, "短按不跳过演出（04 §④.7：跳过统一长按 ≥400ms）")
 	portrait._on_key_overlay_input(mb) # 按住不放
-	await create_timer(0.6).timeout # ≥400ms 触发跳过（12 §1 长按判定参数；自然播完需 ~1.8s，可区分）
+	fake_ms[0] += 500 # 注入时间推进 500ms ≥ 400ms（12 §1）；演出循环下一拍（≤0.09s）轮询即跳
+	await create_timer(0.3).timeout # 只等循环下一拍轮询，不等真实 400ms（自然播完需 ~1.6s，可区分）
 	check(not portrait.key_overlay.visible, "关键演出长按 ≥400ms 跳过（04 §④.7/12 §1）")
 	await process_frame
 	await process_frame
@@ -1261,12 +1265,16 @@ func test_landscape_shell() -> void:
 	mb.pressed = true
 	var mb_up := InputEventMouseButton.new()
 	mb_up.pressed = false
+	# 注入假时钟：长按判定与真实帧计时解耦（防抖）；判定参数仍是 12 §1 的 ≥400ms
+	var fake_ms: Array = [1_000_000]
+	land.hold_clock = func() -> int: return int(fake_ms[0])
 	land._on_key_overlay_input(mb)
 	land._on_key_overlay_input(mb_up) # 短按 <400ms 抬手：不跳过（04 §④.7 防误触）
 	await create_timer(0.3).timeout
 	check(land.key_overlay.visible, "横屏短按不跳过演出（04 §④.7）")
 	land._on_key_overlay_input(mb)
-	await create_timer(0.6).timeout
+	fake_ms[0] += 500 # 注入时间推进 500ms ≥ 400ms（12 §1）；演出循环下一拍（≤0.09s）轮询即跳
+	await create_timer(0.3).timeout # 只等循环下一拍轮询，不等真实 400ms
 	check(not land.key_overlay.visible, "横屏关键演出长按 ≥400ms 跳过（09 §6/04 §④.7）")
 	# 托管节拍下限（09 §9.3）
 	check(land.auto_timer.wait_time == 0.8, "托管 1× 节拍 0.8s")

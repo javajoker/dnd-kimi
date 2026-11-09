@@ -81,7 +81,8 @@ var key_dice_label: Label
 var key_result_label: Label
 var auto_timer: Timer
 var menu_popup: PopupPanel
-var key_hold_timer: Timer       # 长按 ≥400ms 跳过演出（04 §④.7；12 §1 长按判定参数）
+## 长按计时时钟（可注入，测试步进；生产缺省真实时钟）。长按判定不走 Timer，见 _poll_key_hold（12 §1）。
+var hold_clock: Callable = func() -> int: return Time.get_ticks_msec()
 var gestures: GestureLayer      # 手势层（12 §1~§3：透明覆盖，不吞事件）
 var tutorial: TutorialOverlay   # 情境教程层（12 §4 第二层）
 var path_line: Line2D           # 轨迹施法预览（12 §2.1）
@@ -96,6 +97,7 @@ var _log_lines: Array[String] = []
 var _key_queue: Array[Dictionary] = []
 var _key_playing := false
 var _key_skip := false
+var _key_hold_start := -1         # 按住起点（hold_clock 毫秒；-1 = 未按住）
 var _tray_rolling := false
 var _drag_uid := ""               # 拖动中的己方单位（12 §3.1 起点定语义）
 var _drag_action := {}            # 轮盘芯片拖动中的指令集条目（12 §3.6）
@@ -108,11 +110,6 @@ func _ready() -> void:
 	auto_timer.wait_time = AUTO_INTERVAL
 	auto_timer.timeout.connect(_on_auto_timeout)
 	add_child(auto_timer)
-	key_hold_timer = Timer.new()
-	key_hold_timer.wait_time = GestureRecognizer.LONG_PRESS_MS / 1000.0
-	key_hold_timer.one_shot = true
-	key_hold_timer.timeout.connect(func() -> void: _key_skip = true)
-	add_child(key_hold_timer)
 	_setup_gestures()
 
 # ---------------------------------------------------------------- UI 构建（五区，09 §4）
@@ -891,8 +888,10 @@ func _play_key_roll(p: Dictionary) -> void:
 		key_overlay.visible = true
 		key_result_label.text = ""
 		_key_skip = false
+		_key_hold_start = -1 # 每场演出从"未按住"开始，防上一场的按住状态串场
 		var visual := Rng.new(int(q.get("event_id", 1)) * 131 + 7)
 		for i: int in 10:
+			_poll_key_hold()
 			if _key_skip:
 				break
 			key_dice_label.text = str(visual.d20())
@@ -907,22 +906,33 @@ func _play_key_roll(p: Dictionary) -> void:
 		if str(q.get("kind", "")) == "death_save":
 			key_result_label.text += "\n死亡豁免 %d 胜 %d 负" % [int(q.get("s", 0)), int(q.get("f", 0))]
 		if not _key_skip:
+			_poll_key_hold() # 落定后也尊重长按（滚动已播完但按住仍生效）
+		if not _key_skip:
 			await get_tree().create_timer(0.7).timeout
 		key_overlay.visible = false
 	_key_playing = false
 
-## 长按 ≥400ms 跳过（04 §④.7：一切演出可跳过（长按），防误触；12 §1 长按判定参数）。
+## 长按 ≥400ms 跳过（04 §④.7：一切演出可跳过（长按），防误触；12 §1 长按判定参数）：
+## 按下记录起点，演出循环每拍轮询 hold_clock；未到时抬手 = 不跳过。
+## 判定与真实时钟解耦：hold_clock 可注入，测试注入假时钟步进（与 GestureRecognizer 同一注入式时间风格）。
 func _on_key_overlay_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if (event as InputEventMouseButton).pressed:
-			key_hold_timer.start()
-		elif not key_hold_timer.is_stopped():
-			key_hold_timer.stop()
+			_key_hold_start = int(hold_clock.call())
+		else:
+			_key_hold_start = -1
 	elif event is InputEventScreenTouch:
 		if (event as InputEventScreenTouch).pressed:
-			key_hold_timer.start()
-		elif not key_hold_timer.is_stopped():
-			key_hold_timer.stop()
+			_key_hold_start = int(hold_clock.call())
+		else:
+			_key_hold_start = -1
+
+## 长按进度轮询：按住 ≥400ms（12 §1）即置跳过；判定只读 hold_clock，与帧计时无关。
+func _poll_key_hold() -> void:
+	if _key_hold_start >= 0 \
+			and int(hold_clock.call()) - _key_hold_start >= GestureRecognizer.LONG_PRESS_MS:
+		_key_hold_start = -1
+		_key_skip = true
 
 # ---------------------------------------------------------------- 日志带（下缘 5%，点击展开半屏）
 
