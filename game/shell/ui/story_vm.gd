@@ -13,9 +13,9 @@ static func build(graph: StoryGraph, board: Board, pack: Dictionary) -> Dictiona
 		"id": nid,
 		"type": str(node.get("type", "")),
 		"title": str(node.get("title", nid)),
-		# tech/02 §3：title/summary 为节点显示文本（无段落字段，见交付留白）；
+		# tech/02 §3 + §1.1：节点呈现文本 = text_variants → text_ref 外置全文 → summary 兜底；
 		# text_variants 旗标变体优先（战役书 §11 多周目开局独白/追忆滤镜，纯呈现差异）
-		"text": node_text(node, board, str(pack.get("pack_id", ""))),
+		"text": node_text(node, board, str(pack.get("pack_id", "")), pack.get("texts", {})),
 		"clock": board.get_doom_clock(),
 		"forecast": graph.next_clock_trigger(),   # 最近逼近项（状态栏带角标）
 		"forecasts": graph.clock_forecasts(),      # 全部逼近项（时间钟弹层，04 §3.1）
@@ -46,10 +46,20 @@ static func build(graph: StoryGraph, board: Board, pack: Dictionary) -> Dictiona
 	vm["room_titles"] = titles
 	return vm
 
-## 节点呈现文本：text_variants（tech/02 §3）按声明序取首个成立旗标的 text 替换 summary；
-## flag 省略前缀解析为本包命名空间（与 §4.6 条件同一口径）；纯呈现差异，不进图遍历与事件流判定。
-static func node_text(node: Dictionary, board: Board, ns: String) -> String:
-	var text := str(node.get("summary", ""))
+## 长文本解析（tech/02 §1.1 text_ref 机制）：ref = "texts/<locale>.json#<键>"；
+## 命中 texts 表取全文；未声明 / 键缺失一律静默回退 fallback（不报错——断链由测试层抽取完整性断言兜底）。
+static func resolve_text(texts: Dictionary, ref: String, fallback: String) -> String:
+	if ref.is_empty() or not "#" in ref:
+		return fallback
+	var file := ref.get_slice("#", 0)
+	var key := ref.get_slice("#", 1)
+	var table: Dictionary = texts.get(file, {})
+	return str(table.get(key, fallback))
+
+## 节点呈现文本（tech/02 §3/§1.1 解析顺序）：text_variants 旗标变体（纯呈现替换，优先）
+## → text_ref 外置全文 → summary 兜底；flag 省略前缀解析为本包命名空间（与 §4.6 条件同一口径）。
+static func node_text(node: Dictionary, board: Board, ns: String, texts: Dictionary = {}) -> String:
+	var text := resolve_text(texts, str(node.get("text_ref", "")), str(node.get("summary", "")))
 	for v: Variant in node.get("text_variants", []):
 		var fid := str((v as Dictionary).get("flag", ""))
 		if fid.is_empty():
@@ -58,6 +68,14 @@ static func node_text(node: Dictionary, board: Board, ns: String) -> String:
 		if board != null and bool(board.read(key, false)):
 			return str((v as Dictionary).get("text", text))
 	return text
+
+## 结局演出文案（tech/02 §9 v0.7）：text_ref 外置全文 → content 一行摘要兜底（结局屏呈现，壳不创作）。
+static func ending_text(texts: Dictionary, edef: Dictionary) -> String:
+	return resolve_text(texts, str(edef.get("text_ref", "")), str(edef.get("content", "")))
+
+## 图鉴条目正文（tech/02 §10 v0.7）：text_ref 外置；无内嵌正文字段，键缺失即空串（界面只显标题/来源）。
+static func lore_text(texts: Dictionary, ldef: Dictionary) -> String:
+	return resolve_text(texts, str(ldef.get("text_ref", "")), "")
 
 ## 选项/检定按钮文案：检定带技能·难度·DC·修正（04 §④.3 检定房一键快掷）；
 ## 触及声望的选项带 faction 角标（任务书：对话选项带声望角标；数据来源 = 边效果 ∪ 目标节点 on_enter ∪ requires）。

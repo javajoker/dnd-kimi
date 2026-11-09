@@ -26,6 +26,7 @@ var _inv: Dictionary = {}
 var _items: Dictionary = {}
 var _lore_ids: Array = []
 var _lore_defs: Array = []
+var _texts: Dictionary = {} # pack.texts（tech/02 §1.1：图鉴正文 text_ref 外置解析）
 var _filter := "" # "" = 全部
 var _skins: Array = []        # 注册表皮肤定义（数据驱动，06 §7）
 var _skins_owned: Array = []  # 已持有 skin_id
@@ -103,12 +104,14 @@ func _add_filter(label: String, role: String) -> void:
 	filter_row.add_child(b)
 
 ## 绑定只读数据：inv = Board.get_inv()；items_table = pack.items；lore_ids = Board.get_lore()；
-## lore_defs = pack.lore（lore.json：系列归属声明，10 §3）。
-func bind(inv: Dictionary, items_table: Dictionary, lore_ids: Array, lore_defs: Array = []) -> void:
+## lore_defs = pack.lore（lore.json：系列归属声明，10 §3）；texts = pack.texts（tech/02 §1.1 图鉴正文）。
+func bind(inv: Dictionary, items_table: Dictionary, lore_ids: Array, lore_defs: Array = [],
+		texts: Dictionary = {}) -> void:
 	_inv = inv
 	_items = items_table
 	_lore_ids = lore_ids
 	_lore_defs = lore_defs
+	_texts = texts
 	_render_bag()
 	_render_codex()
 
@@ -180,14 +183,32 @@ func _render_codex() -> void:
 	for e: Variant in _lore_defs:
 		var d: Dictionary = e
 		var lid := str(d.get("id", ""))
-		var l2 := Label.new()
-		l2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		if _lore_ids.has(lid):
-			l2.text = "📜 %s（%s）" % [str(d.get("title", lid)), str(d.get("source", ""))]
+			# 已解锁条目 = 按钮等价路径（12 §1），点按弹正文（tech/02 §10 text_ref 外置，§1.1 解析）
+			var b := Button.new()
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.text = "📜 %s（%s）" % [str(d.get("title", lid)), str(d.get("source", ""))]
+			b.pressed.connect(func() -> void: show_lore_detail(lid))
+			codex_box.add_child(b)
 		else:
+			var l2 := Label.new()
+			l2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			l2.text = "📜 %s" % TextsZh.CODEX_LOCKED_TITLE
 			l2.modulate = Color(0.5, 0.5, 0.55)
-		codex_box.add_child(l2)
+			codex_box.add_child(l2)
+
+## 图鉴条目详情：标题 + 来源 + text_ref 正文（tech/02 §1.1：键缺失即空串，仅显标题/来源）。
+func show_lore_detail(lore_id: String) -> void:
+	for e: Variant in _lore_defs:
+		var d: Dictionary = e
+		if str(d.get("id", "")) != lore_id:
+			continue
+		var lines: Array = ["来源：%s" % str(d.get("source", ""))]
+		var body := StoryVM.lore_text(_texts, d)
+		if body != "":
+			lines.append(body)
+		info_popup.show_info(str(d.get("title", lore_id)), lines)
+		return
 
 ## 测试探针：当前筛选与背包条目数。
 func filter_state() -> String:

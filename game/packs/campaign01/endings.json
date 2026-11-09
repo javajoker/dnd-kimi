@@ -4,6 +4,7 @@
     "hidden": false, "default": false,
     "conditions": { "alignment": { "ink_gt": 50 } },
     "content": "港城被重新书写，但献身者永为空白。",
+    "text_ref": "texts/zh-CN.json#ending.E1.text",
     "ngplus_hook": "解锁缮写圣城传闻"
   },
   {
@@ -11,6 +12,7 @@
     "hidden": false, "default": false,
     "conditions": { "alignment": { "blank_gt": 50 } },
     "content": "烬港脱离织卷，自由而缓慢崩解。",
+    "text_ref": "texts/zh-CN.json#ending.E2.text",
     "ngplus_hook": "解锁裂页荒原传闻"
   },
   {
@@ -21,6 +23,7 @@
       { "bond_max": { ">=": 60 } }
     ] },
     "content": "白页者成为新执笔者。",
+    "text_ref": "texts/zh-CN.json#ending.E3.text",
     "ngplus_hook": "解锁「执笔者」开局身份"
   },
   {
@@ -28,6 +31,7 @@
     "hidden": false, "default": true,
     "conditions": {},
     "content": "港城被撤销，你带着抄本残页离开。失败非终局：全部收集与图鉴进度保留。",
+    "text_ref": "texts/zh-CN.json#ending.E4.text",
     "ngplus_hook": "继承残页，二周目自带「追忆」视角"
   }
 ]

@@ -43,6 +43,7 @@ func _init() -> void:
 	test_full_run_e4()
 	test_story_runtime()
 	test_story_vm()
+	test_text_ref()
 	test_subgame_arena()
 	test_arc_tide()
 	test_riddle_maze()
@@ -2775,6 +2776,96 @@ func test_story_vm() -> void:
 		and StoryVM.toast_text({"type": EventTypes.LOG, "payload": {"msg": "x"}}) == "",
 		"toast：仅显式标记的日志上浮")
 
+# ---------------------------------------------------------------- text_ref 长文本外置（tech/02 §1.1 v0.7）
+
+func test_text_ref() -> void:
+	print("[text_ref]")
+	var pack := _load_campaign01()
+	var texts: Dictionary = pack.get("texts", {})
+	var zh: Dictionary = texts.get("texts/zh-CN.json", {})
+	check(texts.size() >= 1 and not zh.is_empty(), "texts/zh-CN.json 加载为键值表（tech/02 §1.1）")
+	# ---- 命中外置文本：N0-1 呈现 = texts 全文（非 summary）----
+	var n01: Dictionary = (pack["nodes"] as Dictionary)["N0-1"]
+	var t01 := StoryVM.node_text(n01, null, "campaign01", texts)
+	check(t01 == str(zh.get("node.N0-1.text", "")) and t01 != str(n01.get("summary", ""))
+		and t01.contains("潮声"), "text_ref 命中：N0-1 呈现外置全文（非 summary 兜底）")
+	check(t01.length() > str(n01.get("summary", "")).length(), "外置全文长于 summary（摘要保留为列表/回顾用）")
+	# ---- text_variants 优先级（tech/02 §3/§1.1：旗标变体 = 纯呈现替换，覆盖外置全文）----
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	board.write("campaign01.unlock_scribe_identity", true,
+		{"event_id": 1, "node_id": "", "pack_id": "campaign01"})
+	check(StoryVM.node_text(n01, board, "campaign01", texts).contains("执笔者"),
+		"text_variants 优先于 text_ref（多周目执笔者开局独白，纯呈现差异）")
+	# ---- 缺失键兜底 summary（§1.1：静默回退不报错）----
+	var fake := {"summary": "兜摘要", "text_ref": "texts/zh-CN.json#node.NOPE.text"}
+	check(StoryVM.node_text(fake, null, "campaign01", texts) == "兜摘要", "断链静默兜底 summary（不拒绝加载）")
+	var fake2 := {"summary": "兜摘要2", "text_ref": "texts/en.json#node.N0-1.text"}
+	check(StoryVM.node_text(fake2, null, "campaign01", texts) == "兜摘要2", "缺失 locale 文件同样兜底")
+	check(StoryVM.node_text({"summary": "纯摘要"}, null, "campaign01", texts) == "纯摘要",
+		"无 text_ref 节点维持 summary（可选字段，§11 新增字段一律可选）")
+	# ---- 双壳同源：同一 StoryVM.build 是双壳 show_story 唯一输入（godot-dev §7；壳不各自解析）----
+	var graph := StoryGraph.new(board, Rng.new(20260009), pack)
+	graph.start()
+	var vm := StoryVM.build(graph, board, pack)
+	check(str(vm["text"]) == StoryVM.node_text(graph.current(), board, "campaign01", texts)
+		and str(vm["text"]).length() > 40, "vm.text = 外置全文（双壳同源唯一内容源）")
+	# ---- 结局演出文案：text_ref 全文 → content 摘要兜底（tech/02 §9 v0.7）----
+	var edefs := {}
+	for e: Variant in pack.get("endings", []):
+		edefs[str((e as Dictionary).get("id", ""))] = e
+	for eid: String in ["E1", "E2", "E3", "E4"]:
+		var full := StoryVM.ending_text(texts, edefs[eid])
+		check(full == str(zh.get("ending.%s.text" % eid, "")) and full.contains("\n")
+			and full.length() > str((edefs[eid] as Dictionary).get("content", "")).length(),
+			"结局 %s 演出全文 = text_ref 外置（3~5 句，content 摘要兜底不外显）" % eid)
+	var bare := {"content": "单行摘要"}
+	check(StoryVM.ending_text(texts, bare) == "单行摘要", "结局无 text_ref 兜底 content（向后兼容）")
+	# ---- 图鉴正文：text_ref → 无内嵌字段，键缺失即空串（tech/02 §10 v0.7）----
+	var l01 := {}
+	for l: Variant in pack.get("lore", []):
+		if str((l as Dictionary).get("id", "")) == "weaver_fragment_01":
+			l01 = l
+	check(StoryVM.lore_text(texts, l01) == str(zh.get("lore.weaver_fragment_01", ""))
+		and StoryVM.lore_text(texts, l01).contains("金墨"), "图鉴正文 = text_ref 外置（残简·其一）")
+	check(StoryVM.lore_text(texts, {"id": "x"}) == "", "图鉴无 text_ref = 空串（界面仅显标题/来源）")
+	# ---- 抽取完整性防断链：全部 text_ref 键在 texts 表存在（§1.1 数据缺陷断言）----
+	var broken: Array[String] = []
+	for nid: String in (pack["nodes"] as Dictionary).keys():
+		var ref := str(((pack["nodes"] as Dictionary)[nid] as Dictionary).get("text_ref", ""))
+		if ref != "" and not zh.has(ref.get_slice("#", 1)):
+			broken.append(nid)
+	for e: Variant in pack.get("endings", []):
+		var ref2 := str((e as Dictionary).get("text_ref", ""))
+		if ref2 != "" and not zh.has(ref2.get_slice("#", 1)):
+			broken.append("ending:" + str((e as Dictionary).get("id", "")))
+	for l: Variant in pack.get("lore", []):
+		var ref3 := str((l as Dictionary).get("text_ref", ""))
+		if ref3 != "" and not zh.has(ref3.get_slice("#", 1)):
+			broken.append("lore:" + str((l as Dictionary).get("id", "")))
+	check(broken.is_empty(), "抽取完整性：全部 text_ref 键在 texts 表存在（断链：%s）" % str(broken))
+	# ---- 写作规模与纪律（§1.1：全文不引入未声明旗标）----
+	var node_keys := 0
+	for k: String in zh.keys():
+		if str(k).begins_with("node."):
+			node_keys += 1
+	check(node_keys == 41 and zh.size() == 52,
+		"texts 键数：节点 41（除 E1~E4 结局节点）+ 结局 4 + 图鉴 7 = 52")
+	var declared := {}
+	for f: Variant in pack.get("flags", []):
+		declared[str((f as Dictionary).get("id", ""))] = true
+	for known: String in ["ending_e1", "ending_e2", "ending_e3", "ending_e4",
+			"unlock_scribe_identity", "ngplus_memory_view"]:
+		declared[known] = true
+	var leak := ""
+	var flag_pat := RegEx.new()
+	flag_pat.compile("flag\\.([a-z0-9_]+)")
+	for k: String in zh.keys():
+		for r: RegExMatch in flag_pat.search_all(str(zh[k])):
+			if not declared.has(r.get_string(1)):
+				leak = "%s->%s" % [k, r.get_string(1)]
+	check(leak == "", "全文不引入未声明旗标（%s）" % leak)
+
 # ---------------------------------------------------------------- 子游戏「竞技场连战」（M3：白皮书 §10.2 扩展承诺验证）
 # 关键验证点：core 零改动——子游戏 = 内容包（packs/arena）+ 引导层流程（SubgameRunner/main.gd），
 # 复用 PackLoader/StoryGraph/EncounterSM/BattleDef/Board 全部现有 core 能力。
@@ -4618,8 +4709,9 @@ func test_main_flow() -> void:
 	# 结局屏：四分型文案 + 多周目钩子（endings.json；壳不再创作）
 	var es := m.current_screen as ScreenEnding
 	check(es != null, "结局屏呈现（战役书 §9：结局演出 + 尾声结算合并于 ending 节点）")
-	check(es.title_label.text.contains("重墨") and es.content_text.text.contains("港城被重新书写"),
-		"结局屏文案 = endings.json content 字段（E1 重墨）")
+	check(es.title_label.text.contains("重墨") and es.content_text.text.contains("金墨")
+		and es.content_text.text.contains("\n"),
+		"结局屏文案 = text_ref 外置演出全文（E1 重墨，tech/02 §9/§1.1；content 摘要兜底不外显）")
 	check(es.hook_label.text.contains("缮写圣城"), "结局屏多周目钩子 = ngplus_hook 字段")
 	check(m.stream.query_by_type(EventTypes.STORY_ENDING).size() == 1,
 		"story.ending 事件进事件流（tech/02 §9）")
@@ -5120,7 +5212,8 @@ func test_gap_features() -> void:
 	root.add_child(iv)
 	await process_frame
 	var inv := {"heal_potion": 2, "codex_fragment": 1}
-	iv.bind(inv, _load_campaign01()["items"], ["weaver_fragment_01"], _load_campaign01()["lore"])
+	iv.bind(inv, _load_campaign01()["items"], ["weaver_fragment_01"], _load_campaign01()["lore"],
+		_load_campaign01()["texts"]) # tech/02 §1.1：图鉴正文 text_ref 数据源
 	var n_all := iv.bag_entry_count()
 	check(n_all == 2, "背包：全部身份条目入列（04 §⑥）")
 	# 四重身份筛选：codex 只剩信物
@@ -5141,6 +5234,8 @@ func test_gap_features() -> void:
 	for child: Node in iv.codex_box.get_children():
 		if child is Label:
 			codex_text += (child as Label).text + "\n"
+		elif child is Button:
+			codex_text += (child as Button).text + "\n" # 已解锁条目 = 按钮等价路径（12 §1）
 	check(codex_text.contains("织命者残简：1/4") and codex_text.contains("被撤销者名录：0/2")
 		and codex_text.contains("烬港风物志：0/1") and codex_text.contains("命骰考：0/0"),
 		"图鉴：四系列进度（lore.json × global.lore，10 §3）")
@@ -5148,6 +5243,11 @@ func test_gap_features() -> void:
 		"图鉴：集齐奖励预告（10 §4 白名单，永不卖数值）")
 	check(codex_text.contains("残简·其一") and codex_text.contains(TextsZh.CODEX_LOCKED_TITLE),
 		"图鉴：已解锁 Lore 条目呈题，未解锁占位（04 §⑥）")
+	# 已解锁条目点按 = 正文弹层（tech/02 §10/§1.1：text_ref 外置正文）
+	iv.show_lore_detail("weaver_fragment_01")
+	check(iv.info_popup.visible and iv.info_popup.body_label.text.contains("金墨"),
+		"图鉴正文 = text_ref 外置全文（残简·其一，tech/02 §1.1）")
+	iv.info_popup.hide()
 	iv.queue_free()
 	await process_frame
 

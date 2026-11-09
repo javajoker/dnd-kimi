@@ -36,7 +36,8 @@ const REQUIRED_FIELDS := {
 
 ## 加载一个包目录。返回 { ok, errors[], warnings[], pack }；
 ## pack = { pack_id, manifest, acts, nodes{id:node}, node_order[], events[], encounters{id}, items{id},
-## flags[], endings[], lore[], characters{id}, skills{id}, effects{id}, enemies{id} }（tech/04 §1）。
+## flags[], endings[], lore[], characters{id}, skills{id}, effects{id}, enemies{id},
+## texts{"texts/<locale>.json": {键:全文}} }（tech/04 §1；tech/02 §1.1 长文本外置）。
 static func load_pack(dir_path: String) -> Dictionary:
 	var errors: Array[String] = []
 	var warnings: Array[String] = []
@@ -143,6 +144,21 @@ static func load_pack(dir_path: String) -> Dictionary:
 	pack["endings"] = tables.get("endings.json", [])
 	pack["lore"] = tables.get("lore.json", [])
 
+	# texts/ 长文本外置（§1.1：texts/<locale>.json = 扁平键值表；可缺省；解析失败即加载错误）
+	var texts := {}
+	var tdir := DirAccess.open(dir_path.path_join("texts"))
+	if tdir != null:
+		for tf: String in tdir.get_files():
+			if not tf.ends_with(".json"):
+				continue
+			var traw: Variant = JSON.parse_string(
+				FileAccess.get_file_as_string(dir_path.path_join("texts").path_join(tf)))
+			if not (traw is Dictionary):
+				errors.append("texts/%s 解析失败或不是扁平键值表（tech/02 §1.1）" % tf)
+				continue
+			texts["texts/" + tf] = traw
+	pack["texts"] = texts
+
 	# 资源四表（tech/04 §1~§5：id 索引 + 必填字段结构校验）
 	for fname: String in REQUIRED_FIELDS.keys():
 		var table := {}
@@ -234,6 +250,19 @@ static func merge_graft(host_pack: Dictionary, arc_pack: Dictionary) -> Dictiona
 		(view["flags"] as Array).append(f)
 	for l: Variant in arc_pack.get("lore", []):
 		(view["lore"] as Array).append(l)
+	# texts/ 并入合并视图（tech/02 §1.1：同文件合并键，同键不同文 = 命名空间不独立，挂接错误）
+	var view_texts: Dictionary = view.get("texts", {})
+	for tfile: String in (arc_pack.get("texts", {}) as Dictionary).keys():
+		var arc_table: Dictionary = (arc_pack["texts"] as Dictionary)[tfile]
+		var vtable: Dictionary = (view_texts.get(tfile, {}) as Dictionary).duplicate()
+		for k: String in arc_table.keys():
+			if vtable.has(k) and str(vtable[k]) != str(arc_table[k]):
+				errors.append("graft：texts 键 '%s#%s' 与宿主/已注入包冲突（tech/02 §1.1 命名空间独立）"
+					% [tfile, k])
+				continue
+			vtable[k] = arc_table[k]
+		view_texts[tfile] = vtable
+	view["texts"] = view_texts
 	# 注入边追加到宿主目标节点出边表（_ns/_graft 标记来源；卸载即随视图重建消失）
 	var edge: Dictionary = gedge.duplicate(true)
 	edge["_ns"] = arc_id

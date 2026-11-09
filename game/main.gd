@@ -13,7 +13,8 @@
 # 战斗数值由 packs 资源表驱动（tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast。
 # 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --m3-shots` 子游戏截图；
 # `-- --m4-shots` 锁定态/购买弹层截图；`-- --skin-shots` 外观页/换肤骰子截图（06 §7）；
-# `-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图。
+# `-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图；
+# `-- --text-shots` 长文本外置呈现截图 /tmp/text_*.png（tech/02 §1.1，不提交）。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -136,6 +137,8 @@ func _ready() -> void:
 		_run_shots_mode()
 	if args.has("--ls-shots"):
 		_run_shots_ls()
+	if args.has("--text-shots"):
+		_run_shots_text()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -519,7 +522,9 @@ func _present_ending() -> void:
 	var screen: ScreenEnding = (load(SCREEN_SCENES[&"ending"]) as PackedScene).instantiate()
 	_swap(screen)
 	screen.bind({"ending_id": eid, "title": str(edef.get("title", eid)),
-		"content": str(edef.get("content", "")), "hook": str(edef.get("ngplus_hook", "")),
+		# 结局演出全文 = text_ref 外置 → content 摘要兜底（tech/02 §9/§1.1；壳不创作）
+		"content": StoryVM.ending_text(pack.get("texts", {}), edef),
+		"hook": str(edef.get("ngplus_hook", "")),
 		"playthrough": int(board.read("campaign01.ngplus", 0)) + 1, "saved": true})
 	screen.ngplus_requested.connect(_on_ngplus_start)
 	screen.go_home.connect(_show_home)
@@ -905,7 +910,8 @@ func _show_inventory() -> void:
 	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var screen: ScreenInventory = (load(SCREEN_SCENES[&"inventory"]) as PackedScene).instantiate()
 	_swap(screen)
-	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), _all_lore_defs())
+	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), _all_lore_defs(),
+		pack.get("texts", {})) # tech/02 §1.1：图鉴正文 text_ref 解析数据源
 	_bind_cosmetics(screen)
 	screen.back_requested.connect(_show_home)
 
@@ -1392,6 +1398,33 @@ func _shot(path: String) -> void:
 	await RenderingServer.frame_post_draw
 	var err := get_viewport().get_texture().get_image().save_png(path)
 	print("[shots] ", path, " err=", err)
+
+# ---------------------------------------------------------------- 长文本截图（tech/02 §1.1 text_ref 外置全文呈现证据 /tmp，不提交）
+
+## 竖屏故事态节点全文（N0-1，text_ref → texts/zh-CN.json）+ 结局屏 E1 演出全文：`-- --text-shots`。
+func _run_shots_text() -> void:
+	await get_tree().create_timer(0.8).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	await _shot("/tmp/text_story.png") # 故事态：节点呈现文本 = text_ref 外置全文（§3 解析顺序）
+	# 结局屏：真实 ScreenEnding + 真实 text_ref 解析链（§9/§1.1；夹具直绑，不走通关路径）
+	var edef := {}
+	for e: Variant in pack.get("endings", []):
+		if str((e as Dictionary).get("id", "")) == "E1":
+			edef = e
+	var screen: ScreenEnding = (load(SCREEN_SCENES[&"ending"]) as PackedScene).instantiate()
+	_swap(screen)
+	screen.bind({"ending_id": "E1", "title": str(edef.get("title", "E1")),
+		"content": StoryVM.ending_text(pack.get("texts", {}), edef),
+		"hook": str(edef.get("ngplus_hook", "")), "playthrough": 1, "saved": true})
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/text_ending.png") # 结局屏：E1 演出全文 3~5 句（content 摘要兜底不外显）
+	print("[shots] 长文本两屏完成：/tmp/text_story.png /tmp/text_ending.png")
+	get_tree().quit()
 
 # ---------------------------------------------------------------- 成长截图（角色界面⑦成长区证据 /tmp，不提交）
 
