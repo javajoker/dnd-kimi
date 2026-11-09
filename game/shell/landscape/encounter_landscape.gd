@@ -78,6 +78,7 @@ var log_toggle: Button
 var log_full: RichTextLabel
 var key_overlay: ColorRect
 var key_dice_label: Label
+var dice3d: Dice3D                   # 关键判定 3D 物理演出层（14 清单 #2，与竖屏同一事件源）
 var key_result_label: Label
 var auto_timer: Timer
 var menu_popup: PopupPanel
@@ -252,6 +253,9 @@ func _build_ui() -> void:
 	key_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	key_overlay.gui_input.connect(_on_key_overlay_input)
 	add_child(key_overlay)
+	# 3D D20 物理演出层（14 清单 #2，与竖屏同一事件源）：垫在结果文案之下
+	dice3d = (load("res://shell/ui/dice_3d.tscn") as PackedScene).instantiate() as Dice3D
+	key_overlay.add_child(dice3d)
 	var key_v := VBoxContainer.new()
 	key_v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	key_v.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -890,13 +894,19 @@ func _tray_roll(p: Dictionary) -> void:
 		dice_label.text = str(visual.d20())
 		await get_tree().create_timer(0.07).timeout # 5×0.07=0.35s ≤0.5s
 	dice_label.text = keep
+	# 托盘动效轻量升级（14 #2：落定缩放回弹一拍，仍 ≤0.5s 总量；与竖屏同一手法）
+	dice_label.pivot_offset = dice_label.size * 0.5
+	var pop := create_tween()
+	pop.tween_property(dice_label, "scale", Vector2(1.35, 1.35), 0.08)
+	pop.tween_property(dice_label, "scale", Vector2.ONE, 0.14)
 	var rolls: Array = p.get("rolls", [])
 	dice_detail.text = "骰 %s 修正 %+d 合计 %d（%s）" % [str(rolls), int(p.get("mod", p.get("atk_mod", 0))),
 		int(p.get("total", p.get("keep", 0))),
 		TextsZh.RESULT_SUCCESS if bool(p.get("success", p.get("hit", false))) else TextsZh.RESULT_FAIL]
 	_tray_rolling = false
 
-## 关键：全屏覆盖层演出（可点击跳过；死亡豁免恒定关键，11 §7）。
+## 关键：全屏 3D 物理演出（14 清单 #2 / 09 §6，与竖屏同一事件源；长按 ≥400ms 跳过）。
+## 结果取事件流 keep 值，物理只是表演——落定顶面必为给定结果（骰子公正性，06 §4 同源）。
 func _play_key_roll(p: Dictionary) -> void:
 	_key_queue.append(p)
 	if _key_playing:
@@ -907,15 +917,16 @@ func _play_key_roll(p: Dictionary) -> void:
 		_apply_dice_skin() # 关键演出同皮肤（与竖屏同一调色板口，09 §6 同一事件源）
 		key_overlay.visible = true
 		key_result_label.text = ""
+		key_dice_label.visible = false # 2D 翻滚数字退役为托盘专属（14 #2）
 		_key_skip = false
 		_key_hold_start = -1 # 每场演出从"未按住"开始，防上一场的按住状态串场
-		var visual := Rng.new(int(q.get("event_id", 1)) * 131 + 7)
-		for i: int in 10:
+		dice3d.play(int(q.get("keep", 1)), int(q.get("event_id", 1)) * 131 + 7, _dice_palette())
+		while dice3d.is_playing():
 			_poll_key_hold()
 			if _key_skip:
-				break
-			key_dice_label.text = str(visual.d20())
-			await get_tree().create_timer(0.09).timeout
+				dice3d.request_skip()
+			await get_tree().create_timer(0.05).timeout
+		key_dice_label.visible = true
 		key_dice_label.text = str(q.get("keep", "?"))
 		var ok := bool(q.get("success", false))
 		var extreme := bool(q.get("extreme", false))

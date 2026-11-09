@@ -57,6 +57,7 @@ func _init() -> void:
 func _async_shell_tests() -> void:
 	await test_portrait_shell()
 	await test_landscape_shell()
+	await test_dice_3d()
 	await test_landscape_story()
 	await test_shell_diff()
 	await test_cosmetic_neutral()
@@ -1290,6 +1291,96 @@ func test_landscape_shell() -> void:
 	check(absf(land.auto_timer.wait_time - 0.4) < 0.001, "托管 2× 节拍 0.4s")
 	land.queue_free()
 	await process_frame
+
+# ---------------------------------------------------------------- 3D D20 物理演出（14 清单 #2；09 §6 全屏物理演出；04 §④.7 长按跳过）
+# 骰子公正性：结果由逻辑层给定（事件流 keep），物理只是表演——落定顶面必为给定值（断言，非随机）。
+
+func _wait_dice(d: Dice3D, timeout: float) -> bool:
+	var t := 0.0
+	while d.is_playing() and t < timeout:
+		await create_timer(0.05).timeout
+		t += 0.05
+	return not d.is_playing()
+
+func test_dice_3d() -> void:
+	print("[dice_3d]")
+	var scene: PackedScene = load("res://shell/ui/dice_3d.tscn")
+	check(scene != null, "dice_3d.tscn 可加载实例化")
+	var d: Dice3D = scene.instantiate() as Dice3D
+	root.add_child(d)
+	await process_frame
+	await process_frame
+	check(d.face_count() == 20, "程序化二十面体：20 面（无外部模型资源）")
+	check(d.face_values_valid(), "D20 标准编号：1~20 齐备且对面和为 21")
+	# 落定顶面 = 逻辑层给定结果（断言，非随机；物理零参与结果）
+	d.speed = 10.0 # 测试压缩等待；物理弹道与收束管线不变
+	for target: int in [1, 7, 13, 20]:
+		d.play(target, 20261109 + target)
+		check(await _wait_dice(d, 8.0), "演出完成（target=%d）" % target)
+		check(d.top_face() == target, "落定顶面=给定结果 %d（物理只是表演）" % target)
+		check(absf(Engine.time_scale - 1.0) < 0.001, "演出结束 time_scale 恢复 1.0（慢镜头归位）")
+	# 跳过路径（04 §④.7 壳层仲裁 → request_skip）：立即定格，结果不变，时间恢复
+	d.play(5, 777)
+	await create_timer(0.15).timeout
+	check(d.is_playing(), "弹跳段演出进行中")
+	d.request_skip()
+	check(await _wait_dice(d, 2.0), "跳过路径立即收束")
+	check(d.top_face() == 5, "跳过后顶面仍=给定结果 5")
+	check(absf(Engine.time_scale - 1.0) < 0.001, "跳过后 time_scale 恢复 1.0")
+	d.queue_free()
+	await process_frame
+	# 事件流不变（14 #2 验收口径）：同种子同指令两局，B 局额外套 3D 演出消费关键事件
+	#（纯呈现订阅，与壳内接线同源）——事件流 JSON 逐字节一致（tech/01 §10 TP3 同一比对法）
+	var json_a: String = await _run_battle_with_dice3d(false)
+	var json_b: String = await _run_battle_with_dice3d(true)
+	check(json_a == json_b, "3D 演出前后同种子同结果：事件流逐字节一致")
+	check(absf(Engine.time_scale - 1.0) < 0.001, "整局结束 time_scale=1.0（析构兜底恢复）")
+
+## 无壳脚本化遭遇（与 shell_diff.run_battle 同种子/同指令序列风格，指令直发 sm）；
+## with_3d=true 时挂独立 Dice3D 订阅关键检定事件——纯呈现消费，不触碰 core。
+func _run_battle_with_dice3d(with_3d: bool) -> String:
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(20261109), "campaign01")
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true,
+		{"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var d: Dice3D = null
+	if with_3d:
+		d = (load("res://shell/ui/dice_3d.tscn") as PackedScene).instantiate() as Dice3D
+		d.speed = 10.0
+		root.add_child(d)
+		stream.subscribe(func(ev: Dictionary) -> void:
+			var p: Dictionary = ev["payload"]
+			if StringName(ev["type"]) == EventTypes.CHECK_ROLL and bool(p.get("key", false)):
+				d.play(int(p.get("keep", 1)), int(ev["id"]) * 131 + 7))
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(sd.battle_def())
+	# 两局同一帧注入同一条关键检定事件：B 局触发 3D 演出，A 局不触发——比对口径锚点
+	stream.emit(EventTypes.CHECK_ROLL, {"roller": "kelan", "kind": "death_save", "rolls": [12],
+		"keep": 12, "dc": 10, "success": true, "s": 1, "f": 0, "key": true, "extreme": false}, &"core")
+	var bot := Rng.new(31)
+	var guard := 0
+	while not sm.is_over() and guard < 300:
+		guard += 1
+		var actions := sm.get_available_actions()
+		if actions.is_empty():
+			await process_frame
+			continue
+		var enabled: Array[int] = []
+		for i: int in actions.size():
+			if not bool(actions[i]["disabled"]):
+				enabled.append(i)
+		var pick := enabled[bot.range_int(0, enabled.size() - 1)]
+		sm.submit_command(sm.command_from_action(actions[pick]))
+		await process_frame
+	var json := JSON.stringify(stream.all(), "", true, true)
+	if d != null:
+		d.queue_free()
+		await process_frame
+	return json
 
 # ---------------------------------------------------------------- 双壳事件流逐字节比对（tech/01 §10 TP3；白皮书 §7.3 数据零差异）
 

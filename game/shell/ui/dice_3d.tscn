@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://d20physics3d"]
+
+[ext_resource type="Script" path="res://shell/ui/dice_3d.gd" id="1"]
+
+; 关键判定 3D D20 物理演出（14 清单 #2 / 09 §6）：节点树由脚本在 _ready 构建
+; （程序化二十面体/桌面/灯光/相机，无外部模型资源），场景文件仅承载根节点。
+[node name="Dice3D" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1")
