@@ -112,6 +112,7 @@ static func battle_def() -> Dictionary:
 	return {
 		"party": [
 			{"id": "pc", "ref": "player_blank", "name": "白页者", "kind": "player", "hp": 14, "max_hp": 14, "ac": 11,
+				"art_ref": "portraits/player_blank", # 纯呈现随行（tech/05 §6；双壳同一 def，事件流零差异）
 				"attrs": {"might": 2, "finesse": 1, "wits": 0}, "attack_mod": 2, "damage": "1d6+2",
 				"skills": [
 					{"id": "inkbolt", "name": "墨术飞矢", "kind": "attack", "attr": "wits",
@@ -122,23 +123,28 @@ static func battle_def() -> Dictionary:
 				"items": [{"id": "heal_potion", "name": "补给药水", "count": 2,
 					"use": {"timing": "bonus_action", "heal": "1d4+2", "consume": true}}]},
 			{"id": "kelan", "ref": "companion_kelan", "name": "珂兰", "kind": "companion", "hp": 10, "max_hp": 10, "ac": 11,
+				"art_ref": "portraits/companion_kelan",
 				"attrs": {"might": 0, "finesse": 1, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
 				"skills": [{"id": "kelan_bolt", "name": "墨矢", "kind": "attack", "attr": "finesse",
 					"damage": "1d6+1", "target": "enemy"}]},
 			{"id": "laofei", "ref": "companion_laofei", "name": "老费", "kind": "companion", "hp": 12, "max_hp": 12, "ac": 12,
+				"art_ref": "portraits/companion_laofei",
 				"attrs": {"might": 1, "finesse": 0, "wits": 1}, "attack_mod": 1, "damage": "1d6+1",
 				"skills": [{"id": "laofei_hook", "name": "船钩", "kind": "attack", "attr": "might",
 					"damage": "1d6+1", "target": "enemy"}]},
 		],
 		"enemies": [
 			{"id": "boss", "name": "墨魈", "hp": 16, "max_hp": 16, "ac": 11,
+				"art_ref": "units/ink_fiend",
 				"attrs": {"might": 1, "finesse": 1, "wits": 0}, "attack_mod": 3, "damage": "1d4+1",
 				"skills": [{"id": "ink_rain", "name": "墨雨溅射", "kind": "aoe", "damage": "1d6",
 					"uses": 2, "cooldown": 2,
 					"save": {"attr": "finesse", "dc": 11, "on_success": "half"}}]},
 			{"id": "imp1", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
+				"art_ref": "units/ink_imp",
 				"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
 			{"id": "imp2", "name": "墨魈幼体", "hp": 8, "max_hp": 8, "ac": 10,
+				"art_ref": "units/ink_imp",
 				"attrs": {"might": 0, "finesse": 0, "wits": 0}, "attack_mod": 2, "damage": "1d4"},
 		],
 		"party_advantage_rounds": 1,

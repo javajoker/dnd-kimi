@@ -2,6 +2,7 @@
   {
     "id": "ink_imp",
     "name": "墨魈幼体",
+    "art_ref": "units/ink_imp",
     "hp": 8,
     "ac": 10,
     "attrs": {
@@ -15,6 +16,7 @@
   {
     "id": "ink_fiend",
     "name": "墨魈",
+    "art_ref": "units/ink_fiend",
     "hp": 16,
     "ac": 11,
     "attrs": {
@@ -115,6 +117,7 @@
   {
     "id": "page_warden",
     "name": "守页人",
+    "art_ref": "units/page_warden",
     "hp": 38,
     "ac": 13,
     "attrs": {

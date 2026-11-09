@@ -305,8 +305,11 @@ func party_status() -> Array:
 			attrs[str(k)] = int(attrs.get(str(k), 0)) + int(alloc[k])
 		attrs["level"] = level
 		var max_hp := int(LightV1.eval_formula(str(c.get("hp_formula", "10")), attrs)) + hp_bonus
-		out.append({"id": cid, "name": str(c.get("name", cid)),
-			"hp": mini(int(board.read("%s.hp.%s" % [pack_id, cid], max_hp)), max_hp), "max_hp": max_hp})
+		var entry := {"id": cid, "name": str(c.get("name", cid)),
+			"hp": mini(int(board.read("%s.hp.%s" % [pack_id, cid], max_hp)), max_hp), "max_hp": max_hp}
+		if c.has("art_ref"): # 头像引用随行（tech/05 §6 纯呈现；队伍芯片按 art_ref 显示头像）
+			entry["art_ref"] = str(c["art_ref"])
+		out.append(entry)
 	return out
 
 ## ⑦ 角色界面名册（04 §⑦ 只读队伍卡数据源）：characters.json + 成长簿记 + HP 持久化直接组装，

@@ -482,12 +482,30 @@ func _refresh_grid() -> void:
 		_unit_colors[id] = base
 		var border := COLOR_CURRENT if id == current else COLOR_CELL_BORDER
 		cell.add_theme_stylebox_override("panel", _cell_style(bg, border))
+		# art_ref 单位图（tech/05 §6/§8：格内等比居中铺图，HP 文本压上带阴影；无图静默兜底色块+单字现状）
+		var tex := ArtLoader.texture_for(str(u.get("art_ref", "")))
+		if tex != null:
+			var tr := TextureRect.new()
+			tr.texture = tex
+			tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE # 不截手势命中（12 §2.1）
+			tr.set_meta("art_token", true) # 无头断言探针：格内单位图
+			if bool(u["dead"]):
+				tr.modulate = Color(0.45, 0.45, 0.45) # 死亡变暗与底色同口径
+			elif bool(u["downed"]):
+				tr.modulate = Color(0.8, 0.7, 0.7)
+			cell.add_child(tr)
 		var token := Label.new()
 		token.text = "%s\n%d/%d" % [str(u["name"]), int(u["hp"]), int(u["max_hp"])]
 		token.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		token.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		token.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		token.add_theme_color_override("font_color", Color.WHITE)
+		token.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9)) # 压图可读性（tech/05 §8）
+		token.add_theme_constant_override("shadow_offset_x", 1)
+		token.add_theme_constant_override("shadow_offset_y", 1)
 		cell.add_child(token)
 
 # ---------------------------------------------------------------- 手势接入（12 §2.1 横屏映射；§3 冲突消解）

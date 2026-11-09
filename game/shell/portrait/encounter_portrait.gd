@@ -678,10 +678,7 @@ func _refresh_story_status() -> void:
 	for child: Node in party_chips.get_children():
 		child.queue_free()
 	for p: Variant in _vm.get("party", []):
-		var chip := Label.new()
-		chip.text = " %s %d/%d " % [str((p as Dictionary)["name"]), int((p as Dictionary)["hp"]),
-			int((p as Dictionary)["max_hp"])]
-		party_chips.add_child(chip)
+		party_chips.add_child(_party_chip(p as Dictionary))
 
 func _refresh_story_options() -> void:
 	for child: Node in quickbar.get_children():
@@ -1019,18 +1016,44 @@ func _refresh_units() -> void:
 			enemy_row.add_child(_unit_button(u))
 		else:
 			party_row.add_child(_unit_button(u))
-			var chip := Label.new()
-			chip.text = " %s %d/%d " % [u["name"], int(u["hp"]), int(u["max_hp"])]
+			var chip := _party_chip(u)
 			if bool(u["dead"]):
 				chip.modulate = Color(0.4, 0.4, 0.4)
 			elif bool(u["downed"]):
 				chip.modulate = Color(1.0, 0.5, 0.4)
 			party_chips.add_child(chip)
 
+## 队伍芯片 = 头像（art_ref 有图时，tech/05 §8）+ 名称/HP 文本；无图静默兜底纯文本（tech/05 §5）。
+func _party_chip(p: Dictionary) -> Control:
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	var tex := ArtLoader.texture_for(str(p.get("art_ref", "")))
+	if tex != null:
+		var tr := TextureRect.new()
+		tr.texture = tex
+		tr.custom_minimum_size = Vector2(20, 20)
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.set_meta("art_chip", true) # 无头断言探针：芯片含头像
+		box.add_child(tr)
+	var chip := Label.new()
+	chip.text = " %s %d/%d " % [str(p["name"]), int(p["hp"]), int(p["max_hp"])]
+	box.add_child(chip)
+	return box
+
 func _unit_button(u: Dictionary) -> Button:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(104, 64)
 	b.text = "%s\nHP %d/%d" % [u["name"], int(u["hp"]), int(u["max_hp"])]
+	# art_ref 单位图（tech/05 §6/§8：有图展开居中压底、文字带阴影；无图静默兜底纯文本色块现状）
+	var tex := ArtLoader.texture_for(str(u.get("art_ref", "")))
+	if tex != null:
+		b.icon = tex
+		b.expand_icon = true
+		b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		b.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		b.add_theme_constant_override("shadow_offset_x", 1)
+		b.add_theme_constant_override("shadow_offset_y", 1)
 	b.set_meta("unit_id", str(u["id"])) # 手势命中测试（12 §3.1 起点定语义）
 	if juice != null and juice.is_dissolved(str(u["id"])):
 		b.visible = false # 已消散单位保持隐去（14 #3：击杀 = 消散，而非瞬间消失后重建复活）

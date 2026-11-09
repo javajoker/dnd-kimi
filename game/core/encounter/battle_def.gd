@@ -167,6 +167,9 @@ static func _build_character_unit(inst_id: String, ref: String, c: Dictionary, p
 		"hp": hp_now, "max_hp": max_hp, "ac": int(ac),
 		"attrs": final_attrs, "attack_mod": atk_mod, "damage": dmg,
 	}
+	# art_ref 纯呈现透传（tech/05 §6；core 只搬数据不引用渲染 API，缺图壳层静默兜底）
+	if c.has("art_ref"):
+		unit["art_ref"] = str(c["art_ref"])
 	# 出战技能：整备选择 ∩ 已习得（tech/04 §7）；同伴恒带招牌技能（11 §5.2）
 	var learned: Array = c.get("skills", [])
 	var picked: Array = []
@@ -216,6 +219,8 @@ static func _build_enemy_unit(inst_id: String, def: Dictionary, enemies: Diction
 		"attack_mod": int(def.get("attack_mod", 0)),
 		"damage": str(def.get("damage", "1d4")),
 	}
+	if def.has("art_ref"): # art_ref 纯呈现透传（tech/05 §6）
+		unit["art_ref"] = str(def["art_ref"])
 	var unit_skills: Array = []
 	for sk: Variant in def.get("skills", []):
 		var s: Dictionary = sk
@@ -251,6 +256,8 @@ static func _build_enemy_unit(inst_id: String, def: Dictionary, enemies: Diction
 					"hp": int(t.get("hp", 1)), "ac": int(t.get("ac", 10)),
 					"attrs": (t.get("attrs", {"might": 0, "finesse": 0, "wits": 0}) as Dictionary).duplicate(),
 					"attack_mod": int(t.get("attack_mod", 0)), "damage": str(t.get("damage", "1d4"))}
+				if t.has("art_ref"): # 召唤模板同透传（story/03 §3.2 召唤幼体同享单位图，tech/05 §6）
+					(out["summon"] as Dictionary)["art_ref"] = str(t["art_ref"])
 				out["count"] = int(s.get("count", 1))
 		unit_skills.append(out)
 	if not unit_skills.is_empty():

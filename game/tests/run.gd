@@ -78,6 +78,7 @@ func _async_shell_tests() -> void:
 	await test_main_flow()
 	await test_character_nav()
 	await test_gap_features()
+	await test_art_pipeline()
 	if failures == 0:
 		print("== 全部通过 ==")
 	else:
@@ -5031,7 +5032,13 @@ func test_main_flow() -> void:
 		and sh.clock_chip.text.contains("墨雨夜袭 2格"), "状态栏带：时钟总览格 + 时间边预告（04 §3.1）")
 	var party_shown := ""
 	for child: Node in sh.party_chips.get_children():
-		party_shown += (child as Label).text
+		# 芯片结构 = HBox[头像? + Label]（14 #7 art_ref 头像芯片，tech/05 §8）：取 Label 后代文本
+		var stack: Array[Node] = [child]
+		while not stack.is_empty():
+			var n: Node = stack.pop_back()
+			if n is Label:
+				party_shown += (n as Label).text
+			stack.append_array(n.get_children())
 	check(party_shown.contains("白页者 14/14") and party_shown.contains("珂兰"),
 		"状态栏带：队伍 HP 概览（04 §3.1）")
 	await process_frame
@@ -6090,4 +6097,202 @@ func test_cosmetics_ui() -> void:
 		"托盘快掷按当前皮肤换配色（纯呈现，不动逻辑）")
 	check(sh.dice_label.get_theme_color("font_outline_color") == pal["edge"], "骰面描边随皮肤（edge）")
 	sh.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 美术管线与首批资产（tech/05；14 清单 #7）
+
+func test_art_pipeline() -> void:
+	print("[art_pipeline] 美术管线与首批资产（tech/05 §1~§8；14 清单 #7）")
+	# ---- ① 生成物与管线规范一致（命名/尺寸/透明底/剪影非空；tech/05 §2/§3/§4/§7）----
+	var expect := {
+		"units/unit_ink_imp_128.png": "units/ink_imp",
+		"units/unit_ink_fiend_128.png": "units/ink_fiend",
+		"units/unit_page_warden_128.png": "units/page_warden",
+		"portraits/portrait_player_blank_128.png": "portraits/player_blank",
+		"portraits/portrait_companion_kelan_128.png": "portraits/companion_kelan",
+		"portraits/portrait_companion_laofei_128.png": "portraits/companion_laofei",
+	}
+	var re := RegEx.new()
+	re.compile("^(unit|portrait|scene|icon)_[a-z0-9]+(_[a-z0-9]+)*_[0-9]+\\.png$")
+	for rel: String in expect:
+		var path := "res://assets/art/%s" % rel
+		check(FileAccess.file_exists(path), "资产存在：%s（tech/05 §7 首批清单）" % rel)
+		check(re.search(rel.get_file()) != null,
+			"命名规范 <类>_<id>_<档>.png：%s（tech/05 §2）" % rel.get_file())
+		var img := Image.load_from_file(path)
+		check(img != null, "PNG 可加载：%s" % rel)
+		if img == null:
+			continue
+		check(img.get_width() == 128 and img.get_height() == 128,
+			"尺寸命中 128 档：%s（tech/05 §3）" % rel)
+		check(img.detect_alpha() != Image.ALPHA_NONE, "透明底：%s（tech/05 §4）" % rel)
+		var solid := false
+		for y: int in range(0, 128, 4):
+			for x: int in range(0, 128, 4):
+				if img.get_pixel(x, y).a > 0.9:
+					solid = true
+		check(solid, "剪影主体非空（存在不透明像素）：%s" % rel)
+	# ---- ② ArtLoader 解析与静默兜底（tech/05 §5/§6）----
+	check(ArtLoader.path_for("units/ink_fiend") == "res://assets/art/units/unit_ink_fiend_128.png",
+		"art_ref → 路径解析（<目录>/<类名>_<id>_<档>.png）")
+	check(ArtLoader.path_for("../etc/passwd") == "" and ArtLoader.path_for("units/bad id") == ""
+		and ArtLoader.path_for("unknown/x") == "" and ArtLoader.path_for("units/") == ""
+		and ArtLoader.path_for("ink_fiend") == "",
+		"非法 art_ref 拒解析（越界/空格/未知类别/缺段/缺目录）")
+	ArtLoader.clear_cache()
+	var tex := ArtLoader.texture_for("units/ink_fiend")
+	check(tex != null and tex.get_width() == 128, "ArtLoader 命中返回 128px 纹理")
+	check(ArtLoader.texture_for("units/ink_fiend") == tex, "同键同档缓存同实例（不重复 IO）")
+	check(ArtLoader.texture_for("units/no_such_unit") == null, "缺文件静默兜底 null（tech/05 §5）")
+	check(ArtLoader.texture_for("") == null, "空 art_ref 兜底 null")
+	# ---- ③ 内容表登记 + core 纯数据透传（tech/05 §6；tech/04 §2；tech/02 §10）----
+	var pack := _load_campaign01()
+	for cid: String in ["player_blank", "companion_kelan", "companion_laofei"]:
+		check(str((pack["characters"] as Dictionary)[cid].get("art_ref", "")) == "portraits/%s" % cid,
+			"characters.json 登记 art_ref：%s" % cid)
+	for eid: String in ["ink_imp", "ink_fiend", "page_warden"]:
+		check(str((pack["enemies"] as Dictionary)[eid].get("art_ref", "")) == "units/%s" % eid,
+			"enemies.json 登记 art_ref：%s" % eid)
+	# 已声明 art_ref 的引用完整性：目标文件必须存在且可加载（断链断言，tech/05 §6）
+	var linked_ok := true
+	for tbl: String in ["characters", "enemies"]:
+		for id: String in (pack[tbl] as Dictionary):
+			var ref := str((pack[tbl] as Dictionary)[id].get("art_ref", ""))
+			if ref.is_empty():
+				continue
+			var p := ArtLoader.path_for(ref)
+			if p.is_empty() or not FileAccess.file_exists(p):
+				linked_ok = false
+	check(linked_ok, "全部已声明 art_ref 断链为零（引用完整性断言）")
+	var asm: Dictionary = BattleDef.assemble(pack, "N1-7", {}, Board.new(EventStream.new()))
+	check(bool(asm["ok"]), "N1-7 战斗定义组装 ok")
+	var def: Dictionary = asm["def"]
+	check(str(def["party"][0].get("art_ref", "")) == "portraits/player_blank",
+		"BattleDef 角色 art_ref 透传进单位字典（core 只搬数据）")
+	var foes_art := true
+	for u: Variant in def["enemies"]:
+		if str((u as Dictionary).get("art_ref", "")).is_empty():
+			foes_art = false
+	check(foes_art, "BattleDef 敌方 art_ref 透传（N1-7 墨魈+幼体×2）")
+	var n4: Dictionary = BattleDef.assemble(pack, "N4-1", {}, Board.new(EventStream.new()))
+	check(bool(n4["ok"]), "N4-1 战斗定义组装 ok")
+	var avatar: Dictionary = (n4["def"] as Dictionary)["enemies"][0]
+	check(not avatar.has("art_ref"), "未声明条目无 art_ref 键（墨潮化身不在首批，兜底语义数据层可见）")
+	var summon_ref := ""
+	for sk: Variant in avatar.get("skills", []):
+		if (sk as Dictionary).has("summon"):
+			summon_ref = str(((sk as Dictionary)["summon"] as Dictionary).get("art_ref", ""))
+	check(summon_ref == "units/ink_imp", "召唤模板内联 art_ref 同透传（story/03 §3.2 召唤幼体）")
+	# party_status 头像随行（04 §3.1 队伍概览 → 竖屏队伍芯片）
+	var sg := StoryGraph.new(Board.new(EventStream.new()), Rng.new(1), pack)
+	var ps: Array = sg.party_status()
+	check(ps.size() == 3, "party_status 三人队伍")
+	var ps_art := true
+	for p: Variant in ps:
+		if str((p as Dictionary).get("art_ref", "")).is_empty():
+			ps_art = false
+	check(ps_art, "party_status 随行 art_ref（队伍芯片头像数据源）")
+	# ---- ④ 竖屏接入：单位卡 icon + 队伍芯片头像（tech/05 §8）----
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var pstream := EventStream.new()
+	var psm := EncounterSM.new(Board.new(pstream), pstream, Rng.new(11), "campaign01")
+	var portrait: EncounterPortrait = \
+		(load("res://shell/portrait/encounter_portrait.tscn") as PackedScene).instantiate()
+	root.add_child(portrait)
+	await process_frame
+	portrait.bind(psm, AutoAgent.new())
+	psm.enter("N1-7")
+	psm.transition(EncounterSM.S_EXPLORE)
+	psm.begin_combat(sd.battle_def())
+	await process_frame
+	await process_frame
+	var boss_btn: Button = null
+	var noart_btn: Button = null
+	for child: Node in portrait.enemy_row.get_children():
+		if child is Button and str(child.get_meta("unit_id", "")) == "boss":
+			boss_btn = child
+		if child is Button and str(child.get_meta("unit_id", "")) == "imp2":
+			noart_btn = child
+	check(boss_btn != null and boss_btn.icon != null, "竖屏敌方单位卡按 art_ref 显示图像（墨魈）")
+	check(boss_btn != null and boss_btn.icon != null and boss_btn.icon.get_width() == 128,
+		"单位卡 icon 命中 128 档")
+	var chip_has_avatar := false
+	for child: Node in portrait.party_chips.get_children():
+		for sub: Node in child.get_children():
+			if sub is TextureRect and bool(sub.get_meta("art_chip", false)):
+				chip_has_avatar = true
+	check(chip_has_avatar, "竖屏队伍芯片含头像 TextureRect（art_ref 随行）")
+	# ---- ⑤ 横屏接入：格内 token 铺图 + 无图兜底（tech/05 §5/§8）----
+	var lstream := EventStream.new()
+	var lsm := EncounterSM.new(Board.new(lstream), lstream, Rng.new(11), "campaign01")
+	var land: EncounterLandscape = \
+		(load("res://shell/landscape/encounter_landscape.tscn") as PackedScene).instantiate()
+	root.add_child(land)
+	land.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land.position = Vector2.ZERO
+	land.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	land.bind(lsm, AutoAgent.new())
+	lsm.enter("N1-7")
+	lsm.transition(EncounterSM.S_EXPLORE)
+	lsm.begin_combat(sd.battle_def())
+	await process_frame
+	await process_frame
+	var cell_has_art := func(sh: EncounterLandscape, uid: String) -> Dictionary:
+		var c: Vector2i = sh.unit_cell(uid)
+		var panel := sh._cells[c.y * sh.GRID_COLS + c.x]
+		var found := {"art": false, "label": false}
+		for ch: Node in panel.get_children():
+			if ch is TextureRect and bool(ch.get_meta("art_token", false)):
+				found["art"] = true
+			if ch is Label:
+				found["label"] = true
+		return found
+	var bf: Dictionary = cell_has_art.call(land, "boss")
+	check(bool(bf["art"]) and bool(bf["label"]), "横屏格内 token：单位图铺底 + HP 文本压上（墨魈）")
+	# 兜底：剥掉 art_ref 的同构 def → 格内无色块外图像，Label token 保持现状
+	var def2: Dictionary = (sd.battle_def() as Dictionary).duplicate(true)
+	(def2["enemies"] as Array)[0].erase("art_ref")
+	var lstream2 := EventStream.new()
+	var lsm2 := EncounterSM.new(Board.new(lstream2), lstream2, Rng.new(11), "campaign01")
+	var land2: EncounterLandscape = \
+		(load("res://shell/landscape/encounter_landscape.tscn") as PackedScene).instantiate()
+	root.add_child(land2)
+	land2.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land2.position = Vector2.ZERO
+	land2.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	land2.bind(lsm2, AutoAgent.new())
+	lsm2.enter("N1-7")
+	lsm2.transition(EncounterSM.S_EXPLORE)
+	lsm2.begin_combat(def2)
+	await process_frame
+	await process_frame
+	var bf2: Dictionary = cell_has_art.call(land2, "boss")
+	check(not bool(bf2["art"]) and bool(bf2["label"]),
+		"无 art_ref 单位静默兜底：格内无图像、色块+单字 token 现状（tech/05 §5）")
+	portrait.queue_free()
+	land.queue_free()
+	land2.queue_free()
+	await process_frame
+	# ---- ⑥ 绘卷分层细节（tech/05 §8；12 §5 呼吸/褪墨度口径不变）----
+	var hs := HomeScroll.new()
+	hs.custom_minimum_size = Vector2(800, 500)
+	root.add_child(hs)
+	await process_frame
+	check(hs.sparkle_count() >= 10, "水面波光点数据表 ≥10 点（14 #7）")
+	var below := true
+	for i: int in hs.sparkle_count():
+		if hs.sparkle_point(i).y <= HomeScroll.HORIZON:
+			below = false
+	check(below, "波光点全部在海平线之下（数据表自检）")
+	check(hs.tower_window_count() == 3, "塔顶灯窗 3 档（数据表）")
+	check(hs.shed_roof_lights_per_shed() == 3, "棚顶檐口灯光点 每棚 3 灯（数据表）")
+	hs.set_state(10, 0)
+	check(hs.doom_factor() > 0.99, "褪墨度满格驱动衰减（波光/灯窗随天色同口径变暗，12 §5）")
+	check(hs.breath_glow() >= HomeScroll.GLOW_MIN and hs.breath_glow() <= HomeScroll.GLOW_MAX,
+		"呼吸微光区间不变（分层细节叠加不破坏 12 §5 不闪烁铁律）")
+	hs.queue_free()
 	await process_frame

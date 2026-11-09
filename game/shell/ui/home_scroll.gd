@@ -34,6 +34,16 @@ const HOTSPOTS: Array[Dictionary] = [
 ## 星位（归一化坐标，数据；随褪墨度淡出）。
 const STARS: Array[Vector2] = [Vector2(0.30, 0.10), Vector2(0.44, 0.06), Vector2(0.60, 0.16),
 	Vector2(0.80, 0.08), Vector2(0.92, 0.20), Vector2(0.24, 0.24), Vector2(0.70, 0.28)]
+## 水面波光点（归一化坐标，全部在海平线 HORIZON 之下；14 #7 绘卷分层细节：
+## 呼吸微光驱动闪烁，随褪墨度衰减——与天色/海面同一 doom 口径，12 §5）。
+const SPARKLES: Array[Vector2] = [Vector2(0.10, 0.63), Vector2(0.22, 0.70), Vector2(0.35, 0.66),
+	Vector2(0.47, 0.74), Vector2(0.58, 0.62), Vector2(0.66, 0.78), Vector2(0.76, 0.68),
+	Vector2(0.88, 0.73), Vector2(0.16, 0.82), Vector2(0.30, 0.88), Vector2(0.44, 0.84),
+	Vector2(0.55, 0.92), Vector2(0.70, 0.87), Vector2(0.84, 0.90)]
+## 塔顶灯窗（沿塔身纵向的归一化分数位，相对 tide_tower 热点 rect；14 #7）。
+const TOWER_WINDOWS: Array[float] = [0.30, 0.52, 0.74]
+## 集市棚顶灯光点（每棚沿檐口的横向分数位，相对单棚宽；14 #7）。
+const SHED_ROOF_LIGHTS: Array[float] = [0.25, 0.55, 0.85]
 
 var _doom_clock := 0
 var _quest_badge := 0
@@ -77,6 +87,19 @@ func badge_count() -> int:
 
 func badge_visible() -> bool:
 	return _quest_badge > 0
+
+## 分层细节探针（14 #7 无头断言用：数据表驱动，改动即断）。
+func sparkle_count() -> int:
+	return SPARKLES.size()
+
+func sparkle_point(i: int) -> Vector2:
+	return SPARKLES[i]
+
+func tower_window_count() -> int:
+	return TOWER_WINDOWS.size()
+
+func shed_roof_lights_per_shed() -> int:
+	return SHED_ROOF_LIGHTS.size()
 
 ## 归一化热点区域 → 控件内绝对 rect。
 func hotspot_rect(h: Dictionary) -> Rect2:
@@ -126,6 +149,13 @@ func _draw() -> void:
 	for i: int in 4:
 		var y := horizon_y + (float(i) + 0.6) * (size.y - horizon_y) / 5.0
 		draw_line(Vector2(0, y), Vector2(w, y), Color(wave_col, 0.35), 1.0)
+	# 水面波光点（14 #7 分层细节：呼吸闪烁 + 逐点错相，随褪墨度衰减）
+	var sparkle_fade := (1.0 - doom_factor() * 0.6)
+	for i: int in SPARKLES.size():
+		var phase := fmod(breath_phase() + float(i) * 0.37, 1.0) # 逐点错相，不整齐划一
+		var tw := 0.3 + 0.7 * (0.5 - 0.5 * cos(phase * TAU))
+		var a := sparkle_fade * tw * (0.20 + glow * 0.55)
+		draw_circle(SPARKLES[i] * size, 1.1 + glow * 0.7, Color(0.92, 0.86, 0.58, a))
 	for hs: Dictionary in HOTSPOTS:
 		_draw_layer(hs, glow)
 
@@ -143,7 +173,20 @@ func _draw_layer(hs: Dictionary, glow: float) -> void:
 			var tip := Vector2(bx + bw * 0.5, by + bh * 0.08)
 			draw_circle(tip, 3.0 + glow * 2.0, Color(GOLD, 0.35 + glow * 0.6))
 			draw_circle(tip, 9.0 + glow * 6.0, Color(GOLD, glow * 0.25))
-		"market": # 集市棚区：三联棚剪影 + 金墨灯笼
+			# 塔顶光束（14 #7：三段渐隐竖线，呼吸同相）
+			for i: int in 3:
+				var beam_a := glow * (0.22 - 0.06 * i)
+				draw_line(tip + Vector2(0, -bh * (0.05 + 0.09 * i)),
+					tip + Vector2(0, -bh * (0.14 + 0.09 * i)), Color(GOLD, beam_a), 1.6 - 0.4 * i)
+			# 塔身灯窗（14 #7：沿塔纵向的金墨小窗，随呼吸微亮）
+			for f: float in TOWER_WINDOWS:
+				var wy := by + bh * f
+				var half_w := bw * (0.35 - 0.20 * f) * 0.5 # 梯形内缩：窗不越出塔身
+				draw_circle(Vector2(bx + bw * 0.5, wy), 1.5,
+					Color(GOLD, (0.25 + glow * 0.45) * (1.0 - doom_factor() * 0.5)))
+				draw_circle(Vector2(bx + bw * 0.5 - half_w, wy + bh * 0.02), 1.1,
+					Color(GOLD, (0.18 + glow * 0.32) * (1.0 - doom_factor() * 0.5)))
+		"market": # 集市棚区：三联棚剪影 + 金墨灯笼 + 棚顶檐口灯光点（14 #7 分层细节）
 			for i: int in 3:
 				var sx := r.position.x + r.size.x * (0.05 + 0.32 * i)
 				var sw := r.size.x * 0.28
@@ -154,6 +197,9 @@ func _draw_layer(hs: Dictionary, glow: float) -> void:
 				draw_rect(Rect2(sx + sw * 0.1, sy + r.size.y * 0.35, sw * 0.8, r.size.y * 0.45), INK)
 				draw_circle(Vector2(sx + sw * 0.5, sy + r.size.y * 0.45), 1.8,
 					Color(GOLD, 0.3 + glow * 0.4))
+				for f: float in SHED_ROOF_LIGHTS: # 檐口灯串：逐棚三灯，呼吸微亮
+					draw_circle(Vector2(sx + sw * f, sy + r.size.y * 0.33), 1.1,
+						Color(GOLD, (0.22 + glow * 0.5) * (1.0 - doom_factor() * 0.4)))
 		"campfire": # 营火与同伴：火堆金橙呼吸 + 两个围坐剪影
 			var fx := r.position.x + r.size.x * 0.5
 			var fy := r.position.y + r.size.y * 0.75
