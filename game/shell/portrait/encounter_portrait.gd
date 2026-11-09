@@ -843,11 +843,31 @@ func _on_auto_timeout() -> void:
 
 # ---------------------------------------------------------------- 掷骰演出（09 §6 两级）
 
+# 骰子皮肤（06 §3/§7 外观商品位）：换肤 = 换调色板，纯呈现——只读 Board 外观旗标经
+# Cosmetics.palette_of 取色，不进任何逻辑判定；渲染层对规则档位无感（godot-dev §2）。
+func _dice_palette() -> Dictionary:
+	var b: Board = null
+	if _board != null:
+		b = _board # 故事态（bind_story）
+	elif sm != null:
+		b = sm.board # 战斗态
+	return Cosmetics.palette_of(b)
+
+## 应用当前皮肤：骰面主色 = face、描边 = edge、明细行 = pip。
+func _apply_dice_skin() -> void:
+	var pal := _dice_palette()
+	for lbl: Label in [dice_label, key_dice_label]:
+		lbl.add_theme_color_override("font_color", pal["face"])
+		lbl.add_theme_color_override("font_outline_color", pal["edge"])
+		lbl.add_theme_constant_override("outline_size", 12)
+	dice_detail.add_theme_color_override("font_color", (pal["pip"] as Color).lightened(0.35))
+
 ## 普通：骰子 Tab 托盘快掷（≤0.5s 出结果）。
 func _tray_roll(p: Dictionary) -> void:
 	if _tray_rolling:
 		return
 	_tray_rolling = true
+	_apply_dice_skin()
 	var visual := Rng.new(int(p.get("keep", 1)) * 7919 + 3) # 演出层视觉随机，与逻辑骰无关
 	var keep := str(p.get("keep", "?"))
 	for i: int in 5:
@@ -869,6 +889,7 @@ func _play_key_roll(p: Dictionary) -> void:
 	while not _key_queue.is_empty():
 		var q: Dictionary = _key_queue.pop_front()
 		apply_breathing(&"key_roll") # 全屏接管（04 §④.1 关键判定行）
+		_apply_dice_skin() # 关键演出同皮肤（06 §7：换肤只换配色与描边）
 		key_overlay.visible = true
 		key_result_label.text = ""
 		_key_skip = false

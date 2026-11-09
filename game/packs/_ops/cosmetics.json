@@ -1,0 +1,29 @@
+{
+  "_comment": "外观商品注册表（06 文档 §7 落地细化：皮肤=运营侧数据，与 entitlements.json 同构——门槛/获得映射/定价/默认指定全在运营侧登记，内容包管线零改动，白皮书 §10.4 运营轨）。写板键 global.cosmetic.*（07 文档 §3 v1.2：仅 system 可写，渲染壳只读换肤）。调色板三键：face=骰面主色 / edge=描边 / pip=字面与点缀。皮肤永不进数值与事件流判定（06 §3/§4 付费禁区）。本目录（_ops）非内容包，不进内容包管线、不接受 packlint V1~V13。",
+  "version": 1,
+  "dice_skins": [
+    {
+      "id": "gilded_ink",
+      "name": "金墨",
+      "default": true,
+      "desc": "白页者的起手骰面——抄本纪元最初的墨色。",
+      "grant": {"kind": "default"},
+      "palette": {"face": "#e8c76a", "edge": "#6b4f16", "pip": "#2b2114"}
+    },
+    {
+      "id": "faded_ink_gray",
+      "name": "褪墨灰",
+      "desc": "命骰考集齐奖励（10 文档 §4）——被撤销者的骰子，墨色褪尽仍是墨色。",
+      "grant": {"kind": "codex_series", "series": "fatedie_study"},
+      "palette": {"face": "#b9b6ae", "edge": "#4a4a52", "pip": "#1d1d24"}
+    },
+    {
+      "id": "salvage_copper",
+      "name": "拾遗铜辉",
+      "desc": "商店外观商品（06 §7 占位定价）——烬港拾遗人从雾码头捞起的铜光。",
+      "grant": {"kind": "shop"},
+      "shop": {"price_text": "¥6"},
+      "palette": {"face": "#d08a4e", "edge": "#5e3a1e", "pip": "#2a160b"}
+    }
+  ]
+}

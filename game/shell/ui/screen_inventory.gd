@@ -8,20 +8,28 @@ class_name ScreenInventory
 extends Control
 
 signal back_requested
+signal equip_requested(skin_id: String)     # 外观页装备（写板走 main → Cosmetics，06 §3）
+signal unequip_requested                    # 外观页卸下（回落默认皮）
+signal skin_purchase_requested(skin_id: String) # 商店外观商品购买确认（半屏弹层，06 §6）
 
 const ROLE_ORDER: Array[String] = ["stat", "check_mod", "branch_key", "codex"] # 10 §1 四重身份
 
 var filter_row: HBoxContainer
 var bag_box: VBoxContainer
 var codex_box: VBoxContainer
+var cos_box: VBoxContainer
 var back_button: Button
 var info_popup: InfoPopup
+var skin_popup: ShopPopup # 外观商品购买半屏弹层（复用 ShopPopup，06 §6）
 
 var _inv: Dictionary = {}
 var _items: Dictionary = {}
 var _lore_ids: Array = []
 var _lore_defs: Array = []
 var _filter := "" # "" = 全部
+var _skins: Array = []        # 注册表皮肤定义（数据驱动，06 §7）
+var _skins_owned: Array = []  # 已持有 skin_id
+var _skin_equipped := ""      # 当前装备 skin_id
 
 func _ready() -> void:
 	_build()
@@ -63,12 +71,28 @@ func _build() -> void:
 	codex_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	codex_box.add_child(codex_head)
 	cols.add_child(codex_box)
+	# 外观页（06 §3/§6：外观商品挂在 ⑥ 背包图鉴外观页，不新增全局导航）
+	var cos_head := Label.new()
+	cos_head.text = "【%s】" % TextsZh.INV_COSMETIC
+	cos_box = VBoxContainer.new()
+	cos_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cos_box.add_child(cos_head)
+	var cos_note := Label.new()
+	cos_note.text = TextsZh.COSMETIC_PURE_NOTE
+	cos_note.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+	cos_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cos_box.add_child(cos_note)
+	cols.add_child(cos_box)
 	back_button = Button.new()
 	back_button.text = TextsZh.COMMON_BACK
 	back_button.pressed.connect(func() -> void: back_requested.emit())
 	v.add_child(back_button)
 	info_popup = InfoPopup.new()
 	add_child(info_popup)
+	skin_popup = ShopPopup.new()
+	add_child(skin_popup)
+	skin_popup.purchase_confirmed.connect(func(skin_id: String) -> void:
+		skin_purchase_requested.emit(skin_id)) # 确认 → main 落板；本屏不写板（godot-dev §2）
 
 func _add_filter(label: String, role: String) -> void:
 	var b := Button.new()
@@ -175,3 +199,86 @@ func bag_entry_count() -> int:
 		if child is Button:
 			n += 1
 	return n
+
+# ---------------------------------------------------------------- 外观页（06 §3/§6/§7；10 §4 集齐奖励）
+
+## 绑定外观页只读数据：skins = 注册表定义；owned = 已持有 id；equipped = 当前装备 id。
+func bind_cosmetics(skins: Array, owned: Array, equipped: String) -> void:
+	_skins = skins
+	_skins_owned = owned
+	_skin_equipped = equipped
+	_render_cosmetics()
+
+## 外观页：皮肤列表（预览色块 + 名称 + 获得途径 + 装备/卸下/获取；未获得灰显，06 §3.1 可见但锁定同手法）。
+func _render_cosmetics() -> void:
+	for child: Node in cos_box.get_children():
+		if child is HBoxContainer:
+			child.queue_free()
+	for e: Variant in _skins:
+		var def: Dictionary = e
+		var skin_id := str(def.get("id", ""))
+		var owned := _skins_owned.has(skin_id)
+		var pal: Dictionary = def.get("palette", {})
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		# 预览色块：骰面主色 + 描边（注册表调色板直渲，纯呈现）
+		var swatch := PanelContainer.new()
+		swatch.custom_minimum_size = Vector2(28, 28)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(str(pal.get("face", "#e8c76a")))
+		sb.border_color = Color(str(pal.get("edge", "#6b4f16")))
+		sb.set_border_width_all(3)
+		sb.set_corner_radius_all(4)
+		swatch.add_theme_stylebox_override("panel", sb)
+		row.add_child(swatch)
+		var text_v := VBoxContainer.new()
+		text_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var name_l := Label.new()
+		name_l.text = str(def.get("name", skin_id))
+		text_v.add_child(name_l)
+		var src_l := Label.new()
+		src_l.text = TextsZh.cosmetic_source_line(def)
+		src_l.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+		text_v.add_child(src_l)
+		row.add_child(text_v)
+		var btn := Button.new()
+		if owned and skin_id == _skin_equipped:
+			btn.text = TextsZh.COSMETIC_UNEQUIP
+			btn.pressed.connect(func() -> void: unequip_requested.emit())
+		elif owned:
+			btn.text = TextsZh.COSMETIC_EQUIP
+			var sid := skin_id
+			btn.pressed.connect(func() -> void: equip_requested.emit(sid))
+		elif str((def.get("grant", {}) as Dictionary).get("kind", "")) == "shop":
+			var price := str((def.get("shop", {}) as Dictionary).get("price_text", ""))
+			btn.text = "%s %s" % [TextsZh.LOCK_ACQUIRE, price]
+			var sid2 := skin_id
+			btn.pressed.connect(func() -> void:
+				skin_popup.open(sid2, str(def.get("name", sid2)), price,
+					TextsZh.cosmetic_shop_line(str(def.get("name", sid2)), price)))
+		else:
+			btn.text = TextsZh.COSMETIC_NOT_OWNED
+			btn.disabled = true # 未获得灰显（非卖途径：呈现获得条件，不出购买入口）
+		row.add_child(btn)
+		if not owned:
+			row.modulate = Color(0.55, 0.55, 0.6) # 未获得整行灰显
+		cos_box.add_child(row)
+
+## 测试探针：外观页条目数与指定皮肤按钮文案。
+func cosmetic_entry_count() -> int:
+	var n := 0
+	for child: Node in cos_box.get_children():
+		if child is HBoxContainer:
+			n += 1
+	return n
+
+func cosmetic_button_text(skin_id: String) -> String:
+	var idx := 0
+	for e: Variant in _skins:
+		var child := cos_box.get_child(2 + idx) # 前两子节点 = 栏头 + 纯演出注记
+		if str((e as Dictionary).get("id", "")) == skin_id and child is HBoxContainer:
+			for c: Node in (child as HBoxContainer).get_children():
+				if c is Button:
+					return (c as Button).text
+		idx += 1
+	return ""

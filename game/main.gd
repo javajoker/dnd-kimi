@@ -12,7 +12,8 @@
 # 故事态（遭遇外）☰ = 存档后回主屏（节点进度在图快照 meta.graph 内）。
 # 战斗数值由 packs 资源表驱动（tech/04 §1~§4 / tech/02 §6）：BattleDef.assemble 组装，引用缺失 fail-fast。
 # 调试：`-- --m2n-shots` 走图截图 /tmp/m2n_*.png（不提交）；`-- --m3-shots` 子游戏截图；
-# `-- --m4-shots` 锁定态/购买弹层截图；`-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图。
+# `-- --m4-shots` 锁定态/购买弹层截图；`-- --skin-shots` 外观页/换肤骰子截图（06 §7）；
+# `-- --mode=space|time` 预选形态；`-- --mode-shots` 横屏战役边界截图。
 extends Node
 
 const BATTLE_SEED := 20260009 # 固定种子（tech/01 §5.2 确定性）：本切片主线两次检定均为成功路
@@ -40,6 +41,7 @@ var stream: EventStream
 var board: Board
 var rng: Rng
 var entitlements: Entitlements      # 权利模型运行时（06 §2：商店/活动/成就三类点亮方）
+var cosmetics: Cosmetics            # 外观系统运行时（06 §3/§7：皮肤只写外观旗标，纯演出）
 var ops_config: Dictionary = {}     # 运营侧配置（06 §3.2：点亮在运营，不进内容包管线）
 var graph: StoryGraph
 var pack: Dictionary = {}
@@ -100,6 +102,7 @@ func _ready() -> void:
 	entitlements = Entitlements.new(board, stream)
 	ops_config = Entitlements.load_ops_config()
 	entitlements.apply_activities(ops_config)
+	cosmetics = Cosmetics.new(board, stream) # 皮肤注册表 = 运营侧数据（06 §7：packs/_ops/cosmetics.json）
 	graph = StoryGraph.new(board, rng, pack)
 	_pack_host = pack
 	_discover_arcs()
@@ -111,6 +114,8 @@ func _ready() -> void:
 		_run_shots_m3()
 	if args.has("--m4-shots"):
 		_run_shots_m4()
+	if args.has("--skin-shots"):
+		_run_shots_skin()
 	if args.has("--m4c-shots"):
 		_run_shots_m4c()
 	if args.has("--growth-shots"):
@@ -527,13 +532,19 @@ func _on_ngplus_start() -> void:
 	var ents := {}
 	for key: String in board.keys_with_prefix("global.entitlement."):
 		ents[key] = board.read(key)
+	var cos := {}
+	for key: String in board.keys_with_prefix("global.cosmetic."):
+		cos[key] = board.read(key) # 外观旗标随周目保留（已获权利不降级，白皮书 §10.4）
 	var ng := int(board.read("campaign01.ngplus", 0)) + 1
 	board = Board.new(stream)
 	entitlements = Entitlements.new(board, stream)
 	entitlements.apply_activities(ops_config)
+	cosmetics = Cosmetics.new(board, stream)
 	var sys_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "system"}
 	for key: String in ents.keys():
 		board.write(key, ents[key], sys_prov) # 权利保留（global.entitlement.* 仅 system 可写，07 §3）
+	for key: String in cos.keys():
+		board.write(key, cos[key], sys_prov) # 外观旗标保留（global.cosmetic.* 仅 system 可写，07 §3 v1.2）
 	var pack_prov := {"event_id": stream.tail(), "node_id": "ngplus_boot", "pack_id": "campaign01"}
 	board.write("global.lore", lore, pack_prov) # 图鉴保留（07 §2 全局白名单，任何包可写）
 	board.write("campaign01.ngplus", ng, pack_prov) # 周目数簿记（包命名空间）
@@ -768,6 +779,9 @@ func _on_save_quit() -> void:
 # ---------------------------------------------------------------- 结算（04 §⑨；07 §4.2 主快照点）
 
 func _on_event(ev: Dictionary) -> void:
+	if ev["type"] == EventTypes.LORE_UNLOCK:
+		# 图鉴集齐奖励到账（10 §4 v1.1：聚合全包 lore 判定；命骰考 → 骰子皮肤，纯演出）
+		cosmetics.check_codex_rewards(_all_lore_defs())
 	if ev["type"] == EventTypes.COMBAT_END and _sub_active and _sub_battling:
 		_sub_on_combat_end(ev["payload"]["result"]) # 子游戏连战路由（04 §6）
 		return
@@ -904,8 +918,50 @@ func _show_inventory() -> void:
 	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
 	var screen: ScreenInventory = (load(SCREEN_SCENES[&"inventory"]) as PackedScene).instantiate()
 	_swap(screen)
-	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), pack.get("lore", []))
+	screen.bind(board.get_inv(), pack.get("items", {}), board.get_lore(), _all_lore_defs())
+	_bind_cosmetics(screen)
 	screen.back_requested.connect(_show_home)
+
+## 外观页绑定与写板通道（06 §3/§6/§7：装备/购买写外观旗标，仅 system 可写，07 §3 v1.2）。
+func _bind_cosmetics(screen: ScreenInventory) -> void:
+	var owned: Array = []
+	for e: Variant in cosmetics.skins():
+		var sid := str((e as Dictionary).get("id", ""))
+		if cosmetics.is_owned(sid):
+			owned.append(sid)
+	screen.bind_cosmetics(cosmetics.skins(), owned, cosmetics.equipped_id())
+	if not screen.equip_requested.is_connected(_on_skin_equip):
+		screen.equip_requested.connect(_on_skin_equip)
+		screen.unequip_requested.connect(_on_skin_unequip)
+		screen.skin_purchase_requested.connect(_on_skin_purchase)
+
+func _on_skin_equip(skin_id: String) -> void:
+	if cosmetics.equip(skin_id):
+		_show_inventory() # 重进刷新（与购买解锁同一「写入即生效」哲学，06 §3.1）
+
+func _on_skin_unequip() -> void:
+	if cosmetics.unequip():
+		_show_inventory()
+
+## 商店外观商品购买确认 → 商店点亮方写板（单号溯源，06 §2.3/§7）→ 外观页当场刷新。
+func _on_skin_purchase(skin_id: String) -> void:
+	var receipt_id := "rcpt_skin_%d" % stream.tail() # mock 单号（真实支付接入是运营立项留白，06 §8）
+	if not cosmetics.shop_purchase(skin_id, receipt_id):
+		return
+	stream.emit(EventTypes.LOG,
+		{"msg": "守门人拓下新印——骰子皮肤「%s」已到手。（纯演出，不动骰运）" % cosmetics.skin_name(skin_id),
+			"toast": true}, &"core")
+	_show_inventory()
+
+## 全部已加载内容包的 lore 条目聚合（10 §4 v1.1：集齐判定跨包；主战役 + 子游戏 + 支线）。
+func _all_lore_defs() -> Array:
+	var out: Array = []
+	out.append_array(pack.get("lore", []))
+	for pid: String in _subgames.keys():
+		out.append_array((_subgames[pid] as Dictionary).get("lore", []))
+	for pid: String in _arcs.keys():
+		out.append_array((_arcs[pid] as Dictionary).get("lore", []))
+	return out
 
 func _show_character() -> void:
 	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8）
@@ -1527,6 +1583,36 @@ func _run_shots_m4() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _shot("/tmp/m4_shop.png") # 购买半屏弹层（06 §6：不离开当前界面情境）
 	print("[shots] M4 两张完成：/tmp/m4_lock.png /tmp/m4_shop.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 外观商品截图（06 §7 皮肤证据 /tmp，不提交）
+
+## ⑥ 外观页 + 换肤骰子：`-- --skin-shots`。演示前提两款皮肤到账（集齐/商店同一写板通道）。
+func _run_shots_skin() -> void:
+	await get_tree().create_timer(1.2).timeout
+	cosmetics.grant("faded_ink_gray", {"granted_by": "codex", "series": "fatedie_study"}) # 命骰考集齐奖励（10 §4）
+	cosmetics.shop_purchase("salvage_copper", "rcpt_skin_shots") # 商店外观商品（06 §7）
+	_on_home_navigate(&"inventory")
+	await get_tree().create_timer(0.4).timeout
+	await _shot("/tmp/skin_cosmetics.png") # 外观页：三皮肤 + 预览色块 + 装备/卸下/获取
+	# 换肤骰子：装备拾遗铜辉 → 战役故事态 → 快掷演出取当前皮肤配色与描边（纯呈现）
+	cosmetics.equip("salvage_copper")
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	graph._enter("N1-3")
+	_present_node()
+	await get_tree().create_timer(0.5).timeout
+	stream.emit(EventTypes.CHECK_ROLL, {"keep": 17, "rolls": [17], "mod": 0, "total": 17,
+		"success": true, "key": false}, &"core", "N1-3")
+	if shell is EncounterPortrait:
+		(shell as EncounterPortrait).tabs.current_tab = 1 # 骰子 Tab（托盘快掷呈现位）
+	await get_tree().create_timer(0.8).timeout # 快掷 0.35s 落定后取图
+	await _shot("/tmp/skin_dice.png")
+	print("[shots] 皮肤两张完成：/tmp/skin_cosmetics.png /tmp/skin_dice.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（支线注入边 + 解谜房证据 /tmp，不提交）

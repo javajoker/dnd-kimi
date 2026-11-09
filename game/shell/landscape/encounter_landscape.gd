@@ -860,11 +860,30 @@ func _on_auto_timeout() -> void:
 
 # ---------------------------------------------------------------- 掷骰演出（09 §6 两级，与竖屏同一事件源）
 
+# 骰子皮肤（06 §3/§7；与竖屏同一事件源、同一调色板口）：换肤只换配色与描边，纯呈现。
+func _dice_palette() -> Dictionary:
+	var b: Board = null
+	if _board != null:
+		b = _board # 故事态（bind_story）
+	elif sm != null:
+		b = sm.board # 战斗态
+	return Cosmetics.palette_of(b)
+
+## 应用当前皮肤：骰面主色 = face、描边 = edge、明细行 = pip。
+func _apply_dice_skin() -> void:
+	var pal := _dice_palette()
+	for lbl: Label in [dice_label, key_dice_label]:
+		lbl.add_theme_color_override("font_color", pal["face"])
+		lbl.add_theme_color_override("font_outline_color", pal["edge"])
+		lbl.add_theme_constant_override("outline_size", 12)
+	dice_detail.add_theme_color_override("font_color", (pal["pip"] as Color).lightened(0.35))
+
 ## 普通：骰子盘就地快掷（≤0.5s 出结果）。
 func _tray_roll(p: Dictionary) -> void:
 	if _tray_rolling:
 		return
 	_tray_rolling = true
+	_apply_dice_skin()
 	var visual := Rng.new(int(p.get("keep", 1)) * 7919 + 3) # 演出层视觉随机，与逻辑骰无关
 	var keep := str(p.get("keep", "?"))
 	for i: int in 5:
@@ -885,6 +904,7 @@ func _play_key_roll(p: Dictionary) -> void:
 	_key_playing = true
 	while not _key_queue.is_empty():
 		var q: Dictionary = _key_queue.pop_front()
+		_apply_dice_skin() # 关键演出同皮肤（与竖屏同一调色板口，09 §6 同一事件源）
 		key_overlay.visible = true
 		key_result_label.text = ""
 		_key_skip = false

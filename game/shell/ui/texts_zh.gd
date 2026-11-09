@@ -207,19 +207,41 @@ const INV_ROLE_NAMES := { # 四重身份（tech/02 §7 roles；10 §1 标签体�
 	"stat": "数值装备", "check_mod": "检定工具", "branch_key": "分支钥匙", "codex": "图鉴信物",
 }
 const INV_BRANCH_HINT := "它似乎能在某处派上用场……" # 分支钥匙提示（04 §⑥ 示例句式）
-const CODEX_SERIES := { # 系列归世界观层定义（story/01 §9 四大系列；10 §3）
+const CODEX_SERIES := { # 系列归世界观层定义（story/01 §9 四大系列；10 §3；id 以 tech/02 §10 注册值为准）
 	"weaver_fragments": "织命者残简", "revoked_registry": "被撤销者名录",
-	"fate_dice": "命骰考", "ashenport_local": "烬港风物志",
+	"fatedie_study": "命骰考", "ashenport_local": "烬港风物志",
 }
 const CODEX_REWARDS := { # 集齐奖励预告（世界观 §9 方向；10 §4 白名单，永不卖数值）
 	"weaver_fragments": "集齐 → 揭示褪墨真相的隐藏剧情线",
 	"revoked_registry": "集齐 → 解锁「追忆」战役（强制竖屏形态）",
-	"fate_dice": "集齐 → 骰子外观（纯演出）",
+	"fatedie_study": "集齐 → 骰子皮肤「褪墨灰」（纯演出）",
 	"ashenport_local": "集齐 → 烬港声望与商店折扣",
 }
 const CODEX_PROGRESS := "%s：%d/%d"
 const CODEX_REWARD_LINE := "　预告：%s"
 const CODEX_LOCKED_TITLE := "？？？"
+
+# ⑥ 外观页（06 §3/§6/§7：外观页挂背包图鉴；皮肤只写外观旗标，纯演出不卖数值）
+const INV_COSMETIC := "外观"
+const COSMETIC_EQUIP := "装备"
+const COSMETIC_EQUIPPED := "已装备"
+const COSMETIC_UNEQUIP := "卸下"
+const COSMETIC_NOT_OWNED := "未获得"
+const COSMETIC_PURE_NOTE := "皮肤只换骰面配色，不动骰运（纯演出）"
+## 皮肤获得途径说明（注册表 grant 声明 → 叙事化一行）。
+static func cosmetic_source_line(def: Dictionary) -> String:
+	var g: Dictionary = def.get("grant", {})
+	match str(g.get("kind", "")):
+		"default":
+			return "起手即有"
+		"codex_series":
+			return "图鉴「命骰考」集齐奖励"
+		"shop":
+			return "守门人的印龛 · %s" % str((def.get("shop", {}) as Dictionary).get("price_text", ""))
+	return ""
+## 皮肤购买弹层文案（与战役购买同一叙事化手法，06 §3.1；shop_line 是战役句式，皮肤另起一句）。
+static func cosmetic_shop_line(skin_name: String, price_text: String) -> String:
+	return "「%s」——%s。守门人拓下一枚新印，骰面从此换一种光。" % [skin_name, price_text]
 
 # ⑧ 战报回放（04 §⑧：事件流重演，纯演出不可改结果；最小版 = 节拍日志重演）
 const HISTORY_REPLAY := "重演"

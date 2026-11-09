@@ -58,8 +58,9 @@ func _ready() -> void:
 	hide()
 
 ## 打开弹层（数据来自运营配置价格表，06 §3.2：定价是运营侧数据）。
-func open(pack_id: String, pack_name: String, price_text: String) -> void:
+## line_override：非战役商品（如外观皮肤，06 §7）传入自有叙事化文案行；空 = 战役句式。
+func open(pack_id: String, pack_name: String, price_text: String, line_override: String = "") -> void:
 	_pack_id = pack_id
 	goods_label.text = "%s · %s" % [pack_name, price_text]
-	line_label.text = TextsZh.shop_line(pack_name, price_text)
+	line_label.text = line_override if line_override != "" else TextsZh.shop_line(pack_name, price_text)
 	visible = true

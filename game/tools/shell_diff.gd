@@ -50,10 +50,16 @@ static func _write(path: String, content: String) -> void:
 		f.store_string(content)
 
 ## 单壳整局：同种子 + 同 bot 指令序列（经壳探针下发），返回 {json, count, result}。
+## board_preset：可选板预置回调（如换肤禁区断言预写外观旗标，06 §4）——在 SM 建组前调用，
+## 预置只许写与战斗逻辑无关的键；断言方负责证明事件流逐字节一致。
 static func run_battle(tree: SceneTree, shell_kind: StringName, seed: int, bot_seed: int,
-		auto_mix: bool) -> Dictionary:
+		auto_mix: bool, board_preset: Callable = Callable()) -> Dictionary:
 	var stream := EventStream.new()
 	var board := Board.new(stream)
+	var preset_anchor := 0
+	if board_preset.is_valid():
+		board_preset.call(board, stream)
+		preset_anchor = stream.tail() # 预置（如换肤写板）在对局锚点之前：比对只覆盖同指令对局段
 	var sm := EncounterSM.new(board, stream, Rng.new(seed), "campaign01")
 	var agent := AutoAgent.new()
 	# 序章带入（与 main.gd 同一脚本化遭遇）：补给药水 ×2 + 见证撤销旗标
@@ -93,7 +99,9 @@ static func run_battle(tree: SceneTree, shell_kind: StringName, seed: int, bot_s
 			var pick := enabled[bot.range_int(0, enabled.size() - 1)]
 			shell.press_action_index(pick)
 		await tree.process_frame
-	var json := JSON.stringify(stream.all(), "", true, true)
+	# 有预置时比对锚点后的对局段（换肤禁区断言：预置写板差异属对局外动作，06 §4 比对口径=同指令对局段）
+	var events: Array = stream.since(preset_anchor) if preset_anchor > 0 else stream.all()
+	var json := JSON.stringify(events, "", true, true)
 	var out := {"json": json, "count": stream.size(), "result": str(sm.result())}
 	shell.queue_free()
 	await tree.process_frame

@@ -48,6 +48,7 @@ func _init() -> void:
 	test_riddle_maze()
 	test_entitlements()
 	test_ops_config()
+	test_cosmetics()
 	call_deferred("_async_shell_tests")
 
 func _async_shell_tests() -> void:
@@ -55,6 +56,8 @@ func _async_shell_tests() -> void:
 	await test_landscape_shell()
 	await test_landscape_story()
 	await test_shell_diff()
+	await test_cosmetic_neutral()
+	await test_cosmetics_ui()
 	await test_ui_screens()
 	await test_home_hotspots()
 	await test_home_bar_toggle()
@@ -3130,6 +3133,69 @@ func test_ops_config() -> void:
 	check(fp_before != "" and fp_before == fp_on and fp_on == fp_off,
 		"策略切换内容零改动：限免开/关两态 packs/arena 逐文件一致（白皮书 §10.4 运营轨不动内容图）")
 
+# ---------------------------------------------------------------- 外观系统（06 §3/§7 外观商品位；07 §3 v1.2；10 §4 v1.1）
+
+func test_cosmetics() -> void:
+	print("[cosmetics]")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var reg := Cosmetics.load_registry()
+	check(reg.size() == 3, "皮肤注册表数据驱动加载：金墨/褪墨灰/拾遗铜辉（06 §7 运营侧数据文件）")
+	var cos := Cosmetics.new(board, stream, reg)
+	check(cos.default_skin_id() == "gilded_ink", "默认皮肤=金墨（注册表 default 指定，非代码写死）")
+	check(cos.is_owned("gilded_ink") and cos.equipped_id() == "gilded_ink", "起手即有默认皮肤且为当前装备")
+	check(not cos.is_owned("faded_ink_gray") and not cos.is_owned("salvage_copper"),
+		"集齐奖励/商店皮肤初始未持有")
+	# 装备门槛：未持有/未登记均拒绝
+	check(not cos.equip("faded_ink_gray"), "未持有皮肤不可装备")
+	check(not cos.equip("ghost_skin"), "未登记皮肤不可装备（注册表数据驱动）")
+	# 命名空间权限：内容包直写外观旗标被拒（07 §3 v1.2：仅 system 可写）
+	check(not board.write("global.cosmetic.dice_skin", "salvage_copper",
+		{"event_id": 1, "node_id": "N1-1", "pack_id": "campaign01"}),
+		"内容包写外观旗标被拒（07 §3 v1.2 仅 system）")
+	check(cos.equipped_id() == "gilded_ink", "越权写入未生效（仍默认皮肤）")
+	# 商店购买：写外观旗标 + 单号溯源（06 §2.3/§7）
+	check(cos.shop_purchase("salvage_copper", "rcpt_t001"), "商店购买点亮持有（06 §7 外观商品位）")
+	check(cos.is_owned("salvage_copper"), "购买即持有：写入即生效无需重启（06 §3.1）")
+	var prov := board.provenance_of("global.cosmetic.owned.salvage_copper")
+	check(str(prov.get("granted_by", "")) == "shop" and str(prov.get("receipt_id", "")) == "rcpt_t001"
+		and str(prov.get("pack_id", "")) == "system",
+		"购买写板溯源：购买单号 + system 写权限（06 §2.3 / 07 §3）")
+	check(not cos.shop_purchase("salvage_copper", "rcpt_t002"), "购买点亮幂等（已持有不重复发）")
+	# 装备 / 卸下
+	check(cos.equip("salvage_copper") and cos.equipped_id() == "salvage_copper",
+		"装备：写 global.cosmetic.dice_skin（07 §2 外观旗标）")
+	check(cos.unequip() and cos.equipped_id() == "gilded_ink", "卸下：回落默认皮肤")
+	# 集齐奖励（10 §4 白名单外观；v1.1：聚合全包 lore 判定，系列 id 以 tech/02 §10 注册值为准）
+	var lore_defs: Array = [
+		{"id": "fd_1", "series": "fatedie_study"}, {"id": "fd_2", "series": "fatedie_study"},
+		{"id": "wf_1", "series": "weaver_fragments"}]
+	var prov2 := {"event_id": 2, "node_id": "R-2", "pack_id": "riddle_maze"}
+	board.unlock_lore("fd_1", prov2)
+	check(cos.check_codex_rewards(lore_defs).is_empty() and not cos.is_owned("faded_ink_gray"),
+		"系列未集齐：奖励不到账")
+	board.unlock_lore("fd_2", prov2)
+	check(cos.check_codex_rewards(lore_defs) == ["faded_ink_gray"] and cos.is_owned("faded_ink_gray"),
+		"命骰考集齐 → 褪墨灰到账（10 §4 外观奖励，纯演出）")
+	prov = board.provenance_of("global.cosmetic.owned.faded_ink_gray")
+	check(str(prov.get("granted_by", "")) == "codex" and str(prov.get("series", "")) == "fatedie_study",
+		"集齐奖励溯源：granted_by=codex + 系列 id（10 §4 v1.1）")
+	check(cos.check_codex_rewards(lore_defs).is_empty(), "集齐奖励幂等（已点亮不重复发）")
+	# 调色板：换肤换色（纯呈现取色口），卸下回落默认
+	var pal_default := Cosmetics.palette_of(null)
+	check(cos.equip("salvage_copper"), "装备拾遗铜辉")
+	check(Cosmetics.palette_of(board)["face"] != pal_default["face"], "换肤 = 换调色板（渲染壳唯一取色口）")
+	cos.unequip()
+	check(Cosmetics.palette_of(board)["face"] == pal_default["face"], "卸下回落默认调色板")
+	# 存档往返：外观旗标随 Board 全量序列化（07 §4.1；老存档无此键 = 默认皮肤，兼容不迁移）
+	cos.equip("salvage_copper")
+	var snap := board.serialize()
+	var board3 := Board.new(EventStream.new())
+	board3.deserialize(snap)
+	check(str(board3.read("global.cosmetic.dice_skin", "")) == "salvage_copper"
+		and bool(board3.read("global.cosmetic.owned.salvage_copper", false)),
+		"存档往返：外观旗标随 Board 全量序列化（07 §4.1）")
+
 # ---------------------------------------------------------------- 子游戏 UI 流程（04 §6：入口卡 → 整备 → 连战 → ⑨ 结算 → 回主屏）
 
 func test_subgame_flow() -> void:
@@ -5108,4 +5174,104 @@ func test_home_real_input() -> void:
 	await process_frame
 	check(not home.is_bar_collapsed() and home.fallback_bar.visible, "真实输入：toggle 把手展开还原（12 §5）")
 	home.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 换肤禁区硬断言（06 §3/§4：皮肤永不触碰骰子与事件流结果）
+
+func test_cosmetic_neutral() -> void:
+	print("[cosmetic_neutral]")
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var equip_copper := func(b: Board, s: EventStream) -> void:
+		var cos := Cosmetics.new(b, s)
+		cos.shop_purchase("salvage_copper", "rcpt_neutral")
+		cos.equip("salvage_copper")
+	var equip_gray := func(b: Board, s: EventStream) -> void:
+		var cos := Cosmetics.new(b, s)
+		cos.grant("faded_ink_gray", {"granted_by": "codex", "series": "fatedie_study"})
+		cos.equip("faded_ink_gray")
+	# 断言前提：两侧皮肤配色确实不同（比对非空转——"换了肤"成立）
+	var pb1 := Board.new(EventStream.new())
+	equip_copper.call(pb1, pb1.stream)
+	var pb2 := Board.new(EventStream.new())
+	equip_gray.call(pb2, pb2.stream)
+	check(Cosmetics.palette_of(pb1)["face"] != Cosmetics.palette_of(pb2)["face"],
+		"断言前提：两侧装备不同皮肤且调色板不同")
+	# 同种子同指令序列、不同皮肤（连壳形态都不同）各跑一整局，对局段事件流逐字节比对
+	var a: Dictionary = await sd.run_battle(self, &"time", 20261109, 11, false, equip_copper)
+	var b: Dictionary = await sd.run_battle(self, &"space", 20261109, 11, false, equip_gray)
+	check(int(a["count"]) > 40 and str(a["result"]) != "",
+		"换肤对局完整跑完（事件 %d 条，结果 %s）" % [int(a["count"]), str(a["result"])])
+	check(str(a["json"]) == str(b["json"]),
+		"禁区硬断言：同种子同指令、换肤前后对局段事件流逐字节一致（06 §3/§4 付费禁区：皮肤不碰骰子）")
+
+# ---------------------------------------------------------------- 外观页 UI 与换肤渲染（06 §6；纯呈现）
+
+## 按 skin_id 点外观页按钮（测试探针路径，与点按同一信号通道）。
+func _press_cosmetic_button(iv: ScreenInventory, skin_id: String) -> void:
+	var idx := 0
+	for e: Variant in iv._skins:
+		var row := iv.cos_box.get_child(2 + idx) # 前两子节点 = 栏头 + 纯演出注记
+		if str((e as Dictionary).get("id", "")) == skin_id and row is HBoxContainer:
+			for c: Node in (row as HBoxContainer).get_children():
+				if c is Button:
+					(c as Button).pressed.emit()
+					return
+		idx += 1
+
+func test_cosmetics_ui() -> void:
+	print("[cosmetics_ui]")
+	var reg := Cosmetics.load_registry()
+	var iv: ScreenInventory = (load("res://shell/ui/screen_inventory.tscn") as PackedScene).instantiate()
+	root.add_child(iv)
+	await process_frame
+	iv.bind({"heal_potion": 1}, _load_campaign01()["items"], [], _load_campaign01()["lore"])
+	iv.bind_cosmetics(reg, ["gilded_ink"], "gilded_ink")
+	check(iv.cosmetic_entry_count() == 3, "外观页：皮肤列表按注册表入列（06 §6 外观页挂 ⑥ 背包图鉴）")
+	check(iv.cosmetic_button_text("gilded_ink") == TextsZh.COSMETIC_UNEQUIP, "当前装备皮肤 → 卸下按钮")
+	check(iv.cosmetic_button_text("faded_ink_gray") == TextsZh.COSMETIC_NOT_OWNED,
+		"未获得（集齐途径）灰显：呈现获得条件，不出购买入口")
+	check(iv.cosmetic_button_text("salvage_copper").contains(TextsZh.LOCK_ACQUIRE),
+		"商店皮肤呈现获取入口（06 §7 外观商品位 ¥6 占位）")
+	# 装备信号（写板由 main → Cosmetics 落，本屏只转发，godot-dev §2）
+	iv.bind_cosmetics(reg, ["gilded_ink", "faded_ink_gray"], "gilded_ink")
+	await process_frame # queue_free 延迟回收：隔帧再点
+	var equipped: Array = []
+	iv.equip_requested.connect(func(s: String) -> void: equipped.append(s))
+	_press_cosmetic_button(iv, "faded_ink_gray")
+	check(equipped == ["faded_ink_gray"], "外观页装备：转发 skin_id（写板走 core 通道）")
+	var unequips: Array = []
+	iv.unequip_requested.connect(func() -> void: unequips.append(1))
+	iv.bind_cosmetics(reg, ["gilded_ink", "faded_ink_gray"], "faded_ink_gray")
+	await process_frame
+	_press_cosmetic_button(iv, "faded_ink_gray")
+	check(unequips.size() == 1, "外观页卸下：回落默认皮肤")
+	# 购买半屏弹层（复用现有 ShopPopup，06 §6 + 04 §3.3：不离开当前界面情境）
+	var bought: Array = []
+	iv.skin_purchase_requested.connect(func(s: String) -> void: bought.append(s))
+	_press_cosmetic_button(iv, "salvage_copper")
+	await process_frame
+	check(iv.skin_popup.visible, "商店皮肤 → 半屏弹层购买（复用现有购买弹层，06 §6）")
+	iv.skin_popup.confirm_button.pressed.emit()
+	check(bought == ["salvage_copper"], "购买确认转发 skin_id（写板+单号溯源由 core 落，06 §2.3）")
+	iv.queue_free()
+	await process_frame
+	# 换肤渲染：托盘快掷按当前皮肤换配色与描边（纯呈现；渲染层对规则无感）
+	var stream_c := EventStream.new()
+	var board_c := Board.new(stream_c)
+	var cos_c := Cosmetics.new(board_c, stream_c)
+	cos_c.shop_purchase("salvage_copper", "rcpt_ui")
+	cos_c.equip("salvage_copper")
+	var sh: EncounterPortrait = \
+		(load("res://shell/portrait/encounter_portrait.tscn") as PackedScene).instantiate()
+	root.add_child(sh)
+	await process_frame
+	sh.bind_story(stream_c, board_c, {}, {})
+	stream_c.emit(EventTypes.CHECK_ROLL, {"keep": 17, "rolls": [17], "mod": 0, "total": 17,
+		"success": true}, &"core", "N1-3")
+	await create_timer(0.6).timeout # 快掷 0.35s 落定
+	var pal := Cosmetics.palette_of(board_c)
+	check(sh.dice_label.text == "17" and sh.dice_label.get_theme_color("font_color") == pal["face"],
+		"托盘快掷按当前皮肤换配色（纯呈现，不动逻辑）")
+	check(sh.dice_label.get_theme_color("font_outline_color") == pal["edge"], "骰面描边随皮肤（edge）")
+	sh.queue_free()
 	await process_frame
