@@ -59,6 +59,7 @@ func _async_shell_tests() -> void:
 	await test_landscape_shell()
 	await test_dice_3d()
 	await test_juice()
+	await test_audio()
 	await test_landscape_story()
 	await test_shell_diff()
 	await test_cosmetic_neutral()
@@ -1618,6 +1619,233 @@ func _run_battle_with_juice(with_juice: bool) -> String:
 	var json := JSON.stringify(stream.all(), "", true, true)
 	if jl != null:
 		jl.queue_free()
+		await process_frame
+	return json
+
+# ---------------------------------------------------------------- 音频框架 + 首批资产（14 清单 #5/#6）
+# 纯呈现层：总线/BGM 状态机/SFX 全部从事件流消费（与 JuiceLayer 同模式，零回注）；
+# 音量 = user://settings.cfg 的 ui.vol_*（12 §5：UI 偏好不写状态板）；无文件静默容错只计数。
+
+func _collect_sliders(node: Node, out: Array[HSlider]) -> void:
+	for child: Node in node.get_children():
+		if child is HSlider:
+			out.append(child as HSlider)
+		_collect_sliders(child, out)
+
+func test_audio() -> void:
+	print("[audio]")
+	# ---- 总线四路（Master 内置 + BGM/SFX/Ambient 自定义挂 Master；幂等）----
+	var am := AudioManager.new()
+	var cfg_path := "user://test_audio_settings.cfg"
+	am.settings_path = cfg_path
+	root.add_child(am)
+	await process_frame
+	for b: StringName in [&"Master", &"BGM", &"SFX", &"Ambient"]:
+		check(AudioServer.get_bus_index(b) >= 0, "总线存在：%s" % b)
+	check(AudioServer.get_bus_send(AudioServer.get_bus_index(&"BGM")) == &"Master"
+		and AudioServer.get_bus_send(AudioServer.get_bus_index(&"SFX")) == &"Master"
+		and AudioServer.get_bus_send(AudioServer.get_bus_index(&"Ambient")) == &"Master",
+		"BGM/SFX/Ambient 均挂 Master")
+	var bus_n := AudioServer.bus_count
+	am._ensure_buses()
+	check(AudioServer.bus_count == bus_n, "总线重复初始化幂等（不重复建）")
+	# ---- BGM 状态机（事件流驱动：node.enter / combat.start / state.entered=settle / story.ending）----
+	var stream := EventStream.new()
+	stream.subscribe(am.on_event)
+	check(am.bgm_state == AudioManager.BGM_NONE, "初始无 BGM（主屏静默态）")
+	stream.emit(EventTypes.NODE_ENTER, {"node_id": "N1-1", "type": "hub"}, &"graph", "N1-1")
+	check(am.bgm_state == AudioManager.BGM_CAMP, "node.enter(hub) → 营地")
+	check(am.current_bgm_asset == &"bgm_camp", "营地资产 = bgm_camp")
+	stream.emit(EventTypes.NODE_ENTER, {"node_id": "N1-1", "type": "hub"}, &"graph", "N1-1")
+	check(int(am.stats["bgm_switches"]) == 1, "同态 node.enter 不重复切换")
+	stream.emit(EventTypes.NODE_ENTER, {"node_id": "N1-3", "type": "scene"}, &"graph", "N1-3")
+	check(am.bgm_state == AudioManager.BGM_EXPLORE, "node.enter(scene) → 探索")
+	check(am.current_bgm_asset == &"bgm_camp", "探索暂共用营地垫（首批两首 BGM，14 #6 留白）")
+	stream.emit(EventTypes.NODE_ENTER, {"node_id": "N1-7", "type": "battle"}, &"graph", "N1-7")
+	check(am.bgm_state == AudioManager.BGM_EXPLORE, "战斗节点不切 BGM（整备期间不打断，等 combat.start）")
+	stream.emit(EventTypes.COMBAT_START, {"order": [], "units": {}}, &"core", "N1-7")
+	check(am.bgm_state == AudioManager.BGM_BATTLE and am.current_bgm_asset == &"bgm_battle",
+		"combat.start → 战斗（bgm_battle）")
+	stream.emit(EventTypes.STATE_ENTERED, {"state": "settle", "prev": "combat"}, &"core", "N1-7")
+	check(am.bgm_state == AudioManager.BGM_EXPLORE, "结算 state.entered → 探索（09 §1）")
+	stream.emit(EventTypes.STORY_ENDING, {"ending": "E1", "title": "墨守"}, &"graph", "E1")
+	check(am.bgm_state == AudioManager.BGM_ENDING, "story.ending → 结局（tech/02 §9）")
+	check(int(am.stats["bgm_switches"]) == 5, "BGM 切换计数 = 实际状态变迁次数")
+	am.to_home()
+	check(am.bgm_state == AudioManager.BGM_NONE and am.current_bgm_asset == &"",
+		"回主屏 BGM 收止（主屏无常驻 BGM）")
+	# ---- SFX 订阅映射 ----
+	stream.emit(EventTypes.CHECK_ROLL, {"keep": 12, "rolls": [12], "mod": 2, "total": 14,
+		"success": true, "key": false}, &"core")
+	check(am.sfx_count(&"dice_roll") == 1, "check.roll → 骰子滚动声")
+	await create_timer(0.6).timeout
+	check(am.sfx_count(&"dice_land") == 1, "骰子落定声（延迟 0.45s，09 §6 落定节奏）")
+	stream.emit(EventTypes.BATTLE_ATTACK, {"attacker": "pc", "target": "imp1", "hit": true,
+		"crit": false, "damage": 5}, &"core", "N1-7")
+	check(am.sfx_count(&"hit") == 1, "battle.attack 命中 → hit")
+	stream.emit(EventTypes.BATTLE_ATTACK, {"attacker": "pc", "target": "imp1", "hit": true,
+		"crit": true, "damage": 11}, &"core", "N1-7")
+	check(am.sfx_count(&"crit") == 1 and am.sfx_count(&"hit") == 1, "暴击 → crit（不叠 hit）")
+	stream.emit(EventTypes.BATTLE_ATTACK, {"attacker": "pc", "target": "imp1", "hit": false,
+		"crit": false, "damage": 0}, &"core", "N1-7")
+	check(am.sfx_count(&"hit") == 1, "未命中无命中声（无资产留白）")
+	stream.emit(EventTypes.ITEM_USE, {"unit": "pc", "target": "pc", "healed": 5}, &"core", "N1-7")
+	check(am.sfx_count(&"heal") == 1, "item.use 治疗 → heal")
+	am.play_sfx(&"page")
+	am.play_ui(&"ui_click")
+	check(am.sfx_count(&"page") == 1 and am.sfx_count(&"ui_click") == 1, "翻页 / UI 点击通道（壳侧直调）")
+	check(int(am.stats["missing_files"]) == 0, "资产齐备时零缺失计数")
+	# ---- 环境声（14 #6：港口潮声主屏常播）----
+	am.set_home_ambient(true)
+	check(am.is_ambient_on() and int(am.stats["ambient_on_count"]) == 1, "主屏潮声环境声开播")
+	am.set_home_ambient(true)
+	check(int(am.stats["ambient_on_count"]) == 1, "重复开播幂等")
+	am.set_home_ambient(false)
+	check(not am.is_ambient_on(), "离主屏环境声停播")
+	# ---- 无音频文件静默容错（框架先行，不报错）----
+	var am2 := AudioManager.new()
+	am2.asset_dir = "res://assets/audio_no_such_dir"
+	root.add_child(am2)
+	await process_frame
+	var stream2 := EventStream.new()
+	stream2.subscribe(am2.on_event)
+	stream2.emit(EventTypes.NODE_ENTER, {"node_id": "N1-1", "type": "hub"}, &"graph", "N1-1")
+	stream2.emit(EventTypes.CHECK_ROLL, {"keep": 1, "rolls": [1]}, &"core")
+	await create_timer(0.6).timeout
+	am2.set_home_ambient(true)
+	check(am2.bgm_state == AudioManager.BGM_CAMP, "无文件：BGM 状态机照常切换")
+	check(am2.current_bgm_asset == &"", "无文件：无资产可播即静默")
+	check(am2.sfx_count(&"dice_roll") == 0 and am2.sfx_count(&"dice_land") == 0,
+		"无文件：SFX 静默跳过不崩溃")
+	check(int(am2.stats["missing_files"]) > 0, "无文件：缺失只计数（不报错）")
+	am2.queue_free()
+	# ---- 音量三档持久化 + 总线应用（12 §5：UI 偏好不写状态板）----
+	UiSettings.save_volume(UiSettings.KEY_VOL_MASTER, 0.5, cfg_path)
+	UiSettings.save_volume(UiSettings.KEY_VOL_BGM, 0.3, cfg_path)
+	UiSettings.save_volume(UiSettings.KEY_VOL_SFX, 0.8, cfg_path)
+	check(absf(UiSettings.load_volume(UiSettings.KEY_VOL_MASTER, cfg_path) - 0.5) < 0.001
+		and absf(UiSettings.load_volume(UiSettings.KEY_VOL_BGM, cfg_path) - 0.3) < 0.001
+		and absf(UiSettings.load_volume(UiSettings.KEY_VOL_SFX, cfg_path) - 0.8) < 0.001,
+		"三档音量写盘读回")
+	check(absf(UiSettings.load_volume(UiSettings.KEY_VOL_MASTER, "user://test_audio_missing.cfg") - 1.0) < 0.001,
+		"设置文件缺失回落默认满格 1.0")
+	UiSettings.save_screen_shake(false, cfg_path)
+	UiSettings.save_volume(UiSettings.KEY_VOL_BGM, 0.4, cfg_path)
+	check(not UiSettings.load_screen_shake(cfg_path), "音量写盘不覆盖震动键（合并写盘）")
+	am.apply_volumes()
+	check(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(&"Master")) - linear_to_db(0.5)) < 0.01
+		and absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(&"BGM")) - linear_to_db(0.4)) < 0.01
+		and absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(&"SFX")) - linear_to_db(0.8)) < 0.01,
+		"音量应用到总线 dB（Master/BGM/SFX）")
+	UiSettings.save_volume(UiSettings.KEY_VOL_MASTER, 1.0, cfg_path)
+	UiSettings.save_volume(UiSettings.KEY_VOL_BGM, 1.0, cfg_path)
+	UiSettings.save_volume(UiSettings.KEY_VOL_SFX, 1.0, cfg_path)
+	am.apply_volumes() # 复原满格，不污染后续用例
+	am.queue_free()
+	await process_frame
+	# ---- ☰ 菜单音量三档滑条（双壳同一构建器 AudioSettingsUi）----
+	var am3 := AudioManager.new()
+	am3.settings_path = cfg_path
+	root.add_child(am3)
+	var portrait: EncounterPortrait = (load("res://shell/portrait/encounter_portrait.tscn")
+		as PackedScene).instantiate()
+	portrait.audio_settings_path = cfg_path
+	root.add_child(portrait)
+	await process_frame
+	await process_frame
+	var pstream := EventStream.new()
+	var psm := EncounterSM.new(Board.new(pstream), pstream, Rng.new(11), "campaign01")
+	portrait.bind(psm, AutoAgent.new())
+	await process_frame
+	var psliders: Array[HSlider] = []
+	_collect_sliders(portrait.menu_popup, psliders)
+	check(psliders.size() == 3, "竖屏 ☰ 菜单音量三档滑条（Master/BGM/SFX）")
+	psliders[1].value = 25.0 # BGM 档
+	await process_frame
+	check(absf(UiSettings.load_volume(UiSettings.KEY_VOL_BGM, cfg_path) - 0.25) < 0.001,
+		"滑条改动写盘（BGM=25%）")
+	check(absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index(&"BGM")) - linear_to_db(0.25)) < 0.01,
+		"滑条即时应用总线（组调用 apply_volumes）")
+	psliders[1].value = 100.0 # 复原
+	portrait.queue_free()
+	await process_frame
+	var land: EncounterLandscape = (load("res://shell/landscape/encounter_landscape.tscn")
+		as PackedScene).instantiate()
+	land.audio_settings_path = cfg_path
+	root.add_child(land)
+	land.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land.position = Vector2.ZERO
+	land.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	var lstream := EventStream.new()
+	var lsm := EncounterSM.new(Board.new(lstream), lstream, Rng.new(11), "campaign01")
+	land.bind(lsm, AutoAgent.new())
+	await process_frame
+	var lsliders: Array[HSlider] = []
+	_collect_sliders(land.menu_popup, lsliders)
+	check(lsliders.size() == 3, "横屏 ☰ 菜单音量三档滑条（同一构建器，禁止复制逻辑）")
+	land.queue_free()
+	am3.queue_free()
+	await process_frame
+	# ---- 事件流零变化（14 #5 验收口径：同种子同指令，接入前后逐字节一致）----
+	var json_a: String = await _run_battle_with_audio(false)
+	var json_b: String = await _run_battle_with_audio(true)
+	check(json_a == json_b, "音频接入前后同种子同指令：事件流逐字节一致（纯呈现零污染）")
+	# ---- 首批资产（14 #6：WAV 可加载、采样率/时长断言）----
+	var expects := {
+		&"tide_loop": [8.0, 10.5], &"dice_roll": [0.4, 0.7], &"dice_land": [0.1, 0.3],
+		&"hit": [0.15, 0.35], &"crit": [0.25, 0.5], &"heal": [0.4, 0.8], &"page": [0.15, 0.4],
+		&"ui_click": [0.05, 0.15], &"bgm_camp": [29.0, 31.0], &"bgm_battle": [29.0, 31.0],
+	}
+	for asset_name: StringName in expects:
+		var path := "res://assets/audio/%s.wav" % String(asset_name)
+		check(FileAccess.file_exists(path), "资产存在：%s.wav" % String(asset_name))
+		var w := AudioStreamWAV.load_from_file(path)
+		check(w != null, "资产可加载：%s（AudioStreamWAV）" % String(asset_name))
+		if w != null:
+			var r: Array = expects[asset_name]
+			check(w.get_mix_rate() == 44100, "%s 采样率 44100Hz" % String(asset_name))
+			check(w.get_length() >= float(r[0]) and w.get_length() <= float(r[1]),
+				"%s 时长 %.2fs ∈ [%.1f, %.1f]" % [String(asset_name), w.get_length(),
+					float(r[0]), float(r[1])])
+
+## 无壳脚本化遭遇（与 _run_battle_with_juice 同种子/同指令序列风格）；
+## with_audio=true 时挂 AudioManager 订阅事件流——纯呈现消费，不触碰 core。
+func _run_battle_with_audio(with_audio: bool) -> String:
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(20261109), "campaign01")
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true,
+		{"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var am: AudioManager = null
+	if with_audio:
+		am = AudioManager.new()
+		root.add_child(am)
+		stream.subscribe(am.on_event)
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(sd.battle_def())
+	var bot := Rng.new(31)
+	var guard := 0
+	while not sm.is_over() and guard < 300:
+		guard += 1
+		var actions := sm.get_available_actions()
+		if actions.is_empty():
+			await process_frame
+			continue
+		var enabled: Array[int] = []
+		for i: int in actions.size():
+			if not bool(actions[i]["disabled"]):
+				enabled.append(i)
+		var pick := enabled[bot.range_int(0, enabled.size() - 1)]
+		sm.submit_command(sm.command_from_action(actions[pick]))
+		await process_frame
+	var json := JSON.stringify(stream.all(), "", true, true)
+	if am != null:
+		am.queue_free()
 		await process_frame
 	return json
 

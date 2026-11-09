@@ -8,6 +8,9 @@ const PATH := "user://settings.cfg"
 const SECTION := "ui"
 const KEY_HOME_BAR_COLLAPSED := "home_bar_collapsed"
 const KEY_SCREEN_SHAKE := "screen_shake"
+const KEY_VOL_MASTER := "vol_master" # 14 清单 #5：音量三档（UI 偏好，不写状态板）
+const KEY_VOL_BGM := "vol_bgm"
+const KEY_VOL_SFX := "vol_sfx"
 
 ## 主屏兜底条是否收起；默认展开（12 §5：默认展开）。
 static func load_home_bar_collapsed(path: String = PATH) -> bool:
@@ -28,6 +31,16 @@ static func load_screen_shake(path: String = PATH) -> bool:
 
 static func save_screen_shake(enabled: bool, path: String = PATH) -> void:
 	_save_key(KEY_SCREEN_SHAKE, enabled, path)
+
+## 音量档位读（14 清单 #5；0.0~1.0，读失败/键缺失回落默认满格 1.0）。
+static func load_volume(key: String, path: String = PATH) -> float:
+	var cfg := ConfigFile.new()
+	if cfg.load(path) != OK:
+		return 1.0
+	return clampf(float(cfg.get_value(SECTION, key, 1.0)), 0.0, 1.0)
+
+static func save_volume(key: String, value: float, path: String = PATH) -> void:
+	_save_key(key, clampf(value, 0.0, 1.0), path)
 
 ## 写盘合并既有键，不覆盖其它设置。
 static func _save_key(key: String, value: Variant, path: String) -> void:

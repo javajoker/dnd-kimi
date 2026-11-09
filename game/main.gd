@@ -40,6 +40,7 @@ const SCREEN_SCENES := {
 	&"ending": "res://shell/ui/screen_ending.tscn",
 }
 var stream: EventStream
+var audio: AudioManager # 音频框架（14 清单 #5：纯呈现消费事件流，纯壳侧组件）
 var board: Board
 var rng: Rng
 var entitlements: Entitlements      # 权利模型运行时（06 §2：商店/活动/成就三类点亮方）
@@ -98,6 +99,9 @@ func _ready() -> void:
 	pack = res["pack"]
 	_discover_subgames()
 	stream = EventStream.new()
+	audio = AudioManager.new() # 14 #5：先就位，_show_home 的翻页/潮声才有落点
+	add_child(audio)
+	stream.subscribe(audio.on_event) # 纯呈现订阅（与 JuiceLayer 同模式，不回注）
 	board = Board.new(stream)
 	rng = Rng.new(BATTLE_SEED)
 	# 权利运行时 + 运营配置（06 §3.2：活动开关开 → 入口自动解锁，内容包零改动）
@@ -211,6 +215,9 @@ func _swap(screen: Control) -> void:
 	current_screen = screen
 	UITheme.attach(screen) # 主题经 Control 链下发（根为普通 Node，Window.theme 穿不透）
 	add_child(screen)
+	if audio != null:
+		audio.play_sfx(&"page") # 翻页（界面切换，14 #5 SFX 通道）
+		audio.set_home_ambient(screen is ScreenHome) # 主屏常播港口潮声（14 #6）
 
 # ---------------------------------------------------------------- 窗口形态（09 §8 战役级横竖屏边界）
 
@@ -231,6 +238,8 @@ func _set_window_orientation(mode: StringName) -> void:
 
 func _show_home() -> void:
 	_set_window_orientation(ShellRouter.MODE_TIME) # 外层界面恒定竖屏（09 §8：一切离场路径恢复竖屏基准）
+	if audio != null:
+		audio.to_home() # BGM 收止（14 #5：主屏无常驻 BGM，潮声由 _swap 的 set_home_ambient 接管）
 	_in_encounter = false
 	_sub_active = false # 回主屏即子游戏离场（04 §6：离场必经结算，未到结算即放弃本次连战）
 	_sub_battling = false
@@ -279,6 +288,7 @@ func _context_hint(id: String, text: String) -> void:
 	_tutorial_mark(id)
 
 func _on_home_navigate(screen_id: StringName) -> void:
+	audio.play_ui(&"ui_click") # UI 点击音（14 #5）
 	match screen_id:
 		&"entry":
 			_show_entry()

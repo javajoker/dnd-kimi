@@ -81,6 +81,7 @@ var key_dice_label: Label
 var dice3d: Dice3D                   # 关键判定 3D 物理演出层（14 清单 #2，与竖屏同一事件源）
 var juice: JuiceLayer                # 打击感三件套 + 屏幕震动（14 清单 #3/#4，与竖屏同一组件/配置源）
 var shake_button: Button             # ☰ 菜单内震动开关（14 #4：UI 偏好不写状态板，12 §5 同机制）
+var audio_settings_path := UiSettings.PATH # ☰ 音量三档滑条设置路径（14 #5；测试可注入隔离文件）
 var key_result_label: Label
 var auto_timer: Timer
 var menu_popup: PopupPanel
@@ -342,6 +343,7 @@ func _build_menu() -> void:
 		_sync_shake_button())
 	v.add_child(shake_button)
 	_sync_shake_button()
+	AudioSettingsUi.append_to(v, audio_settings_path) # 音量三档滑条（14 #5；双壳同一构建器）
 	add_child(menu_popup)
 
 func _sync_shake_button() -> void:
@@ -350,7 +352,8 @@ func _sync_shake_button() -> void:
 
 func _open_menu() -> void:
 	_sync_shake_button()
-	menu_popup.popup_centered(Vector2i(300, 200))
+	get_tree().call_group("audio_manager", "play_ui", &"ui_click") # UI 点击音（14 #5，纯播放不产事件）
+	menu_popup.popup_centered(Vector2i(320, 380))
 
 func _set_rect(c: Control, l: float, t: float, r: float, b: float) -> void:
 	c.anchor_left = l

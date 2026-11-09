@@ -46,6 +46,9 @@ const MENU_HELP := "手势帮助"
 const MENU_CONFIRM_QUIT := "确认退出？本局进度将丢失（遭遇进行中不存档）"
 const MENU_SHAKE_ON := "屏幕震动：开"   # 14 清单 #4：震动可关（UI 偏好，不写状态板，12 §5 同机制）
 const MENU_SHAKE_OFF := "屏幕震动：关"
+const MENU_VOL_MASTER := "音量 · 主"      # 14 清单 #5：音量三档滑条（UI 偏好，12 §5 同机制）
+const MENU_VOL_BGM := "音量 · 音乐"
+const MENU_VOL_SFX := "音量 · 音效"
 
 # 打击感飘字（14 清单 #3）
 const JUICE_CRIT := "暴击"
