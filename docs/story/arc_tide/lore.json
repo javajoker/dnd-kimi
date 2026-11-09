@@ -1,0 +1,9 @@
+[
+  {
+    "id": "revoked_registry_tide",
+    "series": "revoked_registry",
+    "title": "被撤销者名录·雾码头残页",
+    "source": "arc_tide T-3 打捞沉箱",
+    "text_ref": "texts/zh-CN.json#revoked_registry_tide"
+  }
+]

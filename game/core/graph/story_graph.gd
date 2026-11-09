@@ -4,7 +4,9 @@
 #   doom_clock 到格自动触发 + once（§4.4）/ reputation requires 隐形门槛（§4.5）；
 # - 触发器扫描：任何写板（节点 on_enter/on_complete、边效果）后全量复查 doom_clock 边（35 节点量级）；
 # - 结局选择：按 endings.json 顺序求值条件，首个命中者胜，default: true 兜底（§9、战役书 §9 E4）；
-# - 一切写板经 Board（07 §1 溯源），节点进入/触发/结局产事件进事件流（07 §6）。
+# - 一切写板经 Board（07 §1 溯源），节点进入/触发/结局产事件进事件流（07 §6）；
+# - graft 支线挂接（tech/02 §2.6，M4）：graft_pack/ungraft_pack 注入/卸载支线——合并视图承载支线
+#   节点与注入边（_ns 元数据键标记来源包，支线效果/settle 写板归支线命名空间），宿主包数据不动。
 class_name StoryGraph
 extends RefCounted
 
@@ -22,6 +24,10 @@ var _clock_edges: Array = [] # 预索引全图 doom_clock 边：{node_id, idx, e
 # L3 任务/事件运行时（tech/02 §5，TP4 接入）：quest_id -> {"def": 事件定义, "state": triggered/settled}
 # 触发后事件中心可见（quest.trigger）；触发事件的 node 完成（离开）时按 settle 写板（quest.settle）。
 var _quests: Dictionary = {}
+var _quest_ns: Dictionary = {} # quest_id -> 来源包命名空间（settle 写板归属，tech/02 §2.6）
+# ---- graft 支线挂接（tech/02 §2.6，M4）：pack = 合并视图；_host_pack = 宿主原包（卸载还原用）----
+var _host_pack: Dictionary = {}
+var _grafts: Dictionary = {} # arc pack_id -> arc pack
 
 func _init(p_board: Board, p_rng: Rng, p_pack: Dictionary) -> void:
 	board = p_board
@@ -30,6 +36,52 @@ func _init(p_board: Board, p_rng: Rng, p_pack: Dictionary) -> void:
 	pack_id = str(pack.get("pack_id", ""))
 	cond = Conditions.new(board)
 	_index_clock_edges()
+
+# ---------------------------------------------------------------- graft 支线挂接（tech/02 §2.6）
+
+## 注入支线包：按 manifest.graft 把注入边与支线节点并入合并视图（宿主数据不动，PackLoader.merge_graft）。
+## 返回 { ok, errors[] }；挂接失败视图不变。权利门槛由引导层在调用前把关（06 §3.1）。
+func graft_pack(arc_pack: Dictionary) -> Dictionary:
+	var arc_id := str(arc_pack.get("pack_id", ""))
+	if _grafts.has(arc_id):
+		return {"ok": false, "errors": ["graft：包 %s 已注入（幂等拒绝）" % arc_id]}
+	if _host_pack.is_empty():
+		_host_pack = pack
+	var res := PackLoader.merge_graft(pack, arc_pack) # 以当前视图为宿主：多支线链式合并
+	if not bool(res["ok"]):
+		return res
+	_grafts[arc_id] = arc_pack
+	pack = res["view"]
+	_index_clock_edges()
+	return res
+
+## 卸载支线包：注入边与支线节点随视图重建消失（§2.6 卸载语义）。返回是否原本已注入。
+func ungraft_pack(arc_id: String) -> bool:
+	if not _grafts.has(arc_id):
+		return false
+	_grafts.erase(arc_id)
+	_rebuild_view()
+	return true
+
+func grafted_packs() -> Array:
+	return _grafts.keys()
+
+## 视图重建 = 宿主原包 + 全部支线逐一注入（卸载即还原宿主图，宿主数据全程未动）。
+func _rebuild_view() -> void:
+	if _host_pack.is_empty():
+		return
+	pack = _host_pack
+	for arc_id: String in _grafts:
+		var res := PackLoader.merge_graft(pack, _grafts[arc_id])
+		if not bool(res["ok"]):
+			push_error("StoryGraph: 重建视图注入 %s 失败：%s" % [arc_id, ";".join(res["errors"] as Array)])
+			continue
+		pack = res["view"]
+	_index_clock_edges()
+
+## 节点来源命名空间（§2.6：支线节点效果解析到支线包命名空间；宿主节点 = pack_id）。
+func _ns_of(node_id: String) -> String:
+	return str((pack.get("nodes", {}) as Dictionary).get(node_id, {}).get("_ns", pack_id))
 
 # ---------------------------------------------------------------- 进入与遍历
 
@@ -50,9 +102,9 @@ func is_at_ending() -> bool:
 ## item 边：持有 → 主路；未持有且有 fallback → 以 {to: fallback} 变体出现；无 fallback 则不显形（§4.3）。
 func available_edges() -> Array:
 	var out: Array = []
-	var ctx := {"pack_id": pack_id}
 	for edge: Variant in current().get("edges", []):
 		var e: Dictionary = edge
+		var ctx := {"pack_id": _edge_ns(e)} # 注入边 requires 归支线命名空间（§2.6）；普通边归当前节点来源包
 		match str(e.get("type", "")):
 			"choice", "reputation":
 				if _requires_ok(e, ctx):
@@ -72,22 +124,24 @@ func available_edges() -> Array:
 	return out
 
 ## 走一条非检定边：先结算离开节点的 on_complete，再边效果，再触发器扫描，最后进入目标。
+## 边效果命名空间：graft 注入边携带 _ns（效果归支线包，§2.6）；普通边归所属节点来源包。
 func take_edge(edge: Dictionary) -> void:
 	_scan_choice_quests(edge) # choice 触发的事件在离点前按所选边登记（tech/02 §5 trigger.choice）
 	_leave_current()
-	_apply(edge.get("effects", []), current_id)
+	_apply(edge.get("effects", []), current_id, _edge_ns(edge))
 	_scan_triggers()
 	_enter(str(edge.get("to", "")))
 
 ## 检定边成败双路结算（§4.2：差异体现在 success/failure 目标与效果）。
 func resolve_check(edge: Dictionary, success: bool) -> void:
 	_leave_current()
+	var ns := _edge_ns(edge)
 	if success:
-		_apply(edge.get("success_effects", []), current_id)
+		_apply(edge.get("success_effects", []), current_id, ns)
 		_scan_triggers()
 		_enter(str(edge.get("success", "")))
 	else:
-		_apply(edge.get("failure_effects", []), current_id)
+		_apply(edge.get("failure_effects", []), current_id, ns)
 		_scan_triggers()
 		_enter(str(edge.get("failure", "")))
 
@@ -343,15 +397,19 @@ func _leave_current() -> void:
 	_apply(current().get("on_complete", []), current_id)
 	_settle_quests_at(current_id)
 
-func _apply(effects: Array, node_id: String) -> void:
+func _apply(effects: Array, node_id: String, ns: String = "") -> void:
 	if effects.is_empty():
 		return
 	cond.apply_effects(effects, {
-		"pack_id": pack_id,
+		"pack_id": ns if not ns.is_empty() else _ns_of(node_id), # 支线节点/注入边效果归来源包（§2.6）
 		"node_id": node_id,
 		"event_id": board.stream.tail(),
 		"source": "graph",
 	})
+
+## 边来源命名空间：graft 注入边携带 _ns；普通边归当前节点来源包（§2.6）。
+func _edge_ns(edge: Dictionary) -> String:
+	return str(edge.get("_ns", _ns_of(current_id)))
 
 func _requires_ok(edge: Dictionary, ctx: Dictionary) -> bool:
 	if not edge.has("requires"):
@@ -439,7 +497,7 @@ func _scan_node_quests(node_id: String) -> void:
 			"auto":
 				_trigger_quest(def)
 			"hidden":
-				if cond.evaluate(trig.get("requires", {}), {"pack_id": pack_id}):
+				if cond.evaluate(trig.get("requires", {}), {"pack_id": str(def.get("_ns", pack_id))}):
 					_trigger_quest(def)
 
 ## 选择边离点前登记 choice 触发：trigger.node = 当前节点 且 label 匹配所选边（§5）。
@@ -466,11 +524,13 @@ func _trigger_quest(def: Dictionary) -> void:
 	if qid.is_empty() or _quests.has(qid):
 		return # 每事件只触发一次（once 语义，与 §4.4 一致）
 	_quests[qid] = {"def": def.duplicate(true), "state": "triggered"}
+	_quest_ns[qid] = str(def.get("_ns", pack_id)) # settle 写板归来源包命名空间（§2.6）
 	board.stream.emit(EventTypes.QUEST_TRIGGER, {"id": qid, "name": str(def.get("name", qid)),
 		"objective": str(def.get("objective", "")), "node": str(def.get("node", ""))},
 		&"graph", current_id)
 
 ## 节点完成（离开）时结算以该节点为落点的已触发事件：按 settle 写板（§5）。
+## settle 效果归事件来源包命名空间（graft 支线事件写本包旗标，§2.6）。
 func _settle_quests_at(node_id: String) -> void:
 	for qid: String in _quests:
 		var q: Dictionary = _quests[qid]
@@ -479,7 +539,7 @@ func _settle_quests_at(node_id: String) -> void:
 		q["state"] = "settled"
 		board.stream.emit(EventTypes.QUEST_SETTLE, {"id": qid,
 			"name": str((q["def"] as Dictionary).get("name", qid))}, &"graph", node_id)
-		_apply((q["def"] as Dictionary).get("settle", []), node_id)
+		_apply((q["def"] as Dictionary).get("settle", []), node_id, str(_quest_ns.get(qid, "")))
 
 # ---------------------------------------------------------------- 快照（07 §4.1：进度随 meta 入存档）
 
@@ -504,6 +564,7 @@ func deserialize(snap: Dictionary) -> void:
 	for key: Variant in snap.get("fired_triggers", []):
 		_fired_triggers[str(key)] = true
 	_quests.clear()
+	_quest_ns.clear()
 	var defs := {}
 	for ev: Variant in pack.get("events", []):
 		defs[str((ev as Dictionary).get("id", ""))] = ev
@@ -511,3 +572,4 @@ func deserialize(snap: Dictionary) -> void:
 		if defs.has(str(qid)):
 			_quests[str(qid)] = {"def": (defs[str(qid)] as Dictionary).duplicate(true),
 				"state": str(snap["quests"][qid])}
+			_quest_ns[str(qid)] = str((defs[str(qid)] as Dictionary).get("_ns", pack_id))

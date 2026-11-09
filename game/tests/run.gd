@@ -44,6 +44,8 @@ func _init() -> void:
 	test_story_runtime()
 	test_story_vm()
 	test_subgame_arena()
+	test_arc_tide()
+	test_riddle_maze()
 	test_entitlements()
 	test_ops_config()
 	call_deferred("_async_shell_tests")
@@ -437,6 +439,20 @@ func test_packlint() -> void:
 		"负例：伏击节拍引用未登记敌人 V11 必报 FAIL")
 
 # ---------------------------------------------------------------- StoryGraph（tech/02 §3/§4/§9）
+
+## 子游戏卡容器（card_<pid>，M4 双卡在架后按包寻址，screen_entry.bind_subgames）。
+func _subgame_card(entry: ScreenEntry, pid: String) -> VBoxContainer:
+	return entry.subgame_box.get_node_or_null("card_" + pid) as VBoxContainer
+
+## 卡内参战按钮数（HBoxContainer 行内 Button）。
+func _enter_buttons(card_box: VBoxContainer) -> int:
+	var n := 0
+	for child: Node in card_box.get_children():
+		if child is HBoxContainer:
+			for b: Node in child.get_children():
+				if b is Button:
+					n += 1
+	return n
 
 ## 在可走边中按目标节点找边。
 func _edge_to(graph: StoryGraph, to: String) -> Dictionary:
@@ -2788,6 +2804,201 @@ func test_subgame_arena() -> void:
 		"败北场次不写场次旗标（失败即分支）")
 	check(int(b2.read("arena.best", 0)) == 1, "败北收场：最佳纪录 = 已完成场次（1）")
 
+# ---------------------------------------------------------------- 支线包 arc_tide（tech/02 §2.6 graft、§12 V14；docs/story/04-支线-雾码头的回声.md）
+
+func _load_arc_tide() -> Dictionary:
+	var res := PackLoader.load_pack("res://packs/arc_tide")
+	check(res["ok"], "arc_tide 包加载成功：%s" % ";".join(res["errors"]))
+	return res["pack"]
+
+func test_arc_tide() -> void:
+	print("[arc_tide]")
+	var host := _load_campaign01()
+	var arc := _load_arc_tide()
+	if arc.is_empty():
+		return
+	var manifest: Dictionary = arc["manifest"]
+	check(str(manifest["pack_type"]) == "arc", "manifest pack_type=arc（tech/02 §2）")
+	var graft: Dictionary = manifest["graft"]
+	check(str(graft["into"]) == "campaign01" and str(graft["node"]) == "N1-1"
+		and str((graft["edge"] as Dictionary)["to"]) == "T-1", "graft 声明：挂接 campaign01/N1-1 → T-1（§2.6）")
+	check(not manifest.has("entitlement") and (manifest["monetization"] as Dictionary)["strategies"] == ["free"],
+		"支线免费：entitlement 缺省 + strategies=[free]（§2.2/§2.3）")
+	# ---- packlint：合并视图 V1~V13 + V14（§12）----
+	var issues := PacklintCore.lint_grafted(arc, host)
+	var fails: Array = []
+	for issue: Dictionary in issues:
+		if issue["level"] == PacklintCore.LEVEL_FAIL:
+			fails.append("%s: %s" % [issue["v"], issue["msg"]])
+	check(fails.is_empty(), "arc_tide lint_grafted 无 FAIL：%s" % ";".join(fails))
+	for v: String in ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V11", "V12", "V13", "V14"]:
+		check(issues.any(func(i: Dictionary) -> bool:
+			return i["v"] == v and i["level"] == PacklintCore.LEVEL_PASS), "arc_tide %s PASS" % v)
+	# ---- V14 负例 ----
+	var bad_node: Dictionary = arc.duplicate(true)
+	(bad_node["manifest"] as Dictionary)["graft"]["node"] = "N9-9"
+	check(PacklintCore.lint_grafted(bad_node, host).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V14" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：graft.node 宿主不存在 V14 必报 FAIL")
+	var bad_to: Dictionary = arc.duplicate(true)
+	(bad_to["manifest"] as Dictionary)["graft"]["edge"]["to"] = "T-9"
+	check(PacklintCore.lint_grafted(bad_to, host).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V14" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：graft.edge.to 非本包节点 V14 必报 FAIL")
+	var bad_collide: Dictionary = arc.duplicate(true)
+	(bad_collide["nodes"] as Dictionary)["N1-1"] = (bad_collide["nodes"] as Dictionary)["T-1"]
+	(bad_collide["node_order"] as Array).append("N1-1")
+	check(PacklintCore.lint_grafted(bad_collide, host).any(func(i: Dictionary) -> bool:
+		return i["v"] == "V14" and i["level"] == PacklintCore.LEVEL_FAIL),
+		"负例：支线节点 id 与宿主冲突 V14 必报 FAIL（命名空间独立）")
+	# ---- graft 注入 / 显隐 / 卸载（§2.6）----
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var graph := StoryGraph.new(board, Rng.new(42), host)
+	graph.start()
+	graph.take_edge(_edge_to(graph, "N0-2"))
+	graph.resolve_check(graph.available_edges()[0], true)
+	graph.take_edge(_edge_to(graph, "N0-4"))
+	graph.take_edge(_edge_to(graph, "N1-1"))
+	check(_edge_to(graph, "T-1").is_empty(), "包未注入：支线边不显形（包缺失 = 主线不变，§2.6）")
+	var host_n11_edges := ((host["nodes"]["N1-1"] as Dictionary)["edges"] as Array).size()
+	var host_node_count := (host["nodes"] as Dictionary).size()
+	check(bool(graph.graft_pack(arc)["ok"]), "graft 注入成功（merge_graft 校验通过）")
+	check(((graph.pack["nodes"]["N1-1"] as Dictionary)["edges"] as Array).size() == host_n11_edges + 1,
+		"注入边只入合并视图；宿主包数据不动（§2.6）")
+	check((host["nodes"] as Dictionary).size() == host_node_count, "宿主包节点数不变（不动主线数据）")
+	check(_edge_to(graph, "T-1").is_empty(), "未持潮汐表：注入边不显形（§4.3 item 边无 fallback 即隐）")
+	board.give_item("half_tide_table", 1, {"event_id": stream.tail(), "node_id": "N1-1", "pack_id": "campaign01"})
+	var e_tide := _edge_to(graph, "T-1")
+	check(not e_tide.is_empty() and str(e_tide.get("label", "")) == "循着潮汐表的指引",
+		"持潮汐表：注入边显形（graft.edge label 上屏）")
+	# ---- 支线全流程（跨包走图；检定/战斗遭遇/奖励/收束）----
+	var xp0 := Growth.xp(board) # 主线走路已有经验入账，支线断言按增量口径
+	graph.take_edge(e_tide)
+	check(graph.current_id == "T-1", "注入边 → T-1（跨包走图，合并视图寻址）")
+	check(graph.quests().any(func(q: Dictionary) -> bool:
+		return q["id"] == "tide_whisper" and q["state"] == "triggered"),
+		"支线事件随注入边触发（events.json choice trigger，tech/02 §5）")
+	graph.resolve_check(graph.available_edges()[0], false) # 夜探检定失败路
+	check(graph.current_id == "T-2" and board.get_doom_clock() == 1,
+		"夜探检定失败：罚时 +1 仍达打捞战（失败即分支型式 B，§4.2）")
+	var bres := BattleDef.assemble(graph.pack, "T-2", {}, board)
+	check(bool(bres["ok"]), "打捞战遭遇组装：arc 遭遇 × 宿主墨魈系敌人/玩家模板（§2.6 合并视图复用）")
+	graph.take_edge(_edge_to(graph, "T-3")) # 战后唯一出边
+	check(board.has_lore("revoked_registry_tide"), "捞起名录残页：lore → global.lore（§4.6）")
+	check(board.get_rep("salvage") == 1, "拾遗行会声望 +1（rep.salvage 全局白名单）")
+	check(Growth.xp(board) == xp0 + 40, "残页经验 +40 汇入成长（tech/04 §8 规则1）")
+	graph.take_edge(_edge_to(graph, "T-4"))
+	check(board.read("arc_tide.done") == true, "收束写旗标 arc_tide.done（支线命名空间，07 §3）")
+	check(not board.has("campaign01.done"), "支线旗标不污染主线命名空间（V7/07 §3）")
+	graph.take_edge(_edge_to(graph, "N1-1"))
+	check(graph.current_id == "N1-1", "收束回主线 N1-1（支线终点边指回宿主节点，§2.6）")
+	check(Growth.xp(board) == xp0 + 60, "支线事件 settle：xp +20（离开 T-4 时结算，tech/02 §5）")
+	check(_edge_to(graph, "T-1").is_empty(), "完成后支线入口隐去（graft.edge requires flag.done=false）")
+	# ---- 卸载：注入边与支线节点消失 ----
+	check(graph.ungraft_pack("arc_tide"), "卸载已注入支线返回 true")
+	check(_edge_to(graph, "T-1").is_empty() and not (graph.pack["nodes"] as Dictionary).has("T-1"),
+		"卸载包：注入边与支线节点消失，宿主图还原（§2.6 卸载语义）")
+	check(not graph.ungraft_pack("arc_tide"), "重复卸载返回 false（幂等）")
+	graph.graft_pack(arc)
+	check(not bool(graph.graft_pack(arc)["ok"]), "重复注入幂等拒绝")
+	graph.ungraft_pack("arc_tide")
+	# ---- 仿真不回归：注入支线后主战役四结局全集保持（arc 不影响主线结局分布）----
+	var view: Dictionary = PackLoader.merge_graft(host, arc)["view"]
+	var endings := {}
+	var all_ok := true
+	for i: int in 24:
+		var lone := i % 4 == 2
+		var ngp := i % 2 == 1
+		var detour := i % 12 == 4 and not lone and not ngp
+		var r := StoryBot.run(view, 1000 + i * 7919, ngp, lone, detour)
+		if not r["ok"]:
+			all_ok = false
+			continue
+		endings[str(r["ending"])] = true
+	check(all_ok, "注入支线后 24 局全部必达结局（合并视图 bot 仿真）")
+	check(endings.has("E1") and endings.has("E2") and endings.has("E3") and endings.has("E4")
+		and endings.size() == 4, "注入支线后四结局全集保持（arc 不影响主线结局分布，§2.6 不并入 endings）")
+
+# ---------------------------------------------------------------- 第二子游戏 riddle_maze（docs/subgames/riddle-maze/01-概念设计.md；
+# 白皮书 §10.2：复用遭遇状态机+替换规则参数——本包验证"纯解谜房间序列零战斗"形态，tech/02 §6 maze）
+
+func test_riddle_maze() -> void:
+	print("[riddle_maze]")
+	var res := PackLoader.load_pack("res://packs/riddle_maze")
+	check(res["ok"], "riddle_maze 包加载成功：%s" % ";".join(res["errors"]))
+	var pack: Dictionary = res["pack"]
+	var manifest: Dictionary = pack["manifest"]
+	check(str(manifest["pack_type"]) == "subgame", "manifest pack_type=subgame（tech/02 §2）")
+	check(not manifest.has("entitlement"), "entitlement 缺省 = 随本体免费（§2.2）")
+	check((manifest["monetization"] as Dictionary)["strategies"] == ["free"],
+		"strategies=[free] 且不声明 requires（§2.3 一致性）")
+	check(bool((manifest["subgame"] as Dictionary).get("clear_as_win", false)),
+		"subgame.clear_as_win 登记（§2.5：无战斗子游戏抵达结局记 1 胜）")
+	check((pack["encounters"] as Dictionary).values().all(func(e: Variant) -> bool:
+		return str((e as Dictionary).get("type", "")) == "maze"), "零战斗：全部遭遇为 maze 探索序列")
+	# ---- packlint V1~V13 ----
+	var issues := PacklintCore.lint(pack)
+	var fails: Array = []
+	for issue: Dictionary in issues:
+		if issue["level"] == PacklintCore.LEVEL_FAIL:
+			fails.append("%s: %s" % [issue["v"], issue["msg"]])
+	check(fails.is_empty(), "riddle_maze packlint V1~V13 无 FAIL：%s" % ";".join(fails))
+	for v: String in ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V11", "V12", "V13"]:
+		check(issues.any(func(i: Dictionary) -> bool:
+			return i["v"] == v and i["level"] == PacklintCore.LEVEL_PASS), "riddle_maze %s PASS" % v)
+	# ---- 失败给提示重来（tech/02 §6 retry_on_fail/hint；确定性夹具：mod -50 恒失败除非 nat20）----
+	var fail_seed := -1
+	for s: int in range(1, 200):
+		if Rng.new(s).d20() != 20:
+			fail_seed = s
+			break
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var beats1: Array = ((pack["encounters"]["RM-1"] as Dictionary)["maze"] as Dictionary)["beats"]
+	var mr := MazeRunner.new(board, stream, Rng.new(fail_seed), "riddle_maze")
+	mr.begin("RM-1", beats1, func(_skill: String) -> int: return -50, "R-1")
+	var fail_res := mr.resolve()
+	check(not bool(fail_res["success"]) and bool(fail_res.get("retry", false))
+		and str(fail_res.get("hint", "")).contains("倒着写"), "失败给提示：retry + hint 文案（§6 解谜房语义）")
+	check(mr.beat_index() == 0 and not mr.is_done(), "失败不推进节拍（原地重试，不进死路）")
+	check(int(board.read("riddle_maze.maze.RM-1.idx", 0)) == 0,
+		"重试不写节拍进度簿记（重来不重复效果，07 §4.2）")
+	check(stream.query_by_type(EventTypes.CHECK_ROLL).size() == 1, "失败拍仍产 check.roll（演出链完整）")
+	# ---- 全流程（三房间 + 通关结算；零 EncounterSM）----
+	var stream2 := EventStream.new()
+	var board2 := Board.new(stream2)
+	var runner := SubgameRunner.new(pack, board2, stream2, Rng.new(7))
+	runner.start()
+	check(runner.graph.current_id == "R-0", "进场节点 R-0（tech/02 §3）")
+	check(Entitlements.new(board2, stream2).can_access(manifest), "免费包入口可进（entitlement 缺省）")
+	runner.take_edge(0) # → R-1
+	var win_mod := func(_skill: String) -> int: return 50 # 高修正夹具：恒成功（流程验证非数值验证）
+	for enc_id: String in ["RM-1", "RM-2", "RM-3"]:
+		check(str(runner.current().get("encounter", "")) == enc_id,
+			"房间节点关联遭遇 %s（tech/02 §3 encounter 关联）" % enc_id)
+		var beats: Array = ((pack["encounters"][enc_id] as Dictionary)["maze"] as Dictionary)["beats"]
+		var mrx := MazeRunner.new(board2, stream2, Rng.new(11), "riddle_maze")
+		mrx.begin(enc_id, beats, win_mod, runner.graph.current_id)
+		while not mrx.is_done():
+			mrx.resolve()
+		check(int(board2.read("riddle_maze.maze.%s.idx" % enc_id, 0)) == beats.size(),
+			"%s 探索序列完成（节拍簿记 %d 拍）" % [enc_id, beats.size()])
+		runner.take_edge(0) # 房间出边 → 下一房间 / R-END
+	check(board2.item_count("riddle_page") == 1, "静室二拾取拍：谜面残页 ×1 进 global.inv（互通）")
+	check(runner.graph.is_at_ending() and runner.graph.current_id == "R-END", "三房间通关 → 结算节点 R-END")
+	check(int(board2.read("riddle_maze.gold", 0)) == 40, "通关金币 +40（gold 效果，tech/02 §4.6）")
+	check(board2.has_lore("fatedie_study_riddle"), "通关图鉴：命骰考·谜回廊潮位骰（global.lore 互通）")
+	check(Growth.xp(board2) == 60, "通关经验 +60 汇入成长（tech/04 §8 规则1）")
+	var gold_prov := board2.provenance_of("riddle_maze.gold")
+	check(str(gold_prov.get("pack_id", "")) == "riddle_maze", "金币写板溯源：包命名空间（07 §1/§3）")
+	runner.on_clear() # clear_as_win：抵达结局记 1 胜（main._sub_present 同口径）
+	var summary := runner.finish_run(&"victory")
+	check(int(board2.read("riddle_maze.wins", 0)) == 1 and int(summary["wins"]) == 1
+		and int(summary["best"]) == 1, "通关记 1 胜：wins/best 簿记（manifest.subgame.stat_keys）")
+	var stats := runner.stats()
+	check(int(stats["wins"]) == 1 and int(stats["gold"]) == 40, "战绩卡数据源：通关次数 + 累计金币（04 §6）")
+
 # ---------------------------------------------------------------- 权利模型运行时（06 §2/§3.2/§5；tech/02 §2.2/§2.3）
 
 func test_entitlements() -> void:
@@ -2921,17 +3132,10 @@ func test_subgame_flow() -> void:
 	m._on_home_navigate(&"entry")
 	await process_frame
 	var entry := m.current_screen as ScreenEntry
-	var card_found := false
-	var mode_buttons := 0
-	for child: Node in entry.subgame_box.get_children():
-		if child is Label and (child as Label).text.contains("竞技场连战"):
-			card_found = true
-		if child is HBoxContainer:
-			for b: Node in child.get_children():
-				if b is Button:
-					mode_buttons += 1
-	check(card_found, "② 入口卡：特殊战役书卡呈现（04 §6）")
-	check(mode_buttons == 2, "入口卡：竖屏/横屏双模式参战按钮（tech/02 §2.1 choice）")
+	var acard := _subgame_card(entry, "arena")
+	check(acard != null and (acard.get_child(0) as Label).text.contains("竞技场连战"),
+		"② 入口卡：特殊战役书卡呈现（04 §6，双卡在架按包寻址）")
+	check(_enter_buttons(acard) == 2, "入口卡：竖屏/横屏双模式参战按钮（tech/02 §2.1 choice）")
 	entry.subgame_start.emit("arena", ShellRouter.MODE_TIME)
 	await process_frame
 	check(m._sub_active and str(m.board.read("global.mode_choice.arena")) == "time",
@@ -3020,11 +3224,11 @@ func test_entitlement_flow() -> void:
 	m._on_home_navigate(&"entry")
 	await process_frame
 	var entry := m.current_screen as ScreenEntry
+	var acard := _subgame_card(entry, "arena")
 	var lock_found := false
 	var stats_found := false
 	var acquire_btn: Button = null
-	var enter_buttons := 0
-	for child: Node in entry.subgame_box.get_children():
+	for child: Node in acard.get_children():
 		if child is Label:
 			var t := (child as Label).text
 			if t.contains("守门人"):
@@ -3033,12 +3237,8 @@ func test_entitlement_flow() -> void:
 				stats_found = true
 		elif child is Button and (child as Button).text == TextsZh.LOCK_ACQUIRE:
 			acquire_btn = child
-		elif child is HBoxContainer:
-			for b: Node in child.get_children():
-				if b is Button:
-					enter_buttons += 1
 	check(stats_found, "锁定态：封面/战绩照常呈现——可见但锁定（06 §3.1，让内容成为销售页）")
-	check(lock_found and acquire_btn != null and enter_buttons == 0,
+	check(lock_found and acquire_btn != null and _enter_buttons(acard) == 0,
 		"锁定态：叙事化锁定文案 +「获取」按钮，无参战按钮、无'未购买'生硬弹窗（06 §3.1）")
 	# 硬门槛阻断：直接发参战信号被拒
 	entry.subgame_start.emit("arena", ShellRouter.MODE_TIME)
@@ -3056,20 +3256,14 @@ func test_entitlement_flow() -> void:
 	check(str(prov.get("granted_by", "")) == "shop" and str(prov.get("receipt_id", "")).begins_with("rcpt_"),
 		"购买溯源：单号随写入进状态板（06 §2.3）")
 	entry = m.current_screen as ScreenEntry
-	var enter2 := 0
-	for child: Node in entry.subgame_box.get_children():
-		if child is HBoxContainer:
-			for b: Node in child.get_children():
-				if b is Button:
-					enter2 += 1
-	check(enter2 == 2, "入口当场刷新：参战按钮出现（解锁即时生效）")
+	check(_enter_buttons(_subgame_card(entry, "arena")) == 2, "入口当场刷新：参战按钮出现（解锁即时生效）")
 	# 退款：权利置假 → 入口回锁定态、新局被拒（06 §5）
 	m.entitlements.refund("arena")
 	m._show_entry()
 	await process_frame
 	entry = m.current_screen as ScreenEntry
 	var relocked := false
-	for child: Node in entry.subgame_box.get_children():
+	for child: Node in _subgame_card(entry, "arena").get_children():
 		if child is Button and (child as Button).text == TextsZh.LOCK_ACQUIRE:
 			relocked = true
 	check(relocked and not m.entitlements.can_access(arena_manifest), "退款：入口回锁定态，不可开新局（06 §5）")
@@ -3080,13 +3274,8 @@ func test_entitlement_flow() -> void:
 	m._show_entry()
 	await process_frame
 	entry = m.current_screen as ScreenEntry
-	var enter3 := 0
-	for child: Node in entry.subgame_box.get_children():
-		if child is HBoxContainer:
-			for b: Node in child.get_children():
-				if b is Button:
-					enter3 += 1
-	check(m.entitlements.can_access(arena_manifest) and enter3 == 2,
+	check(m.entitlements.can_access(arena_manifest)
+		and _enter_buttons(_subgame_card(entry, "arena")) == 2,
 		"活动限免开关开 → 入口自动解锁（06 §3.2：点亮在运营，内容包零改动）")
 	m.queue_free()
 	await process_frame

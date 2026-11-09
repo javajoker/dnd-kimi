@@ -77,8 +77,18 @@ func on_victory() -> void:
 		board.write("%s.gold" % pack_id, int(board.read("%s.gold" % pack_id, 0)) + gold, _prov())
 	run_wins += 1
 	board.write(_stat_key("wins"), int(board.read(_stat_key("wins"), 0)) + 1, _prov())
-	stream.emit(EventTypes.LOG, {"msg": "第 %d 场告捷：金币 +%d（连胜无休整，下一场带伤上阵）" % [run_wins, gold],
-		"toast": true}, &"core", graph.current_id)
+	if gold > 0:
+		stream.emit(EventTypes.LOG, {"msg": "第 %d 场告捷：金币 +%d（连胜无休整，下一场带伤上阵）" % [run_wins, gold],
+			"toast": true}, &"core", graph.current_id)
+	else:
+		stream.emit(EventTypes.LOG, {"msg": "通关记录 +1（clear_as_win，tech/02 §2.5）",
+			"toast": true}, &"core", graph.current_id)
+
+## 抵达结局节点即通关记 1 胜（tech/02 §2.5 clear_as_win：无战斗子游戏——解谜回廊没有 EncounterSM
+## 胜利结算，抵达 ending 节点本身就是"赢"）。未声明 clear_as_win 的子游戏调用为空操作。
+func on_clear() -> void:
+	if bool(_sub_cfg().get("clear_as_win", false)):
+		on_victory()
 
 ## 连战收场（全胜/见好就收/败北）：最佳连战纪录取大写 stat_keys.best（战绩簿记，04 §6）。
 func finish_run(result: StringName) -> Dictionary:

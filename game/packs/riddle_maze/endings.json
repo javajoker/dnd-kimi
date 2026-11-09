@@ -1,0 +1,10 @@
+[
+  {
+    "id": "R-END",
+    "title": "谜底",
+    "default": true,
+    "conditions": {},
+    "content": "解开通关：回廊把谜底折进了你的抄本。",
+    "ngplus_hook": ""
+  }
+]

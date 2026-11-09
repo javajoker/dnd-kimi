@@ -162,3 +162,81 @@ static func load_pack(dir_path: String) -> Dictionary:
 		pack[fname.trim_suffix(".json")] = table
 
 	return {"ok": errors.is_empty(), "errors": errors, "warnings": warnings, "pack": pack}
+
+# ---------------------------------------------------------------- graft 支线挂接（tech/02 §2.6，M4）
+
+## 资源表合并：arc 自有条目并入合并视图；与宿主/已注入包 id 冲突 = 挂接错误（V14 命名空间独立）。
+static func _merge_table(view: Dictionary, arc_pack: Dictionary, table: String, errors: Array) -> void:
+	var arc_id := str(arc_pack.get("pack_id", ""))
+	for eid: String in (arc_pack.get(table, {}) as Dictionary).keys():
+		if (view[table] as Dictionary).has(eid):
+			errors.append("graft：%s 条目 '%s' 与宿主/已注入包 id 冲突（tech/02 §2.6 命名空间独立）"
+				% [table, eid])
+			continue
+		var entry: Dictionary = (arc_pack[table] as Dictionary)[eid]
+		entry["_ns"] = arc_id # 来源命名空间元数据（合并视图内部键，内容侧不书写，§2.6）
+		(view[table] as Dictionary)[eid] = entry
+
+## 把支线包按 manifest.graft 注入宿主包视图。返回 { ok, errors[], view }：
+## view = 宿主深拷贝 + 支线节点/事件/遭遇/资源表并入（节点/事件/注入边携带 _ns 来源键）
+## + graft.edge 追加到宿主目标节点出边表。**宿主包数据不被改动**（深拷贝合并，§2.6）。
+## endings 不并入（§9：结局仅战役包——支线收束回主线，不影响宿主结局条件）。
+static func merge_graft(host_pack: Dictionary, arc_pack: Dictionary) -> Dictionary:
+	var errors: Array[String] = []
+	var host_id := str(host_pack.get("pack_id", ""))
+	var arc_id := str(arc_pack.get("pack_id", ""))
+	var graft: Dictionary = (arc_pack.get("manifest", {}) as Dictionary).get("graft", {})
+	var into := str(graft.get("into", ""))
+	var gnode := str(graft.get("node", ""))
+	var gedge: Dictionary = graft.get("edge", {})
+	if into.is_empty() or gnode.is_empty() or gedge.is_empty():
+		errors.append("graft 缺 into/node/edge 必填字段（tech/02 §2.6）")
+	if arc_id == into:
+		errors.append("graft.into 不可等于本包 id（%s）" % arc_id)
+	elif into != host_id:
+		errors.append("graft.into '%s' 与宿主包 '%s' 不符（tech/02 §2.6）" % [into, host_id])
+	var host_nodes: Dictionary = host_pack.get("nodes", {})
+	if not gnode.is_empty() and not host_pack.is_empty() and not host_nodes.has(gnode):
+		errors.append("graft.node '%s' 在宿主包 %s 不存在（V14）" % [gnode, host_id])
+	if not gedge.is_empty():
+		if not EDGE_TYPES.has(str(gedge.get("type", ""))):
+			errors.append("graft.edge.type '%s' 非法（tech/02 §4 五类边）" % str(gedge.get("type", "")))
+		var to := str(gedge.get("to", ""))
+		if to.is_empty() or not (arc_pack.get("nodes", {}) as Dictionary).has(to):
+			errors.append("graft.edge.to '%s' 须指向本包节点（tech/02 §2.6）" % to)
+		if str(gedge.get("type", "")) == "item":
+			var item := str(gedge.get("item", ""))
+			if not (host_pack.get("items", {}) as Dictionary).has(item) \
+					and not (arc_pack.get("items", {}) as Dictionary).has(item):
+				errors.append("graft.edge 道具 '%s' 未在合并视图登记（V14/V11）" % item)
+	if not errors.is_empty():
+		return {"ok": false, "errors": errors, "view": {}}
+
+	var view: Dictionary = host_pack.duplicate(true)
+	# 节点并入（id 冲突 = 命名空间不独立，拒绝）
+	var arc_nodes: Dictionary = arc_pack.get("nodes", {})
+	for nid: String in arc_pack.get("node_order", []):
+		if (view["nodes"] as Dictionary).has(nid):
+			errors.append("graft：节点 '%s' 与宿主/已注入包 id 冲突（tech/02 §2.6 命名空间独立）" % nid)
+			continue
+		var n: Dictionary = (arc_nodes[nid] as Dictionary).duplicate(true)
+		n["_ns"] = arc_id
+		(view["nodes"] as Dictionary)[nid] = n
+		(view["node_order"] as Array).append(nid)
+	for table: String in ["encounters", "items", "characters", "skills", "effects", "enemies"]:
+		_merge_table(view, arc_pack, table, errors)
+	# 事件/旗标/图鉴并入（事件带 _ns 来源键）
+	for ev: Variant in arc_pack.get("events", []):
+		var evd: Dictionary = (ev as Dictionary).duplicate(true)
+		evd["_ns"] = arc_id
+		(view["events"] as Array).append(evd)
+	for f: Variant in arc_pack.get("flags", []):
+		(view["flags"] as Array).append(f)
+	for l: Variant in arc_pack.get("lore", []):
+		(view["lore"] as Array).append(l)
+	# 注入边追加到宿主目标节点出边表（_ns/_graft 标记来源；卸载即随视图重建消失）
+	var edge: Dictionary = gedge.duplicate(true)
+	edge["_ns"] = arc_id
+	edge["_graft"] = arc_id
+	(((view["nodes"] as Dictionary)[gnode] as Dictionary)["edges"] as Array).append(edge)
+	return {"ok": errors.is_empty(), "errors": errors, "view": view}

@@ -51,6 +51,12 @@ var _sub_battling := false
 var _sub_mode: StringName = &""
 var _sub_tail := 0                    # 子游戏开始锚点（结算汇总区间，04 §⑨）
 var _sub_snapshot: Dictionary = {}    # 子游戏遭遇进入前快照（09 §7 ☰ 恢复点）
+var _sub_gold0 := 0                   # 子游戏开始时 <ns>.gold 读数（效果投放金币的结算增量口径）
+var _sub_maze: MazeRunner = null      # 子游戏探索序列核（tech/02 §6 maze；谜回廊纯解谜复用）
+var _sub_maze_outcome := ""
+# ---- 支线（tech/02 §2.6 graft，M4）：pack_type=arc 注入主战役合并视图，宿主数据不动 ----
+var _arcs: Dictionary = {}            # pack_id -> arc pack（已发现支线包）
+var _pack_host: Dictionary = {}       # 宿主包（未注入支线；合并视图 = graph.pack）
 
 var _cli_mode: StringName = &""
 var _in_encounter := false
@@ -88,6 +94,8 @@ func _ready() -> void:
 	ops_config = Entitlements.load_ops_config()
 	entitlements.apply_activities(ops_config)
 	graph = StoryGraph.new(board, rng, pack)
+	_pack_host = pack
+	_discover_arcs()
 	stream.subscribe(_on_event)
 	_show_home()
 	if _shots:
@@ -96,6 +104,8 @@ func _ready() -> void:
 		_run_shots_m3()
 	if args.has("--m4-shots"):
 		_run_shots_m4()
+	if args.has("--m4c-shots"):
+		_run_shots_m4c()
 	if args.has("--growth-shots"):
 		_run_shots_growth()
 	if args.has("--act2-shots"):
@@ -129,6 +139,45 @@ func _discover_subgames() -> void:
 		var p: Dictionary = res["pack"]
 		if str((p["manifest"] as Dictionary).get("pack_type", "")) == "subgame":
 			_subgames[str(p["pack_id"])] = p
+
+# ---------------------------------------------------------------- 支线包（tech/02 §2.6 graft，M4；白皮书 §10.4 内容轨）
+# 发现：pack_type=arc 且 graft.into=主战役即入列；注入：权利门槛通过才 graft（06 §3.1 硬门槛，
+# 未点亮 = 不注入，宿主图与未安装逐字节一致）。合并视图 = graph.pack（宿主数据不动，PackLoader.merge_graft）。
+
+func _discover_arcs() -> void:
+	var dir := DirAccess.open("res://packs")
+	if dir == null:
+		return
+	for sub: String in dir.get_directories():
+		if sub.begins_with("_"):
+			continue
+		if sub == str(pack.get("pack_id", "")):
+			continue
+		if _subgames.has(sub):
+			continue # 子游戏已入列（pack_type 互斥）
+		var res := PackLoader.load_pack("res://packs/%s" % sub)
+		if not res["ok"]:
+			push_warning("[main] 包 %s 加载失败（跳过）：%s" % [sub, ";".join(res["errors"])])
+			continue
+		var p: Dictionary = res["pack"]
+		var manifest: Dictionary = p["manifest"]
+		if str(manifest.get("pack_type", "")) != "arc":
+			continue
+		if str((manifest.get("graft", {}) as Dictionary).get("into", "")) != str(pack.get("pack_id", "")):
+			continue # 挂接目标非本战役（多战役预留）
+		_arcs[str(p["pack_id"])] = p
+	_graft_discovered_arcs()
+
+## 注入全部已发现且权利通过的支线；NG+ 重建图时重放（权利状态随新板再判定）。
+func _graft_discovered_arcs() -> void:
+	for pid: String in _arcs:
+		var p: Dictionary = _arcs[pid]
+		if not entitlements.can_access(p["manifest"]):
+			continue # 未解锁 = 不注入（tech/02 §2.2/§2.6）
+		var gres: Dictionary = graph.graft_pack(p)
+		if not bool(gres["ok"]):
+			push_warning("[main] 支线 %s 注入失败（跳过）：%s" % [pid, ";".join(gres["errors"] as Array)])
+	pack = graph.pack # 合并视图（无注入时 = 宿主原包）：BattleDef/StoryVM/图鉴同源消费（§2.6）
 
 # ---------------------------------------------------------------- 导航（04 §2/§5：任何界面有明确来路退路）
 
@@ -460,7 +509,8 @@ func _on_ngplus_start() -> void:
 	board.write("global.lore", lore, pack_prov) # 图鉴保留（07 §2 全局白名单，任何包可写）
 	board.write("campaign01.ngplus", ng, pack_prov) # 周目数簿记（包命名空间）
 	board.give_item("codex_fragment", 1, pack_prov) # 多周目继承 ×1（战役书 §8 投放第 4 枚）
-	graph = StoryGraph.new(board, rng, pack)
+	graph = StoryGraph.new(board, rng, _pack_host) # 从宿主原包重建（tech/02 §2.6：宿主数据不动）
+	_graft_discovered_arcs() # 支线随新周目重新注入（权利随新板再判定，06 §3.1）
 	if shell != null:
 		shell.queue_free()
 		shell = null
@@ -528,7 +578,10 @@ func _show_maze_beat() -> void:
 ## 结果摘要拼入下一拍文本；等快掷落定再刷新（09 §6 普通检定 ≤0.5s 出结果）。
 func _on_maze_advance() -> void:
 	var res := _maze.resolve()
-	if str(res.get("type", "")) == "loot":
+	if bool(res.get("retry", false)):
+		# 解谜房：失败给提示原地重试（tech/02 §6 retry_on_fail/hint；campaign01 迷宫未声明，通用能力）
+		_maze_outcome = "%s %s\n\n" % [TextsZh.MAZE_BEAT_FAIL, str(res.get("hint", ""))]
+	elif str(res.get("type", "")) == "loot":
 		_maze_outcome = "%s\n\n" % TextsZh.MAZE_LOOT % [_item_name(str(res.get("item", ""))),
 			int(res.get("n", 1))]
 	else:
@@ -859,25 +912,101 @@ func _on_subgame_start(pack_id: String, mode: StringName) -> void:
 	_sub_mode = mode
 	_sub_active = true
 	_sub_battling = false
+	_sub_maze = null
 	_sub_tail = stream.tail()
+	_sub_gold0 = int(board.read("%s.gold" % pack_id, 0)) # 效果投放金币的结算增量口径（tech/02 §4.6 gold）
 	# 模式选择 = 一次分支，写入状态板（09 §3；global.mode_choice.* 白名单，07 §3 v1.1）
 	board.write("global.mode_choice.%s" % pack_id, String(mode),
 		{"event_id": stream.tail(), "node_id": graph.current_id, "pack_id": pack_id})
 	_sub.start()
 	_sub_present()
 
-## 子游戏节点呈现：ending → ⑨ 结算；battle → 整备/遭遇；其余 → 双壳故事态（StoryVM 单源）。
+## 子游戏节点呈现：ending → ⑨ 结算；battle → 整备/遭遇；explore（maze 探索序列）→ 逐拍呈现；
+## 其余 → 双壳故事态（StoryVM 单源）。
 func _sub_present() -> void:
 	var node := _sub.current()
 	var t := str(node.get("type", ""))
 	if t == "ending":
+		_sub.on_clear() # tech/02 §2.5 clear_as_win：无战斗子游戏抵达结局节点记 1 胜
 		_sub_finish(&"victory")
 		return
 	if t == "battle":
 		_sub_enter_battle()
 		return
+	if t == "explore" and _sub_maze_pending():
+		_sub_enter_maze()
+		return
 	_ensure_sub_shell()
 	_story_show(StoryVM.build(_sub.graph, board, _sub.pack))
+
+# ---- 子游戏探索序列（tech/02 §6 maze；谜回廊纯解谜房间序列——零战斗，复用 MazeRunner）----
+
+func _sub_maze_pending() -> bool:
+	var enc: Dictionary = (_sub.pack.get("encounters", {}) as Dictionary).get(
+		str(_sub.current().get("encounter", _sub.graph.current_id)), {})
+	var beats: Array = (enc.get("maze", {}) as Dictionary).get("beats", [])
+	if beats.is_empty():
+		return false
+	var enc_id := str(enc.get("id", _sub.graph.current_id))
+	return int(board.read("%s.maze.%s.idx" % [_sub.pack_id, enc_id], 0)) < beats.size()
+
+func _sub_enter_maze() -> void:
+	var enc_id := str(_sub.current().get("encounter", _sub.graph.current_id))
+	var enc: Dictionary = (_sub.pack.get("encounters", {}) as Dictionary).get(enc_id, {})
+	_sub_maze = MazeRunner.new(board, stream, rng, _sub.pack_id)
+	_sub_maze.begin(enc_id, (enc.get("maze", {}) as Dictionary).get("beats", []),
+		Callable(_sub.graph, "check_mod"), _sub.graph.current_id)
+	_sub_maze_outcome = ""
+	_sub_show_maze_beat()
+
+## 呈现当前节拍（与战役 _show_maze_beat 同一呈现口径，数据源自子游戏包）。
+func _sub_show_maze_beat() -> void:
+	if _sub_maze == null:
+		_sub_present()
+		return
+	var beat := _sub_maze.peek()
+	if beat.is_empty(): # 序列完成 → 回节点呈现出边（tech/02 §6）
+		_sub_maze = null
+		_sub_maze_outcome = ""
+		_sub_present()
+		return
+	var vm := StoryVM.build(_sub.graph, board, _sub.pack)
+	vm["type"] = "explore"
+	vm["title"] = TextsZh.MAZE_TITLE % [str(_sub.current().get("title", _sub.graph.current_id)),
+		_sub_maze.beat_index() + 1, _sub_maze.beat_count()]
+	vm["text"] = _sub_maze_outcome + str(beat.get("text", ""))
+	var label := TextsZh.STORY_CONTINUE
+	var btype := str(beat.get("type", ""))
+	if btype == "check" or btype == "ambush":
+		var skill := str(beat.get("skill", "perception"))
+		var diff := str(beat.get("difficulty", "medium"))
+		label = "%s：%s（%s DC %d · 修正 %+d）" % [TextsZh.STORY_CHECK,
+			str(TextsZh.SKILL_NAMES.get(skill, skill)), str(TextsZh.DIFF_NAMES.get(diff, diff)),
+			LightV1.dc_for(diff), _sub.graph.check_mod(skill)]
+		if btype == "ambush":
+			label = TextsZh.MAZE_AMBUSH_PREFIX + label
+	elif btype == "loot":
+		label = TextsZh.MAZE_LOOT % [_sub_item_name(str(beat.get("item", ""))), int(beat.get("n", 1))]
+	vm["edges"] = [{"type": "choice", "label": label}]
+	_ensure_sub_shell()
+	_story_show(vm)
+
+func _sub_item_name(item_id: String) -> String:
+	return str((_sub.pack.get("items", {}) as Dictionary).get(item_id, {}).get("name", item_id))
+
+## 推进当前节拍（掷骰/写板在 core）；解谜房失败给提示原地重试（tech/02 §6 retry_on_fail/hint）。
+func _on_sub_maze_advance() -> void:
+	var res := _sub_maze.resolve()
+	if bool(res.get("retry", false)):
+		_sub_maze_outcome = "%s %s\n\n" % [TextsZh.MAZE_BEAT_FAIL, str(res.get("hint", ""))]
+	elif str(res.get("type", "")) == "loot":
+		_sub_maze_outcome = "%s\n\n" % TextsZh.MAZE_LOOT % [_sub_item_name(str(res.get("item", ""))),
+			int(res.get("n", 1))]
+	else:
+		_sub_maze_outcome = (TextsZh.MAZE_BEAT_OK if bool(res.get("success", false)) \
+			else TextsZh.MAZE_BEAT_FAIL) + "\n\n"
+	await get_tree().create_timer(0.8).timeout
+	_sub_show_maze_beat()
 
 ## 子游戏故事壳：复用双壳场景（09 §8 一局一壳），绑定子游戏包与子游戏回调（与战役通道隔离）。
 func _ensure_sub_shell() -> void:
@@ -897,6 +1026,9 @@ func _ensure_sub_shell() -> void:
 		{"edge": _on_sub_story_edge, "hub": func(_a: String, _b: String) -> void: pass})
 
 func _on_sub_story_edge(idx: int) -> void:
+	if _sub_maze != null:
+		_on_sub_maze_advance() # 探索序列进行中：选项按钮 = 推进当前节拍（tech/02 §6 maze）
+		return
 	_sub.take_edge(idx)
 	_sub_present()
 
@@ -984,8 +1116,17 @@ func _sub_settle_lines(summary: Dictionary, result: StringName) -> Dictionary:
 				lines.append("获得：%s ×%d（已入背包，global.inv 互通）" % [
 					str((_sub.pack.get("items", {}) as Dictionary).get(iid, {}).get("name", iid)),
 					int(p.get("count", 1))])
+			EventTypes.LORE_UNLOCK:
+				var added: Array = p.get("added", [])
+				if not added.is_empty():
+					lines.append("图鉴新增：%s（global.lore 互通，04 §⑥）" % "、".join(added))
 	if xp > 0:
 		lines.append("经验 +%d" % xp)
+	# 效果投放金币（tech/02 §4.6 gold：解谜通关等非战斗奖励）：总量增量 - 连战胜利已报部分
+	var gold_now := int(board.read("%s.gold" % _sub.pack_id, 0))
+	var gold_fx := gold_now - _sub_gold0 - int(summary["gold"])
+	if gold_fx != 0:
+		lines.append("金币 %+d（%s.gold 累计 %d）" % [gold_fx, _sub.pack_id, gold_now])
 	if int(summary["gold"]) > 0:
 		lines.append("金币 +%d（%s.gold 累计 %d）" % [int(summary["gold"]), _sub.pack_id,
 			int(board.read("%s.gold" % _sub.pack_id, 0))])
@@ -1026,6 +1167,7 @@ func _on_sub_save_quit() -> void:
 func _sub_leave_home() -> void:
 	_sub_active = false
 	_sub_battling = false
+	_sub_maze = null
 	_sub = null
 	_show_home()
 
@@ -1036,6 +1178,8 @@ func _bindings() -> Dictionary:
 		int((pack.get("manifest", {}) as Dictionary).get("pack_version", 1))}
 	for pid: String in _subgames: # 子游戏包版本随快照绑定（07 §4.1 三方版本解耦，tech/02 §11）
 		packs[pid] = int(((_subgames[pid] as Dictionary).get("manifest", {}) as Dictionary).get("pack_version", 1))
+	for pid: String in _arcs: # 支线包版本同口径绑定（tech/02 §2.6/§11）
+		packs[pid] = int(((_arcs[pid] as Dictionary).get("manifest", {}) as Dictionary).get("pack_version", 1))
 	return {"packs": packs,
 		"rule_pack": (pack.get("manifest", {}) as Dictionary).get("rule_pack", {}),
 		"framework": "1.0.0"}
@@ -1314,6 +1458,37 @@ func _run_shots_m4() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _shot("/tmp/m4_shop.png") # 购买半屏弹层（06 §6：不离开当前界面情境）
 	print("[shots] M4 两张完成：/tmp/m4_lock.png /tmp/m4_shop.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- M4 截图（支线注入边 + 解谜房证据 /tmp，不提交）
+
+## 支线入口边（N1-1 持潮汐表 → graft 注入边显形，tech/02 §2.6）+ 谜回廊解谜房（tech/02 §6 maze）。
+func _run_shots_m4c() -> void:
+	await get_tree().create_timer(1.2).timeout
+	_on_home_navigate(&"entry")
+	await get_tree().create_timer(0.3).timeout
+	var entry := current_screen as ScreenEntry
+	entry.pick_mode(ShellRouter.MODE_TIME)
+	entry.start_requested.emit()
+	await get_tree().create_timer(0.5).timeout
+	# 支线入口边：注入在合并视图，宿主包数据不动（§2.6）
+	graph._enter("N1-1")
+	board.give_item("half_tide_table", 1,
+		{"event_id": stream.tail(), "node_id": "N1-1", "pack_id": "campaign01"})
+	_present_node()
+	await get_tree().create_timer(0.5).timeout
+	if DisplayServer.get_name() != "headless":
+		get_window().size = Vector2i(960, 760) # 加宽窗口：N1-1 四条出边（含支线注入边）同屏可见
+		get_window().move_to_center()
+		await get_tree().create_timer(0.3).timeout
+	await _shot("/tmp/m4_graft_edge.png")
+	# 谜回廊解谜房：R-0 → R-1 探索序列第 1 拍（失败给提示重来，tech/02 §6 retry_on_fail）
+	_on_subgame_start("riddle_maze", ShellRouter.MODE_TIME)
+	await get_tree().create_timer(0.4).timeout
+	_on_sub_story_edge(0)
+	await get_tree().create_timer(0.6).timeout
+	await _shot("/tmp/m4_riddle.png")
+	print("[shots] M4c 两张完成：/tmp/m4_graft_edge.png /tmp/m4_riddle.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- 主屏运营位截图（06 §6 home_promo 投放证据 /tmp，不提交）

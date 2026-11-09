@@ -1,0 +1,22 @@
+[
+  {
+    "id": "T-2",
+    "node": "T-2",
+    "type": "battle",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 6,
+    "party": [
+      { "id": "pc", "ref": "player_blank" },
+      { "id": "kelan", "ref": "companion_kelan" },
+      { "id": "laofei", "ref": "companion_laofei" }
+    ],
+    "enemies": [
+      { "id": "fiend", "ref": "ink_fiend" },
+      { "id": "imp1", "ref": "ink_imp" },
+      { "id": "imp2", "ref": "ink_imp" }
+    ],
+    "xp": 60,
+    "note": "打捞战·伏击（中）：复用 campaign01 墨魈系——墨魈 ×1 + 墨魈幼体 ×2（tech/02 §2.6 合并视图引用宿主资源表）"
+  }
+]

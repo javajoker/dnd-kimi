@@ -98,17 +98,23 @@ func bind_subgames(cards: Array) -> void:
 	for card: Variant in cards:
 		var c: Dictionary = card
 		var pid := str(c.get("pack_id", ""))
+		# 每卡一个命名容器（card_<pid>）：多子游戏共存时按包寻址（M4：arena + riddle_maze 双卡在架）
+		var card_box := VBoxContainer.new()
+		card_box.name = "card_" + pid
+		card_box.alignment = BoxContainer.ALIGNMENT_CENTER
+		card_box.add_theme_constant_override("separation", 6)
+		subgame_box.add_child(card_box)
 		var name_label := Label.new()
 		name_label.text = "%s《%s》 %s" % [TextsZh.ENTRY_SUBGAME_TAG, str(c.get("name", c.get("pack_id", ""))),
 			TextsZh.SUBGAME_LEVEL % int(c.get("level_min", 1))]
 		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		subgame_box.add_child(name_label)
+		card_box.add_child(name_label)
 		var stats_label := Label.new()
 		var st: Dictionary = c.get("stats", {})
 		stats_label.text = TextsZh.SUBGAME_STATS % [int(st.get("wins", 0)), int(st.get("best", 0))]
 		stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stats_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
-		subgame_box.add_child(stats_label)
+		card_box.add_child(stats_label)
 		if bool(c.get("locked", false)):
 			# 锁定态（06 §3.1：可见但锁定，叙事化包装）
 			var lock_label := Label.new()
@@ -117,17 +123,17 @@ func bind_subgames(cards: Array) -> void:
 			lock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			lock_label.custom_minimum_size = Vector2(340, 0)
 			lock_label.add_theme_color_override("font_color", Color(0.75, 0.68, 0.5))
-			subgame_box.add_child(lock_label)
+			card_box.add_child(lock_label)
 			var acquire_button := Button.new()
 			acquire_button.text = TextsZh.LOCK_ACQUIRE
 			acquire_button.custom_minimum_size = Vector2(150, 40)
 			acquire_button.pressed.connect(func() -> void: acquire_requested.emit(pid))
-			subgame_box.add_child(acquire_button)
+			card_box.add_child(acquire_button)
 			continue
 		var row := HBoxContainer.new()
 		row.alignment = BoxContainer.ALIGNMENT_CENTER
 		row.add_theme_constant_override("separation", 12)
-		subgame_box.add_child(row)
+		card_box.add_child(row)
 		var mode := str(c.get("mode", "choice"))
 		if mode != "space":
 			var bt := Button.new()

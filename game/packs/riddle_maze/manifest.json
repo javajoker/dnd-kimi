@@ -1,0 +1,21 @@
+{
+  "pack_id": "riddle_maze",
+  "name": "谜回廊",
+  "pack_type": "subgame",
+  "pack_version": 1,
+  "min_framework_version": "1.0.0",
+  "rule_pack": { "id": "light", "min_version": 1 },
+  "presentation": { "mode": "choice" },
+  "namespace": "riddle_maze",
+  "recommended_level": [1, 4],
+  "estimated_hours": "0.3",
+  "node_budget": 6,
+  "monetization": { "strategies": ["free"] },
+  "subgame": {
+    "rules_override": { "puzzle_mode": true },
+    "clear_as_win": true,
+    "gold_reward": [],
+    "stat_keys": { "wins": "riddle_maze.wins", "best": "riddle_maze.best" }
+  },
+  "source_doc": "docs/subgames/riddle-maze/01-概念设计.md"
+}

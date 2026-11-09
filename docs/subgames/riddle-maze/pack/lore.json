@@ -1,0 +1,9 @@
+[
+  {
+    "id": "fatedie_study_riddle",
+    "series": "fatedie_study",
+    "title": "命骰考·谜回廊潮位骰",
+    "source": "riddle_maze R-END 通关",
+    "text_ref": "texts/zh-CN.json#fatedie_study_riddle"
+  }
+]

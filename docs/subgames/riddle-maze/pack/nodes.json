@@ -1,0 +1,63 @@
+{
+  "acts": [
+    { "id": "RM", "title": "谜回廊", "role": "子游戏" }
+  ],
+  "nodes": [
+    {
+      "id": "R-0",
+      "act": "RM",
+      "type": "scene",
+      "title": "回廊入口",
+      "summary": "誊写场的地板下还沉着一条更老的回廊。门环是一枚没有数字的命骰——它不锁门，只锁答案。",
+      "edges": [
+        { "type": "choice", "label": "步入谜回廊", "to": "R-1" }
+      ]
+    },
+    {
+      "id": "R-1",
+      "act": "RM",
+      "type": "explore",
+      "title": "静室一 · 铭文",
+      "summary": "四壁写满褪色的铭文。唯有读懂它，对面的门才会显形。",
+      "encounter": "RM-1",
+      "edges": [
+        { "type": "choice", "label": "穿过静室", "to": "R-2" }
+      ]
+    },
+    {
+      "id": "R-2",
+      "act": "RM",
+      "type": "explore",
+      "title": "静室二 · 残页",
+      "summary": "石台上摊着一页谜面，墨迹未干似的。先收下它，再解开它。",
+      "encounter": "RM-2",
+      "edges": [
+        { "type": "choice", "label": "继续深入", "to": "R-3" }
+      ]
+    },
+    {
+      "id": "R-3",
+      "act": "RM",
+      "type": "explore",
+      "title": "静室三 · 命骰",
+      "summary": "最后的静室中央悬着一枚命骰，刻痕不是数字——是潮位。",
+      "encounter": "RM-3",
+      "edges": [
+        { "type": "choice", "label": "推开回廊尽头的门", "to": "R-END" }
+      ]
+    },
+    {
+      "id": "R-END",
+      "act": "RM",
+      "type": "ending",
+      "title": "谜底",
+      "summary": "门后没有宝藏室，只有一行小字：「答对的人，把回廊带走了。」你的抄本厚了一点。",
+      "on_enter": [
+        { "gold": 40 },
+        { "lore": "fatedie_study_riddle" },
+        { "xp": 60 }
+      ],
+      "edges": []
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+[
+  {
+    "id": "RM-1",
+    "node": "R-1",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 2,
+    "maze": {
+      "beats": [
+        {
+          "type": "check",
+          "skill": "investigation",
+          "difficulty": "medium",
+          "text": "铭文在火把下忽明忽暗。它似乎……是倒着写的？",
+          "retry_on_fail": true,
+          "hint": "提示：铭文是倒着写的——从最后一个字往前读。"
+        }
+      ]
+    },
+    "note": "静室一·铭文：智检定·中；retry_on_fail 失败给提示重来（tech/02 §6 解谜房语义）"
+  },
+  {
+    "id": "RM-2",
+    "node": "R-2",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "medium",
+    "max_units": 2,
+    "maze": {
+      "beats": [
+        {
+          "type": "loot",
+          "item": "riddle_page",
+          "n": 1,
+          "text": "石台上的谜面残页，墨迹未干似的。"
+        },
+        {
+          "type": "check",
+          "skill": "history",
+          "difficulty": "medium",
+          "text": "残页背面是一份年表，其中一年的位置被齐整地裁去了。",
+          "retry_on_fail": true,
+          "hint": "提示：年表缺了一页——被撤销的那一年。"
+        }
+      ]
+    },
+    "note": "静室二·残页：拾取拍 + 智检定·中"
+  },
+  {
+    "id": "RM-3",
+    "node": "R-3",
+    "type": "maze",
+    "mode": "inherit",
+    "difficulty": "hard",
+    "max_units": 2,
+    "maze": {
+      "beats": [
+        {
+          "type": "check",
+          "skill": "perception",
+          "difficulty": "hard",
+          "text": "命骰缓缓转动，刻痕深浅不一——像潮水涨落的记录。",
+          "retry_on_fail": true,
+          "hint": "提示：刻痕不是数字，是潮位。数数涨落的次数。"
+        }
+      ]
+    },
+    "note": "静室三·命骰：智检定·难（perception 属智系衍生，11 §2）"
+  }
+]

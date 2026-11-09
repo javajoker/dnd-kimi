@@ -1,0 +1,10 @@
+[
+  {
+    "id": "done",
+    "name": "回声落定",
+    "type": "bool",
+    "default": false,
+    "writers": ["T-4"],
+    "readers": ["graft 注入边 requires（完成后入口隐去，tech/02 §2.6）", "历史卷轴", "后续支线联动预留"]
+  }
+]

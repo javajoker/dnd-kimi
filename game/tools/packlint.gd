@@ -18,7 +18,20 @@ func _init() -> void:
 		print("== packlint 加载失败 ==")
 		quit(1)
 		return
-	var issues: Array = PacklintCore.lint(res["pack"])
+	var issues: Array
+	var manifest: Dictionary = res["pack"]["manifest"]
+	if manifest.has("graft"):
+		# 支线包（arc，tech/02 §2.6/§12 V14）：合并视图 lint——加载宿主包（同目录兄弟包）
+		var into := str((manifest.get("graft", {}) as Dictionary).get("into", ""))
+		var host_res := PackLoader.load_pack(dir.get_base_dir().path_join(into))
+		if not host_res["ok"]:
+			print("  [FAIL] V14：graft 目标包 %s 加载失败：%s" % [into, ";".join(host_res["errors"])])
+			print("== packlint 加载失败 ==")
+			quit(1)
+			return
+		issues = PacklintCore.lint_grafted(res["pack"], host_res["pack"])
+	else:
+		issues = PacklintCore.lint(res["pack"])
 	var fails := 0
 	var warns := 0
 	for issue: Dictionary in issues:

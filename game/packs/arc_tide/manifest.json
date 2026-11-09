@@ -1,0 +1,25 @@
+{
+  "pack_id": "arc_tide",
+  "name": "雾码头的回声",
+  "pack_type": "arc",
+  "pack_version": 1,
+  "min_framework_version": "1.0.0",
+  "rule_pack": { "id": "light", "min_version": 1 },
+  "presentation": { "mode": "choice" },
+  "namespace": "arc_tide",
+  "estimated_hours": "0.3",
+  "node_budget": 6,
+  "monetization": { "strategies": ["free"] },
+  "graft": {
+    "into": "campaign01",
+    "node": "N1-1",
+    "edge": {
+      "type": "item",
+      "item": "half_tide_table",
+      "label": "循着潮汐表的指引",
+      "to": "T-1",
+      "requires": { "flag.done": false }
+    }
+  },
+  "source_doc": "docs/story/04-支线-雾码头的回声.md"
+}

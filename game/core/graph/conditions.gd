@@ -1,7 +1,7 @@
 # 条件求值器 + 效果执行器（docs/tech/02-内容包格式规范.md §4.6 通用条件与效果词汇表）
 # 条件：flag.<id> / rep.<faction> / clock / item.<id> / alignment(ink_gt/blank_gt) / bond.<npc> /
 #       bond_max / all / any；同一条件字典内多个键为隐式 AND。
-# 效果：write+value / clock / rep.<faction> / alignment / give_item / remove_item / xp / bond.<npc> / lore
+# 效果：write+value / clock / rep.<faction> / alignment / give_item / remove_item / xp / gold / bond.<npc> / lore
 #       —— 凡 07 定义了落板键的一律经 Board 写板（自动产出对应事件；lore → global.lore，07 §2 约束）；
 #       xp 经成长系统落板 global.growth.xp（任何包汇入，tech/04 §8 规则1；跨档自动升级，11 §6）。
 class_name Conditions
@@ -107,6 +107,14 @@ func apply_effect(effect: Dictionary, ctx: Dictionary = {}) -> void:
 		elif k == "xp":
 			# xp 效果即汇入成长（tech/04 §8 规则1：子游戏经验归属问题结构消解）
 			Growth.new(_board).grant_xp(int(effect[k]), prov, source)
+		elif k == "gold":
+			# 本包命名空间金币增减（tech/02 §4.6；07 §2 货币条款：计数簿记 <ns>.gold；
+			# 负值扣减、不足钳 0——扣减不足不报错，钳位是显式语义）
+			if pack_id.is_empty():
+				push_warning("Conditions: gold 效果缺包命名空间上下文，已跳过")
+				continue
+			var gk := "%s.gold" % pack_id
+			_board.write(gk, maxi(int(_board.read(gk, 0)) + int(effect[k]), 0), prov)
 		elif k == "lore":
 			# 落板 global.lore（Set<lore_id>，07 §2 约束；全局白名单任何包可写，07 §3），
 			# Board 写板即产 lore.unlock 事件并带溯源（tech/02 §4.6）。

@@ -63,43 +63,50 @@ func peek() -> Dictionary:
 
 ## 执行当前节拍：检定/伏击掷 d20+修正 vs DC 并产 check.roll（kind=maze_check/maze_ambush），
 ## 按成败写板节拍效果；拾取经 give_item 写板（07 §1 溯源）。返回本拍结果摘要。
+## 解谜房（tech/02 §6 maze.beats retry_on_fail）：检定/伏击拍失败时若节拍声明 retry_on_fail，
+## 则**不推进节拍、不结算失败效果**，返回 {retry:true, hint}——失败给提示原地重试，不进死路。
 func resolve() -> Dictionary:
 	if is_done():
 		return {}
 	var beat: Dictionary = _beats[_idx]
-	_idx += 1
 	var btype := str(beat.get("type", BEAT_CHECK))
 	var prov := {"event_id": stream.tail(), "node_id": node_id, "pack_id": pack_id}
-	board.write(_progress_key(), _idx, prov) # 节拍进度簿记（中途离场续打不重效果，07 §4.2）
 	var out := {"type": btype, "text": str(beat.get("text", "")), "success": true}
-	match btype:
-		BEAT_CHECK, BEAT_AMBUSH:
-			var skill := str(beat.get("skill", "perception"))
-			var dc := LightV1.dc_for(str(beat.get("difficulty", "medium")))
-			var mod := int(_mod_fn.call(skill)) if _mod_fn.is_valid() else 0
-			var res := LightV1.check(rng, int(mod), dc)
-			var success := bool(res["success"])
-			out["success"] = success
-			stream.emit(EventTypes.CHECK_ROLL, {"roller": "pc",
-				"kind": "maze_ambush" if btype == BEAT_AMBUSH else "maze_check",
-				"skill": skill, "rolls": res["rolls"], "keep": res["keep"], "mod": mod,
-				"total": res["total"], "dc": dc, "success": success,
-				"key": false, # 迷宫节拍默认普通演出（09 §6；内容包可另行标记）
-				"extreme": bool(res["nat20"]) or bool(res["nat1"]),
-				"source": &"core"}, &"core", node_id)
-			if btype == BEAT_AMBUSH and str(beat.get("enemy", "")) != "":
-				stream.emit(EventTypes.LOG, {"msg": "伏击！（%s）" % str(beat["enemy"])},
-					&"core", node_id)
-			var fx: Array = beat.get("success_effects", []) if success \
-				else beat.get("failure_effects", [])
-			_apply(fx, prov)
-		BEAT_LOOT:
-			var item := str(beat.get("item", ""))
-			var n := int(beat.get("n", 1))
-			board.give_item(item, n, prov)
-			out["item"] = item
-			out["n"] = n
-			stream.emit(EventTypes.LOG, {"msg": "拾取：%s ×%d" % [item, n]}, &"core", node_id)
+	if [BEAT_CHECK, BEAT_AMBUSH].has(btype):
+		var skill := str(beat.get("skill", "perception"))
+		var dc := LightV1.dc_for(str(beat.get("difficulty", "medium")))
+		var mod := int(_mod_fn.call(skill)) if _mod_fn.is_valid() else 0
+		var res := LightV1.check(rng, int(mod), dc)
+		var success := bool(res["success"])
+		out["success"] = success
+		stream.emit(EventTypes.CHECK_ROLL, {"roller": "pc",
+			"kind": "maze_ambush" if btype == BEAT_AMBUSH else "maze_check",
+			"skill": skill, "rolls": res["rolls"], "keep": res["keep"], "mod": mod,
+			"total": res["total"], "dc": dc, "success": success,
+			"key": false, # 迷宫节拍默认普通演出（09 §6；内容包可另行标记）
+			"extreme": bool(res["nat20"]) or bool(res["nat1"]),
+			"source": &"core"}, &"core", node_id)
+		if btype == BEAT_AMBUSH and str(beat.get("enemy", "")) != "":
+			stream.emit(EventTypes.LOG, {"msg": "伏击！（%s）" % str(beat["enemy"])},
+				&"core", node_id)
+		if not success and bool(beat.get("retry_on_fail", false)):
+			out["retry"] = true
+			out["hint"] = str(beat.get("hint", "")) # 提示文案随结果回壳（tech/02 §6 hint）
+			return out # 解谜房：失败不推进、不结算失败效果（进度簿记不动，重来不重复效果）
+		var fx: Array = beat.get("success_effects", []) if success \
+			else beat.get("failure_effects", [])
+		_idx += 1
+		board.write(_progress_key(), _idx, prov) # 节拍进度簿记（中途离场续打不重效果，07 §4.2）
+		_apply(fx, prov)
+	elif btype == BEAT_LOOT:
+		var item := str(beat.get("item", ""))
+		var n := int(beat.get("n", 1))
+		_idx += 1
+		board.write(_progress_key(), _idx, prov)
+		board.give_item(item, n, prov)
+		out["item"] = item
+		out["n"] = n
+		stream.emit(EventTypes.LOG, {"msg": "拾取：%s ×%d" % [item, n]}, &"core", node_id)
 	if is_done():
 		stream.emit(EventTypes.LOG, {"msg": "探索完成（%s）" % encounter_id}, &"core", node_id)
 	return out

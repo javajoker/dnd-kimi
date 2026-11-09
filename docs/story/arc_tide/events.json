@@ -1,0 +1,10 @@
+[
+  {
+    "id": "tide_whisper",
+    "name": "雾中打捞铃",
+    "trigger": { "type": "choice", "node": "N1-1", "label": "循着潮汐表的指引" },
+    "objective": "完成雾码头夜探，捞起沉箱",
+    "node": "T-4",
+    "settle": [ { "xp": 20 } ]
+  }
+]

@@ -35,7 +35,7 @@ static func load_entitlement_registry(path: String = ENTITLEMENT_REGISTRY_PATH) 
 		if e is Dictionary and not str((e as Dictionary).get("id", "")).is_empty():
 			out.append(str((e as Dictionary)["id"]))
 	return {"ok": true, "error": "", "entitlements": out}
-const EFFECT_KEYS := ["write", "value", "clock", "alignment", "give_item", "remove_item", "xp", "lore"]
+const EFFECT_KEYS := ["write", "value", "clock", "alignment", "give_item", "remove_item", "xp", "gold", "lore"]
 const COND_KEYS := ["clock", "alignment", "bond_max", "all", "any"]
 const EFFECT_PREFIXES := ["rep.", "bond.", "clock."]
 const COND_PREFIXES := ["flag.", "rep.", "item.", "bond.", "clock."]
@@ -81,6 +81,88 @@ static func has_failures(issues: Array) -> bool:
 		if issue["level"] == LEVEL_FAIL:
 			return true
 	return false
+
+# ---------------------------------------------------------------- 支线包（arc）lint：graft 挂接（tech/02 §2.6、§12 V14，M4）
+# 口径：V14  graft 结构与命名空间独立（复用 PackLoader.merge_graft 判定，单一真相）；
+#       V1~V3 图遍历在**合并视图**（宿主 + 注入）上跑——支线节点经注入边可达宿主结局；
+#       V4/V6~V9/V11~V13 按本包口径（本包节点/事件/遭遇/旗标 vs 合并视图资源表解析）；
+#       V5 时钟代数和按合并视图合计（宿主 + 支线须共同有界），支线无结局表不做 default 检查。
+
+static func lint_grafted(arc_pack: Dictionary, host_pack: Dictionary, registry: Dictionary = {}) -> Array:
+	if registry.is_empty():
+		registry = load_entitlement_registry()
+	var issues: Array = []
+	var arc_id := str(arc_pack.get("pack_id", ""))
+	var m := PackLoader.merge_graft(host_pack, arc_pack)
+	for e: String in (m["errors"] as Array):
+		issues.append({"v": "V14", "level": LEVEL_FAIL, "msg": e})
+	if not bool(m["ok"]):
+		return issues
+	issues.append({"v": "V14", "level": LEVEL_PASS,
+		"msg": "graft 挂接：目标包 '%s' / 节点 '%s' 存在、注入边合法、命名空间独立"
+			% [str((arc_pack["manifest"] as Dictionary)["graft"]["into"]),
+				str((arc_pack["manifest"] as Dictionary)["graft"]["node"])]})
+	var view: Dictionary = m["view"]
+	issues.append_array(_v1_no_dead_end(view))
+	issues.append_array(_v2_no_unreachable(view))
+	issues.append_array(_v3_failure_path(view))
+	var scoped := _arc_scope(arc_pack, view)
+	issues.append_array(_v4_flag_closure(scoped))
+	issues.append(_v5_clock_arc(view, arc_id))
+	issues.append_array(_v6_node_budget(scoped))
+	issues.append_array(_v7_namespace(scoped))
+	issues.append_array(_v8_portrait_constraint(scoped))
+	issues.append_array(_v9_entitlement(arc_pack, registry))
+	issues.append({"v": "V10", "level": LEVEL_NA,
+		"msg": "界面闭环：九类界面入口/出口检查依赖 shell 界面实现（04 文档 §5），TP2/TP4 落地后方可数据化"})
+	issues.append_array(_v11_resource_refs(scoped))
+	issues.append_array(_v12_legal_keys(scoped))
+	issues.append_array(_v13_uses_consume(scoped))
+	return issues
+
+## 本包口径视图：本包节点（+ graft 注入边合成节点承载其效果校验）/事件/遭遇/旗标，
+## 资源表（items/characters/skills/enemies/effects/lore）取合并视图——支线可直接引用宿主表（§2.6 复用）。
+static func _arc_scope(arc_pack: Dictionary, view: Dictionary) -> Dictionary:
+	var arc_id := str(arc_pack.get("pack_id", ""))
+	var scoped := {"pack_id": arc_id, "manifest": arc_pack["manifest"], "acts": arc_pack.get("acts", []),
+		"nodes": (view.get("nodes", {}) as Dictionary).duplicate(), "node_order": [], "events": [], "encounters": {},
+		"flags": arc_pack.get("flags", []), "endings": [], "lore": view.get("lore", []),
+		"items": view.get("items", {}), "characters": view.get("characters", {}),
+		"skills": view.get("skills", {}), "effects": view.get("effects", {}),
+		"enemies": view.get("enemies", {})}
+	# nodes 取合并视图（支线事件/收束边可指回宿主节点，§2.6）；
+	# node_order 只列本包节点——V4/V6/V7 等按 node_order 圈定本包校验范围
+	for nid: String in arc_pack.get("node_order", []):
+		(scoped["node_order"] as Array).append(nid)
+	# graft 注入边 = 本包内容（其效果/条件归支线命名空间），合成节点纳入本包口径校验
+	var graft: Dictionary = (arc_pack["manifest"] as Dictionary).get("graft", {})
+	var gedge: Dictionary = graft.get("edge", {})
+	if not gedge.is_empty():
+		(scoped["nodes"] as Dictionary)["graft_edge"] = {"id": "graft_edge", "act": "", "type": "scene",
+			"title": "graft 注入边", "summary": "", "edges": [gedge]}
+		(scoped["node_order"] as Array).append("graft_edge")
+	for ev: Variant in view.get("events", []):
+		if str((ev as Dictionary).get("_ns", "")) == arc_id:
+			(scoped["events"] as Array).append(ev)
+	for eid: String in (view.get("encounters", {}) as Dictionary).keys():
+		var enc: Dictionary = view["encounters"][eid]
+		if str(enc.get("_ns", "")) == arc_id:
+			(scoped["encounters"] as Dictionary)[eid] = enc
+	return scoped
+
+## V5 支线口径：合并视图时钟代数和须有界；支线包无结局表（§9 仅战役包），default 兜底检查不适用。
+static func _v5_clock_arc(view: Dictionary, arc_id: String) -> Dictionary:
+	var pos := 0
+	for rec: Dictionary in _collect_effects(view):
+		var effect: Dictionary = rec["effect"]
+		if effect.has("clock"):
+			pos += maxi(int(effect["clock"]), 0)
+	if pos > Board.CLOCK_MAX:
+		return {"v": "V5", "level": LEVEL_FAIL,
+			"msg": "合并视图正向时钟效果代数和 +%d 超过上限 %d（宿主+支线合计越界）" % [pos, Board.CLOCK_MAX]}
+	return {"v": "V5", "level": LEVEL_PASS,
+		"msg": "合并视图时钟代数和 +%d（界 0~%d）；支线 %s 无结局表，default 兜底检查不适用（§9 仅战役包）"
+			% [pos, Board.CLOCK_MAX, arc_id]}
 
 # ---------------------------------------------------------------- 图遍历工具
 

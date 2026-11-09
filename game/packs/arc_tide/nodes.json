@@ -1,0 +1,62 @@
+{
+  "acts": [
+    { "id": "TIDE", "title": "雾码头的回声", "role": "支线" }
+  ],
+  "nodes": [
+    {
+      "id": "T-1",
+      "act": "TIDE",
+      "type": "check",
+      "title": "雾码头夜探",
+      "summary": "潮汐表上的刻痕在雾里泛着微光。你循着它走向废弃的雾码头——打捞铃在雾深处响了三声，像有人在数你的脚步。",
+      "edges": [
+        {
+          "type": "check",
+          "skill": "perception",
+          "difficulty": "medium",
+          "label": "循着铃声穿过浓雾",
+          "success": "T-2",
+          "failure": "T-2",
+          "failure_effects": [ { "clock": 1 } ]
+        }
+      ]
+    },
+    {
+      "id": "T-2",
+      "act": "TIDE",
+      "type": "battle",
+      "title": "打捞战",
+      "summary": "钩索咬住了水底的沉箱。就在木箱破开水面的一刻，雾里的影子扑了上来——墨魈领着幼体，要替誊写庭守住这口箱子。",
+      "encounter": "T-2",
+      "edges": [
+        { "type": "choice", "label": "击退伏击者，捞起沉箱", "to": "T-3" }
+      ]
+    },
+    {
+      "id": "T-3",
+      "act": "TIDE",
+      "type": "scene",
+      "title": "被撤销者名录·残页",
+      "summary": "沉箱里没有金银，只有一册被墨水泡胀的名录。被划去的名字墨迹犹新——其中一页还留着拾遗行会的押记。你把残页收进抄本。",
+      "on_enter": [
+        { "lore": "revoked_registry_tide" },
+        { "rep.salvage": 1 },
+        { "xp": 40 }
+      ],
+      "edges": [
+        { "type": "choice", "label": "合上名录", "to": "T-4" }
+      ]
+    },
+    {
+      "id": "T-4",
+      "act": "TIDE",
+      "type": "scene",
+      "title": "回声落定",
+      "summary": "雾散了。打捞铃不再响。你沿着来路走回广场——潮汐表上的刻痕暗了下去，像完成了一件交代。",
+      "on_enter": [ { "write": "done", "value": true } ],
+      "edges": [
+        { "type": "choice", "label": "回到自由市广场", "to": "N1-1" }
+      ]
+    }
+  ]
+}

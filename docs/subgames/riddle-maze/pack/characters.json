@@ -1,0 +1,12 @@
+[
+  {
+    "id": "player_blank",
+    "name": "白页者",
+    "kind": "player_template",
+    "attrs": { "might": 2, "finesse": 1, "wits": 0 },
+    "hp_formula": "10 + 2*might",
+    "ac_formula": "10 + finesse",
+    "proficiencies": ["investigation", "athletics"],
+    "note": "玩家模板属性/熟练（自 campaign01 转写，检定修正数据源）；纯解谜包无战斗，不挂技能"
+  }
+]
