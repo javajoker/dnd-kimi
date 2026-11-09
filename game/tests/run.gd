@@ -58,6 +58,7 @@ func _async_shell_tests() -> void:
 	await test_portrait_shell()
 	await test_landscape_shell()
 	await test_dice_3d()
+	await test_juice()
 	await test_landscape_story()
 	await test_shell_diff()
 	await test_cosmetic_neutral()
@@ -1379,6 +1380,244 @@ func _run_battle_with_dice3d(with_3d: bool) -> String:
 	var json := JSON.stringify(stream.all(), "", true, true)
 	if d != null:
 		d.queue_free()
+		await process_frame
+	return json
+
+# ---------------------------------------------------------------- 打击感三件套 + 屏幕震动分级（14 清单 #3/#4）
+# 纯呈现层：全部效果从事件流消费（battle.attack 的 hit/damage/crit 等字段），双壳同一
+# JuiceLayer/JuiceConfig；震动开关 = user://settings.cfg 的 ui.screen_shake（12 §5：UI 偏好不写状态板）。
+
+func _atk_ev(target: String, hit: bool, crit: bool, dmg: int) -> Dictionary:
+	return {"type": EventTypes.BATTLE_ATTACK, "payload": {"attacker": "pc", "target": target,
+		"hit": hit, "crit": crit, "fumble": false, "damage": dmg,
+		"rolls": [12], "keep": 12, "atk_mod": 2, "target_ac": 10,
+		"attacker_name": "白页者", "target_name": "小墨妖", "damage_rolls": [dmg]}}
+
+func test_juice() -> void:
+	print("[juice]")
+	# ---- 配置源：飘字规格（14 #3：内容=事件数值；暴击金色加大+标签；治疗绿色；未命中闪过灰）----
+	var spec := JuiceConfig.number_spec(_atk_ev("imp1", true, false, 7))
+	check(str(spec["text"]) == "7" and str(spec["unit"]) == "imp1"
+		and spec["color"] == JuiceConfig.COLOR_DAMAGE and float(spec["scale"]) == 1.0,
+		"飘字规格：伤害数字内容=事件数值")
+	var cspec := JuiceConfig.number_spec(_atk_ev("imp1", true, true, 11))
+	check(str(cspec["text"]) == "11" and str(cspec["tag"]) == TextsZh.JUICE_CRIT
+		and cspec["color"] == JuiceConfig.COLOR_CRIT and float(cspec["scale"]) > 1.0,
+		"飘字规格：暴击金色加大 + 暴击标签")
+	var mspec := JuiceConfig.number_spec(_atk_ev("imp1", false, false, 0))
+	check(str(mspec["text"]) == TextsZh.JUICE_MISS and mspec["color"] == JuiceConfig.COLOR_MISS,
+		"飘字规格：未命中「闪过」灰色")
+	var hspec := JuiceConfig.number_spec({"type": EventTypes.ITEM_USE,
+		"payload": {"unit": "pc", "target": "pc", "healed": 5}})
+	check(str(hspec["text"]) == "+5" and hspec["color"] == JuiceConfig.COLOR_HEAL,
+		"飘字规格：治疗绿色 +N")
+	# ---- 配置源：震动分级（14 #4：受击小震 2px/0.15s；暴击/死亡豁免大震 5px/0.3s）----
+	check(JuiceConfig.shake_level(_atk_ev("imp1", true, false, 7)) == JuiceConfig.SHAKE_SMALL,
+		"震动分级：受击小震")
+	check(JuiceConfig.shake_level(_atk_ev("imp1", true, true, 7)) == JuiceConfig.SHAKE_BIG,
+		"震动分级：暴击大震")
+	check(JuiceConfig.shake_level(_atk_ev("imp1", false, false, 0)) == JuiceConfig.SHAKE_NONE,
+		"震动分级：未命中不震")
+	check(JuiceConfig.shake_level({"type": EventTypes.CHECK_ROLL,
+		"payload": {"kind": "death_save"}}) == JuiceConfig.SHAKE_BIG, "震动分级：死亡豁免大震")
+	var sp := JuiceConfig.shake_params(JuiceConfig.SHAKE_SMALL)
+	var bp := JuiceConfig.shake_params(JuiceConfig.SHAKE_BIG)
+	check(float(sp["amp"]) == 2.0 and float(sp["dur"]) == 0.15, "震动参数：小震 2px/0.15s")
+	check(float(bp["amp"]) == 5.0 and float(bp["dur"]) == 0.3, "震动参数：大震 5px/0.3s")
+	# ---- 震动开关（ui.screen_shake；与兜底条同机制：默认开、合并写盘不丢其它键）----
+	var cfg_path := "user://test_juice_settings.cfg"
+	check(UiSettings.load_screen_shake(cfg_path), "震动开关缺省=开（读不到键回落文档默认）")
+	UiSettings.save_home_bar_collapsed(true, cfg_path)
+	UiSettings.save_screen_shake(false, cfg_path)
+	check(not UiSettings.load_screen_shake(cfg_path), "震动开关写盘后读回=关")
+	check(UiSettings.load_home_bar_collapsed(cfg_path), "写震动键不覆盖既有兜底条键（合并写盘）")
+	UiSettings.save_screen_shake(true, cfg_path)
+
+	# ---- 竖屏壳接线：事件流 → 飘字/闪白击退/消散/分级震动 ----
+	var portrait: EncounterPortrait = (load("res://shell/portrait/encounter_portrait.tscn")
+		as PackedScene).instantiate()
+	root.add_child(portrait)
+	await process_frame
+	await process_frame
+	await process_frame
+	portrait.juice.settings_path = cfg_path
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(11), "campaign01")
+	portrait.bind(sm, AutoAgent.new())
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	await process_frame
+	var target := sm.first_alive_enemy()
+	var st: Dictionary = portrait.juice.stats
+	# 命中：飘字 + 闪白/击退 + 小震
+	stream.emit(EventTypes.BATTLE_ATTACK, _atk_ev(target, true, false, 9)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["numbers"]) == 1 and str(portrait.juice.last_numbers.back()["text"]) == "9",
+		"竖屏：命中飘字内容=事件数值（事件流驱动）")
+	check(portrait.juice.active_number_count() == 1, "竖屏：飘字节点已生成（上飘+淡出 0.8s）")
+	check(int(st["flashes"]) == 1 and int(st["knockbacks"]) == 1, "竖屏：命中反馈闪白+击退触发")
+	check(int(st["shake_small"]) == 1, "竖屏：受击小震触发")
+	check(float(portrait.juice.last_shake["amp"]) == 2.0
+		and absf(float(portrait.juice.last_shake["dur"]) - 0.15) < 0.001, "竖屏：小震参数 2px/0.15s")
+	await create_timer(0.1).timeout
+	check(portrait.juice.shake_max_dev > 0.0, "竖屏：震动产生实际位移（≤2px 档）")
+	await create_timer(0.2).timeout
+	check(portrait.position == Vector2.ZERO and not portrait.juice.is_shaking(), "竖屏：小震结束归位")
+	# 暴击：金色加大飘字 + 大震
+	stream.emit(EventTypes.BATTLE_ATTACK, _atk_ev(target, true, true, 14)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	var crec: Dictionary = portrait.juice.last_numbers.back()
+	check(int(st["crits"]) == 1 and str(crec["tag"]) == TextsZh.JUICE_CRIT
+		and crec["color"] == JuiceConfig.COLOR_CRIT, "竖屏：暴击飘字金色+标签")
+	check(int(st["shake_big"]) == 1 and float(portrait.juice.last_shake["amp"]) == 5.0
+		and absf(float(portrait.juice.last_shake["dur"]) - 0.3) < 0.001, "竖屏：暴击大震 5px/0.3s")
+	# 未命中：闪过灰字，无闪白无震动
+	stream.emit(EventTypes.BATTLE_ATTACK, _atk_ev(target, false, false, 0)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["misses"]) == 1 and str(portrait.juice.last_numbers.back()["text"]) == TextsZh.JUICE_MISS,
+		"竖屏：未命中飘「闪过」")
+	check(int(st["flashes"]) == 2 and int(st["shake_small"]) == 1,
+		"竖屏：未命中不触发闪白/震动")
+	# 治疗绿色飘字
+	stream.emit(EventTypes.ITEM_USE, {"unit": "pc", "item": "heal_potion", "target": "pc",
+		"healed": 6, "left": 1, "source": &"player"}, &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["heals"]) == 1 and str(portrait.juice.last_numbers.back()["text"]) == "+6",
+		"竖屏：治疗绿色 +N 飘字")
+	# 死亡豁免 = 大震（key=false 免触发全屏演出，隔离断言）
+	stream.emit(EventTypes.CHECK_ROLL, {"roller": "kelan", "kind": "death_save", "rolls": [12],
+		"keep": 12, "dc": 10, "success": true, "s": 1, "f": 0, "key": false, "extreme": false},
+		&"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["shake_big"]) == 2, "竖屏：死亡豁免大震")
+	# 击杀消散：墨色碎片 + 淡出 0.5s，完成后重建保持隐去
+	stream.emit(EventTypes.BATTLE_DEAD, {"unit": target, "name": "小墨妖"}, &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["dissolves"]) == 1 and portrait.juice.last_dissolve_fragments == 12
+		and portrait.juice.active_fragment_count() == 12, "竖屏：击杀消散粒子触发（墨色碎片 ×12）")
+	await create_timer(0.6).timeout
+	check(portrait.juice.is_dissolved(target), "竖屏：消散 0.5s 后完成标记")
+	portrait._refresh_all()
+	var dead_node := portrait._find_unit_node(target)
+	check(dead_node != null and not dead_node.visible, "竖屏：消散后单位重建保持隐去（非瞬间消失）")
+	# 开关关闭后无震动（设置项即时生效）
+	portrait.shake_button.pressed.emit() # 关
+	check(not UiSettings.load_screen_shake(cfg_path)
+		and portrait.shake_button.text == TextsZh.MENU_SHAKE_OFF, "竖屏：☰ 菜单震动开关可关")
+	var small_before := int(st["shake_small"])
+	stream.emit(EventTypes.BATTLE_ATTACK, _atk_ev("pc", true, false, 4)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st["shake_small"]) == small_before and int(st["shake_blocked"]) == 1,
+		"竖屏：开关关闭后受击无震动（计数阻塞可查）")
+	portrait.shake_button.pressed.emit() # 开回
+	check(UiSettings.load_screen_shake(cfg_path), "竖屏：震动开关可开回")
+	portrait.queue_free()
+	await process_frame
+
+	# ---- 横屏壳接线：同一组件同一事件源（14 #3/#4 双壳同参数）----
+	var land: EncounterLandscape = (load("res://shell/landscape/encounter_landscape.tscn")
+		as PackedScene).instantiate()
+	root.add_child(land)
+	land.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	land.position = Vector2.ZERO
+	land.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	await process_frame
+	land.juice.settings_path = cfg_path
+	var stream2 := EventStream.new()
+	var board2 := Board.new(stream2)
+	var sm2 := EncounterSM.new(board2, stream2, Rng.new(11), "campaign01")
+	land.bind(sm2, AutoAgent.new())
+	sm2.enter("N1-7")
+	sm2.transition(EncounterSM.S_EXPLORE)
+	sm2.begin_combat(_std_def())
+	await process_frame
+	await process_frame
+	await process_frame
+	var target2 := sm2.first_alive_enemy()
+	var st2: Dictionary = land.juice.stats
+	stream2.emit(EventTypes.BATTLE_ATTACK, _atk_ev(target2, true, true, 13)["payload"], &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st2["numbers"]) == 1 and str(land.juice.last_numbers.back()["text"]) == "13"
+		and int(st2["crits"]) == 1, "横屏：暴击飘字内容=事件数值（同一事件源）")
+	check(int(st2["flashes"]) == 1 and int(st2["knockbacks"]) == 1, "横屏：命中反馈闪白+击退")
+	check(int(st2["shake_big"]) == 1 and float(land.juice.last_shake["amp"]) == 5.0,
+		"横屏：暴击大震同参数（5px/0.3s，同一 JuiceConfig）")
+	stream2.emit(EventTypes.BATTLE_DEAD, {"unit": target2, "name": "小墨妖"}, &"core", "N1-7")
+	await process_frame
+	await process_frame
+	await process_frame
+	check(int(st2["dissolves"]) == 1 and land.juice.active_fragment_count() == 12,
+		"横屏：击杀消散粒子触发（同参数 ×12）")
+	await create_timer(0.6).timeout
+	land._refresh_grid()
+	await process_frame
+	check(land._find_unit_node(target2) == null, "横屏：消散后格内 token 不再渲染")
+	land.queue_free()
+	await process_frame
+
+	# ---- 事件流零变化（14 #3/#4 验收口径：同种子同指令，接入前后逐字节一致）----
+	var json_a: String = await _run_battle_with_juice(false)
+	var json_b: String = await _run_battle_with_juice(true)
+	check(json_a == json_b, "打击感接入前后同种子同指令：事件流逐字节一致（纯呈现零污染）")
+
+## 无壳脚本化遭遇（与 _run_battle_with_dice3d 同种子/同指令序列风格）；
+## with_juice=true 时挂独立 JuiceLayer 订阅事件流——纯呈现消费，不触碰 core。
+func _run_battle_with_juice(with_juice: bool) -> String:
+	var sd: GDScript = load("res://tools/shell_diff.gd")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var sm := EncounterSM.new(board, stream, Rng.new(20261109), "campaign01")
+	board.give_item("heal_potion", 2, {"event_id": 0, "node_id": "N1-1", "pack_id": "campaign01"})
+	board.write("campaign01.witnessed_revocation", true,
+		{"event_id": 0, "node_id": "N1-3", "pack_id": "campaign01"})
+	var jl: JuiceLayer = null
+	if with_juice:
+		jl = JuiceLayer.new()
+		root.add_child(jl)
+		stream.subscribe(func(ev: Dictionary) -> void: jl.on_event(ev))
+	sm.enter("N1-7")
+	sm.transition(EncounterSM.S_EXPLORE)
+	sm.begin_combat(sd.battle_def())
+	var bot := Rng.new(31)
+	var guard := 0
+	while not sm.is_over() and guard < 300:
+		guard += 1
+		var actions := sm.get_available_actions()
+		if actions.is_empty():
+			await process_frame
+			continue
+		var enabled: Array[int] = []
+		for i: int in actions.size():
+			if not bool(actions[i]["disabled"]):
+				enabled.append(i)
+		var pick := enabled[bot.range_int(0, enabled.size() - 1)]
+		sm.submit_command(sm.command_from_action(actions[pick]))
+		await process_frame
+	var json := JSON.stringify(stream.all(), "", true, true)
+	if jl != null:
+		jl.queue_free()
 		await process_frame
 	return json
 

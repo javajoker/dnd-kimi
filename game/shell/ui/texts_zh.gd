@@ -44,6 +44,12 @@ const MENU_CONTINUE := "继续"
 const MENU_SAVE_QUIT := "保存并回主屏"
 const MENU_HELP := "手势帮助"
 const MENU_CONFIRM_QUIT := "确认退出？本局进度将丢失（遭遇进行中不存档）"
+const MENU_SHAKE_ON := "屏幕震动：开"   # 14 清单 #4：震动可关（UI 偏好，不写状态板，12 §5 同机制）
+const MENU_SHAKE_OFF := "屏幕震动：关"
+
+# 打击感飘字（14 清单 #3）
+const JUICE_CRIT := "暴击"
+const JUICE_MISS := "闪过"
 
 # 掷骰演出（09 §6；04 §④.7：一切演出可跳过，统一长按 ≥400ms 防误触）
 const KEY_ROLL_HINT := "长按任意处跳过演出"

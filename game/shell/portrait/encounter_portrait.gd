@@ -77,6 +77,8 @@ var key_overlay: ColorRect
 var key_dice_label: Label
 var key_result_label: Label
 var dice3d: Dice3D                   # 关键判定 3D 物理演出层（14 清单 #2；结果由事件流给定）
+var juice: JuiceLayer                # 打击感三件套 + 屏幕震动（14 清单 #3/#4；纯呈现消费事件流）
+var shake_button: Button             # ☰ 菜单内震动开关（14 #4：UI 偏好不写状态板，12 §5 同机制）
 var auto_timer: Timer
 var menu_popup: PopupPanel
 ## 长按计时时钟（可注入，测试步进；生产缺省真实时钟）。长按判定不走 Timer，见 _poll_key_hold（12 §1）。
@@ -244,6 +246,16 @@ func _build_ui() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	key_v.add_child(hint)
+	# 打击感三件套 + 屏幕震动覆盖层（14 清单 #3/#4）：纯呈现消费事件流，参数唯一源 JuiceConfig；
+	# 锚点/节点查询由壳收口（布局差异在壳，参数与播出逻辑双壳同一组件）
+	juice = JuiceLayer.new()
+	juice.name = "JuiceLayer"
+	juice.anchor_of = func(uid: String) -> Vector2:
+		var n := _find_unit_node(uid)
+		return n.get_global_rect().get_center() if n != null else get_global_rect().get_center()
+	juice.unit_node_of = func(uid: String) -> Control: return _find_unit_node(uid)
+	juice.shake_target = self # 屏幕震动 = 整壳位移（呈现层，不进事件流）
+	add_child(juice)
 	# 半屏弹层组件（04 §3.3，双壳共用）：hub 商店 / 时间边预告
 	hub_popup = HubPopup.new()
 	hub_popup.buy_requested.connect(func(item_id: String) -> void:
@@ -283,10 +295,22 @@ func _build_menu() -> void:
 	b_help.pressed.connect(func() -> void:
 		_log_line("手势帮助：%s" % "\n".join(TextsZh.HELP_LINES)))
 	v.add_child(b_help)
+	shake_button = Button.new() # 屏幕震动开关（14 #4：UI 偏好，不写状态板，12 §5 同兜底条机制）
+	shake_button.pressed.connect(func() -> void:
+		UiSettings.save_screen_shake(not UiSettings.load_screen_shake(juice.settings_path),
+			juice.settings_path)
+		_sync_shake_button())
+	v.add_child(shake_button)
+	_sync_shake_button()
 	add_child(menu_popup)
 
+func _sync_shake_button() -> void:
+	shake_button.text = TextsZh.MENU_SHAKE_ON \
+		if UiSettings.load_screen_shake(juice.settings_path) else TextsZh.MENU_SHAKE_OFF
+
 func _open_menu() -> void:
-	menu_popup.popup_centered(Vector2i(300, 160))
+	_sync_shake_button()
+	menu_popup.popup_centered(Vector2i(300, 200))
 
 # ---------------------------------------------------------------- 手势接入（12 §2.2 竖屏映射；§3 冲突消解）
 # 手势是效率层：全部手势指令与芯片/按钮同构（GestureCommands 单源），一切手势保留按钮等价路径。
@@ -317,6 +341,15 @@ func _setup_gestures() -> void:
 
 func _in(c: Control, pos: Vector2) -> bool:
 	return c != null and c.visible and c.get_global_rect().has_point(pos)
+
+## 单位 id → 当前视觉节点（JuiceLayer 锚点/节点查询；敌人行/己方行两处找，找不到返回 null）。
+func _find_unit_node(uid: String) -> Control:
+	for row: HBoxContainer in [enemy_row, party_row]:
+		for child: Node in row.get_children():
+			if child is Control and not child.is_queued_for_deletion() \
+					and str(child.get_meta("unit_id", "")) == uid:
+				return child as Control
+	return null
 
 ## 命中测试：主视野单位卡（12 §3.1 起点定语义）。返回单位 id，空位返回 ""。
 func _unit_id_at(pos: Vector2) -> String:
@@ -533,6 +566,7 @@ func bind(p_sm: EncounterSM, p_agent: AutoAgent) -> void:
 	agent = p_agent
 	_stream = sm.stream
 	_stream.subscribe(_on_event)
+	juice.reset() # 新遭遇清零消散名单与计数（14 #3/#4）
 	show_combat_layout() # 故事态 → 战斗态：同一壳内布局切换（04 §④.1 呼吸随状态切换）
 	_restore_breathing()
 	_refresh_all()
@@ -558,6 +592,8 @@ func _on_event(ev: Dictionary) -> void:
 	if line != "":
 		_log_line(line)
 	var t := StringName(ev["type"])
+	if juice != null:
+		juice.on_event(ev) # 打击感/震动：纯呈现消费同一事件流（14 #3/#4）
 	# 掷骰两级演出与战斗/故事同一事件源（09 §6）
 	if t == EventTypes.CHECK_ROLL:
 		var p: Dictionary = ev["payload"]
@@ -993,6 +1029,8 @@ func _unit_button(u: Dictionary) -> Button:
 	b.custom_minimum_size = Vector2(104, 64)
 	b.text = "%s\nHP %d/%d" % [u["name"], int(u["hp"]), int(u["max_hp"])]
 	b.set_meta("unit_id", str(u["id"])) # 手势命中测试（12 §3.1 起点定语义）
+	if juice != null and juice.is_dissolved(str(u["id"])):
+		b.visible = false # 已消散单位保持隐去（14 #3：击杀 = 消散，而非瞬间消失后重建复活）
 	if bool(u["dead"]):
 		b.disabled = true
 		b.modulate = Color(0.35, 0.35, 0.35)
