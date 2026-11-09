@@ -1,5 +1,7 @@
-# ① 主屏（营地）（docs/framework/04-UI-UX设计文档.md §①；07 §4.2 主屏闲置兜底快照；12 §4 帮助入口）
-# - 营地图景随褪墨度（global.doom_clock）变化文案（04 §①：状态板的可视化）；
+# ① 主屏（营地）（docs/framework/04-UI-UX设计文档.md §①；07 §4.2 主屏闲置兜底快照；12 §4 帮助入口；12 §5 主屏热点图）
+# - 视觉层 = 可交互绘卷（HomeScroll，烬港夜景程序化占位，12 §5 落位状态）；热点与兜底条指向同一 navigate 信号
+#   （12 §5：热点图是皮肤，文字入口是骨架，两者功能等价——兜底条为无障碍与辨识度兜底）；
+# - 营地图景随褪墨度（global.doom_clock）变化文案与绘卷视觉（04 §①/§4 ①：状态板的可视化）；
 # - 五入口：战役入口（进行中带"继续"）、事件中心（未读角标）、背包图鉴、角色、历史卷轴；
 # - 运营位（框架级占位，内容由投放决定）+ 帮助入口（手势图鉴，12 §4）+ 手动"记录抄本"（07 §4.2）；
 # - 壳铁律：只读 Board、发信号；写板与存档由 main 流程控制器执行。
@@ -15,6 +17,8 @@ signal retrain_requested      # 帮助页「重学教程」（12 §4：可重学
 const IDLE_SAVE_SEC := 2.0
 
 var doom_label: Label
+var scroll: HomeScroll            # 可交互绘卷（12 §5：热点=皮肤）
+var fallback_bar: Container       # 底部文字入口兜底条（12 §5：骨架，与热点功能等价）
 var campaign_button: Button
 var quests_button: Button
 var inventory_button: Button
@@ -38,46 +42,65 @@ func _ready() -> void:
 	idle_timer.start()
 
 func _build() -> void:
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side: String in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 8)
+	add_child(margin)
 	var v := VBoxContainer.new()
-	v.set_anchors_preset(Control.PRESET_FULL_RECT)
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_theme_constant_override("separation", 10)
-	add_child(v)
+	v.add_theme_constant_override("separation", 6)
+	margin.add_child(v)
 	var title := Label.new()
 	title.text = TextsZh.HOME_TITLE
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_font_size_override("font_size", 24)
 	v.add_child(title)
 	doom_label = Label.new()
 	doom_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	doom_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	doom_label.custom_minimum_size = Vector2(330, 0)
 	v.add_child(doom_label)
-	campaign_button = _entry(v, TextsZh.HOME_ENTRY_CAMPAIGN, &"entry")
-	quests_button = _entry(v, TextsZh.HOME_ENTRY_QUESTS, &"quests")
-	inventory_button = _entry(v, TextsZh.HOME_ENTRY_INVENTORY, &"inventory")
-	character_button = _entry(v, TextsZh.HOME_ENTRY_CHARACTER, &"character")
-	history_button = _entry(v, TextsZh.HOME_ENTRY_HISTORY, &"history")
+	# 可交互绘卷（12 §5 ①：五热点承载入口；热点与兜底条同信号，两路径功能等价）
+	scroll = HomeScroll.new()
+	scroll.custom_minimum_size = Vector2(0, 330)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.hotspot_pressed.connect(func(id: StringName) -> void: navigate.emit(id))
+	v.add_child(scroll)
 	var op := Label.new()
 	op.text = TextsZh.HOME_OP_SLOT
 	op.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	op.add_theme_color_override("font_color", Color(0.55, 0.55, 0.6))
+	op.add_theme_font_size_override("font_size", 11)
 	op.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	op.custom_minimum_size = Vector2(330, 0)
 	v.add_child(op)
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_child(row)
+	# 底部文字入口兜底条（12 §5：无障碍与辨识度兜底；热点图是皮肤，文字入口是骨架）
+	fallback_bar = VBoxContainer.new()
+	fallback_bar.add_theme_constant_override("separation", 4)
+	v.add_child(fallback_bar)
+	var row1 := HBoxContainer.new()
+	row1.alignment = BoxContainer.ALIGNMENT_CENTER
+	fallback_bar.add_child(row1)
+	campaign_button = _entry(row1, TextsZh.HOME_ENTRY_CAMPAIGN, &"entry")
+	quests_button = _entry(row1, TextsZh.HOME_ENTRY_QUESTS, &"quests")
+	inventory_button = _entry(row1, TextsZh.HOME_ENTRY_INVENTORY, &"inventory")
+	var row2 := HBoxContainer.new()
+	row2.alignment = BoxContainer.ALIGNMENT_CENTER
+	fallback_bar.add_child(row2)
+	character_button = _entry(row2, TextsZh.HOME_ENTRY_CHARACTER, &"character")
+	history_button = _entry(row2, TextsZh.HOME_ENTRY_HISTORY, &"history")
 	save_button = Button.new()
 	save_button.text = TextsZh.HOME_SAVE
+	save_button.custom_minimum_size = Vector2(0, 44)
+	save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	save_button.pressed.connect(func() -> void:
 		saved_label.text = TextsZh.HOME_SAVED
 		save_requested.emit())
-	row.add_child(save_button)
+	row2.add_child(save_button)
 	help_button = Button.new()
 	help_button.text = TextsZh.HOME_HELP
+	help_button.custom_minimum_size = Vector2(0, 44)
+	help_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	help_button.pressed.connect(_toggle_help)
-	row.add_child(help_button)
+	row2.add_child(help_button)
 	saved_label = Label.new()
 	saved_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	saved_label.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
@@ -87,7 +110,8 @@ func _build() -> void:
 func _entry(parent: Container, label: String, screen_id: StringName) -> Button:
 	var b := Button.new()
 	b.text = label
-	b.custom_minimum_size = Vector2(260, 44)
+	b.custom_minimum_size = Vector2(0, 44) # 12 §6：可触目标最小 44×44pt
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.pressed.connect(func() -> void: navigate.emit(screen_id))
 	parent.add_child(b)
 	return b
@@ -99,6 +123,7 @@ func bind(board: Board, quest_badge: int, continuable: bool) -> void:
 		if continuable else TextsZh.HOME_ENTRY_CAMPAIGN
 	quests_button.text = "%s ◆%d" % [TextsZh.HOME_ENTRY_QUESTS, quest_badge] \
 		if quest_badge > 0 else TextsZh.HOME_ENTRY_QUESTS
+	scroll.set_state(board.get_doom_clock(), quest_badge) # 绘卷随状态板变化（12 §5；04 §4 ①）
 	saved_label.text = ""
 	if idle_timer != null:
 		idle_timer.start() # 回到主屏重新计闲置（07 §4.2）

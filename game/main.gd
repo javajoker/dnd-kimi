@@ -104,6 +104,8 @@ func _ready() -> void:
 		_run_shots_act3()
 	if args.has("--gap-shots"):
 		_run_shots_gap()
+	if args.has("--home-shot"):
+		_run_shot_home()
 
 ## 子游戏包发现（白皮书 §10.2/§10.3）：扫描 packs/ 全部包目录，pack_type=subgame 即入列——
 ## 数据驱动，不写死 arena；加载失败只告警不阻断（单包缺陷不拖垮框架，tech/02 §1 向前兼容）。
@@ -1250,6 +1252,20 @@ func _run_shots_gap() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _shot("/tmp/gap_codex.png") # ⑥ 图鉴页：四系列进度 + 集齐奖励预告
 	print("[shots] 缺口批三张完成：/tmp/gap_tutorial.png /tmp/gap_help.png /tmp/gap_codex.png")
+	get_tree().quit()
+
+# ---------------------------------------------------------------- 主屏热点图截图（12 §5 证据 /tmp，不提交）
+
+## `-- --home-shot`：主屏可交互绘卷（烬港夜景程序化占位 + 五热点微光 + 底部兜底条）。
+func _run_shot_home() -> void:
+	await get_tree().create_timer(1.0).timeout
+	if current_screen is ScreenHome:
+		var home := current_screen as ScreenHome
+		if home.tutorial != null:
+			home.tutorial.finish_launch() # 跳过启动卡，取干净绘卷
+		await get_tree().create_timer(0.6).timeout # 呼吸微光推进到非零相位
+	await _shot("/tmp/home_hotspot.png")
+	print("[shots] 主屏热点图完成：/tmp/home_hotspot.png")
 	get_tree().quit()
 
 # ---------------------------------------------------------------- M4 截图（锁定态 + 购买弹层证据 /tmp，不提交）

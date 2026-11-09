@@ -52,6 +52,7 @@ func _async_shell_tests() -> void:
 	await test_landscape_story()
 	await test_shell_diff()
 	await test_ui_screens()
+	await test_home_hotspots()
 	await test_subgame_flow()
 	await test_entitlement_flow()
 	await test_act2_hybrid_flow()
@@ -3094,6 +3095,117 @@ func test_ui_screens() -> void:
 	check(ch_text.contains("Lv.2") and ch_text.contains("350/700") and ch_text.contains("力 +1"),
 		"角色⑦：成长区呈现等级 / XP 进度 / 已分配属性（tech/04 §8）")
 	ch.queue_free()
+	await process_frame
+
+# ---------------------------------------------------------------- 主屏热点图（12 §5：可交互绘卷；热点=皮肤，兜底条=骨架，两路径等价）
+
+func _tap_scroll(scroll: HomeScroll, h: Dictionary) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false # 抬手 = 点按落定（12 §1 点按判定 <300ms/<10pt 由手势层覆盖，此处直发语义事件）
+	ev.position = scroll.hotspot_rect(h).get_center()
+	scroll._gui_input(ev)
+
+func test_home_hotspots() -> void:
+	print("[home_hotspots]")
+	var stream := EventStream.new()
+	var board := Board.new(stream)
+	var prov := {"event_id": 1, "node_id": "", "pack_id": "campaign01"}
+	var home: ScreenHome = (load("res://shell/ui/screen_home.tscn") as PackedScene).instantiate()
+	root.add_child(home)
+	await process_frame
+	await process_frame
+	var navs: Array = []
+	home.navigate.connect(func(id: StringName) -> void: navs.append(id))
+	home.bind(board, 0, false)
+	# ---- 热点 → 导航信号映射五项（12 §5 ① 表：潮汐塔→② 集市→⑥ 营火→⑦ 告示板→⑤ 残页堆→⑧）----
+	var expect := {"tide_tower": &"entry", "market": &"inventory", "campfire": &"character",
+		"board": &"quests", "scraps": &"history"}
+	check(HomeScroll.HOTSPOTS.size() == 5, "热点坐标表五区齐备（数据化，12 §5 落位状态）")
+	var min_ok := true
+	for h: Dictionary in HomeScroll.HOTSPOTS:
+		var r := home.scroll.hotspot_rect(h)
+		if r.size.x < 44.0 or r.size.y < 44.0:
+			min_ok = false # 12 §6：可触目标最小 44×44pt
+	check(min_ok, "热点区域满足 44×44pt 最小可触（12 §6）")
+	for h: Dictionary in HomeScroll.HOTSPOTS:
+		_tap_scroll(home.scroll, h)
+	check(navs == [&"entry", &"inventory", &"character", &"quests", &"history"],
+		"热点点按 → 导航信号映射五项（12 §5 ① 表）")
+	# ---- 兜底条等价路径：同信号同界面（12 §5：热点图是皮肤，文字入口是骨架）----
+	navs.clear()
+	home.campaign_button.pressed.emit()
+	home.inventory_button.pressed.emit()
+	home.character_button.pressed.emit()
+	home.quests_button.pressed.emit()
+	home.history_button.pressed.emit()
+	check(navs == [&"entry", &"inventory", &"character", &"quests", &"history"],
+		"兜底条五入口与热点指向同一信号（12 §5 功能等价）")
+	var bar_ids: Array = []
+	for row: Node in home.fallback_bar.get_children():
+		for b: Node in row.get_children():
+			if b == home.campaign_button or b == home.quests_button or b == home.inventory_button \
+					or b == home.character_button or b == home.history_button:
+				bar_ids.append(String(b.text))
+	check(bar_ids.size() == 5, "兜底条含五文字入口（12 §5 骨架）")
+	# ---- main 级等价：两路径到同一界面（热点通道 vs 兜底条按钮通道）----
+	var m: Node = (load("res://main.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	await process_frame
+	await process_frame
+	var mhome := m.current_screen as ScreenHome
+	mhome.scroll.hotspot_pressed.emit(&"character") # 热点通道（玩家点营火同一信号路径）
+	await process_frame
+	check(m.current_screen is ScreenCharacter, "热点 → ⑦角色界面（12 §5 ①：营火与同伴→角色）")
+	(m.current_screen as ScreenCharacter).back_button.pressed.emit()
+	await process_frame
+	(m.current_screen as ScreenHome).character_button.pressed.emit() # 兜底条通道
+	await process_frame
+	check(m.current_screen is ScreenCharacter, "兜底条 → 同一 ⑦角色界面（12 §5：两路径功能等价）")
+	(m.current_screen as ScreenCharacter).back_button.pressed.emit()
+	await process_frame
+	(m.current_screen as ScreenHome).scroll.hotspot_pressed.emit(&"quests")
+	await process_frame
+	check(m.current_screen is ScreenQuests, "热点 → ⑤事件中心（12 §5 ①：告示板→事件中心）")
+	(m.current_screen as ScreenQuests).back_requested.emit()
+	await process_frame
+	m.queue_free()
+	await process_frame
+	# ---- 未读角标：事件中心有未读时叠加（12 §5；复用 ◆N 语义，04 §①）----
+	home.bind(board, 3, false)
+	check(home.scroll.badge_visible() and home.scroll.badge_count() == 3,
+		"未读角标：事件中心 3 条未读 → 告示板热点叠加 ◆3（12 §5）")
+	home.bind(board, 0, false)
+	check(not home.scroll.badge_visible(), "无未读 → 角标隐去（12 §5）")
+	# ---- 微光呼吸：周期 ≤3s、缓动、不闪烁（12 §5）----
+	check(HomeScroll.BREATH_PERIOD <= 3.0 and HomeScroll.BREATH_PERIOD > 0.0,
+		"呼吸周期 %.1fs ≤ 3s（12 §5）" % HomeScroll.BREATH_PERIOD)
+	var samples: Array[float] = []
+	for i: int in 12:
+		home.scroll._process(HomeScroll.BREATH_PERIOD / 12.0)
+		samples.append(home.scroll.breath_glow())
+	var glow_min: float = samples.min()
+	var glow_max: float = samples.max()
+	check(glow_min >= HomeScroll.GLOW_MIN - 0.001 and glow_min > 0.15,
+		"呼吸不闪烁：光强下限 %.2f > 0（不归零，12 §5）" % glow_min)
+	check(glow_max - glow_min > 0.2, "呼吸存在：光强随周期缓动起伏（Δ%.2f，12 §5）" % (glow_max - glow_min))
+	var continuous := true
+	for i: int in range(1, samples.size()):
+		if absf(samples[i] - samples[i - 1]) > 0.25:
+			continuous = false # 相邻采样无跳变 = 缓动非闪烁
+	check(continuous, "呼吸缓动连续：相邻采样无跳变（12 §5 不闪烁）")
+	# ---- 绘卷随状态板变化：时钟高格天色更暗/海面褪色加剧（12 §5；04 §4 ①）----
+	var sky0 := home.scroll.sky_color()
+	var sea0 := home.scroll.sea_color()
+	board.write("global.doom_clock", 9, prov)
+	home.bind(board, 0, false)
+	check(home.scroll.doom_clock() == 9 and home.doom_label.text == TextsZh.home_doom_text(9),
+		"绘卷与文案同时钟刷新（04 §4 ① 状态板的可视化）")
+	check(home.scroll.sky_color().get_luminance() < sky0.get_luminance(),
+		"时钟 9 格：天色更暗（12 §5 绘卷随褪墨度变化）")
+	check(home.scroll.sea_color().get_luminance() < sea0.get_luminance(),
+		"时钟 9 格：海面褪色加剧（12 §5 绘卷随褪墨度变化）")
+	home.queue_free()
 	await process_frame
 
 # ---------------------------------------------------------------- 横屏故事态（04 §③：中央主视野渲染叙事/选项，非战斗态）
